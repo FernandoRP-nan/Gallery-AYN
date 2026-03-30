@@ -34,7 +34,8 @@ class GalleryManualFrame(
     """Galeria con miniaturas, seleccion multiple y destinos por arrastre."""
 
     PREVIEW_MAX = (440, 480)
-    BATCH_THUMBS = 400
+    # Pixmaps en X por lote; subir mucho el valor aumenta el riesgo de BadAlloc al cargar carpetas grandes.
+    BATCH_THUMBS = 120
 
     def __init__(self, parent: ttk.Frame, **kwargs) -> None:
         super().__init__(parent, **kwargs)

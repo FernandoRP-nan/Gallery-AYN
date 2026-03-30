@@ -55,8 +55,10 @@ class GalleryCanvasLayoutMixin:
         n = max(2, self._layout_cols)
         for i in range(24):
             self.gallery_inner.columnconfigure(i, weight=0, minsize=0)
+        # minsize = ancho de celda calculado para que el grid reclame todo el ancho del canvas (no colapsar).
+        cw = max(48, int(self._cell_outer_w))
         for i in range(n):
-            self.gallery_inner.columnconfigure(i, weight=1, uniform="gal_col", minsize=1)
+            self.gallery_inner.columnconfigure(i, weight=1, uniform="gal_col", minsize=cw)
 
     def _on_thumb_scale_slider(self, value: str | float) -> None:
         try:

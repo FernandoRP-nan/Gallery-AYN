@@ -16,6 +16,7 @@ class GalleryPreviewGridMixin:
             w.destroy()
         self.path_to_frame.clear()
         self.thumb_refs.clear()
+        self._photos.clear()
         self._clear_preview()
 
     def _clear_preview(self) -> None:

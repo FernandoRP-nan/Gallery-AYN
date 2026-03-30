@@ -29,6 +29,10 @@ class GalleryGridLayout:
     MIN_CELL = 48
     MIN_AVAIL = 48
     SAFE_W_MIN = 64
+    # Lado objetivo de miniatura (px) en zoom min / max; de ahi se deduce cuantas columnas caben.
+    # Tope moderado: PhotoImage por miniatura es un pixmap en X; valores muy altos + muchas a la vez -> BadAlloc.
+    THUMB_TARGET_MIN = 58
+    THUMB_TARGET_MAX = 280
 
     @classmethod
     def effective_canvas_width(cls, w: int | float, last_canvas_width: int) -> int:
@@ -50,18 +54,24 @@ class GalleryGridLayout:
         safe_w = max(cls.SAFE_W_MIN, int(canvas_width) - cls.CANVAS_TRIM)
         zoom = max(cls.ZOOM_MIN, min(cls.ZOOM_MAX, float(zoom)))
         avail = max(cls.MIN_AVAIL, safe_w - cls.MARGIN_LR)
-        # Zoom alto => menos columnas => celdas mas anchas.
-        cols_min = cls.COLS_MIN
-        cols_max = min(cls.COLS_CAP, max(3, avail // cls.MIN_CELL))
-        cols_max = max(cols_max, cols_min)
+        # Zoom alto => mayor objetivo de lado => menos columnas => celdas mas anchas (monotono y usa todo el ancho).
         t = (zoom - cls.ZOOM_MIN) / (cls.ZOOM_MAX - cls.ZOOM_MIN)
-        cols = int(round(cols_max - t * (cols_max - cols_min)))
-        cols = max(cols_min, min(cols_max, cols))
+        thumb_target = int(
+            cls.THUMB_TARGET_MIN + t * (cls.THUMB_TARGET_MAX - cls.THUMB_TARGET_MIN)
+        )
+        thumb_target = max(cls.MIN_CELL - cls.INNER_MARGIN, thumb_target)
+        min_cell = thumb_target + cls.INNER_MARGIN
         gap = cls.GAP
+        den = min_cell + gap
+        if den <= 0:
+            cols = cls.COLS_MIN
+        else:
+            cols_upper = int((avail + gap) // den)
+            cols = max(cls.COLS_MIN, min(cls.COLS_CAP, cols_upper))
         total_gap = (cols - 1) * gap
         cell_w = (avail - total_gap) // cols
         cell_w = max(cls.MIN_CELL, cell_w)
-        while cols > cols_min and cols * cell_w + total_gap > avail:
+        while cols > cls.COLS_MIN and cols * cell_w + total_gap > avail:
             cols -= 1
             total_gap = (cols - 1) * gap
             cell_w = (avail - total_gap) // cols
