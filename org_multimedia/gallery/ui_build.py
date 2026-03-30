@@ -5,25 +5,31 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from .ribbon_word_tabs import GalleryWordRibbon
+
 
 class GalleryUIBuildMixin:
     def _build_ui(self) -> None:
         title = ttk.Label(self, text="Galeria manual", style="GalleryTitle.TLabel")
-        title.pack(anchor="w", pady=(0, 4))
+        title.pack(anchor="w", pady=(0, 2))
         sub = ttk.Label(
             self,
             text=(
-                "Solo esta carpeta (no recursivo). Navega con Subcarpetas / Carpeta superior. "
-                "Las miniaturas se adaptan al ancho de la ventana."
+                "Cinta superior tipo Word: elige pestaña para opciones. "
+                "Abajo, galería y vista previa ocupan el área principal."
             ),
             wraplength=780,
+            foreground="#565f89",
         )
-        sub.pack(anchor="w", pady=(0, 8))
+        sub.pack(anchor="w", pady=(0, 4))
 
-        sel_bar = ttk.LabelFrame(self, text="Seleccion")
-        sel_bar.pack(fill=tk.X, pady=(0, 8))
-        sel_inner = ttk.Frame(sel_bar)
-        sel_inner.pack(fill=tk.X, padx=8, pady=6)
+        cinta = GalleryWordRibbon(self)
+        cinta.pack(fill=tk.X)
+
+        # --- Pestaña Seleccion ---
+        page_sel = cinta.add_tab("sel", "Seleccion")
+        sel_inner = ttk.Frame(page_sel)
+        sel_inner.pack(fill=tk.X, pady=2)
         ttk.Button(sel_inner, text="Seleccionar todas", command=self._select_all).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(sel_inner, text="Quitar seleccion", command=self._select_none).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(sel_inner, text="Invertir seleccion", command=self._invert_selection).pack(side=tk.LEFT, padx=(0, 6))
@@ -35,20 +41,21 @@ class GalleryUIBuildMixin:
         ttk.Label(sel_inner, textvariable=self.selection_count_var, foreground="#9ece6a", font=("Sans", 10, "bold")).pack(
             side=tk.RIGHT, padx=(8, 0)
         )
-        help_sel = ttk.Label(
-            sel_bar,
+        ttk.Label(
+            page_sel,
             text=(
                 "Si alternar esta desactivado: clic = una sola imagen + vista previa. "
                 "Ctrl+clic = añadir o quitar. Shift+clic = rango. "
-                "Arrastra la seleccion a un destino abajo o suelta sobre la tarjeta."
+                "Arrastra la seleccion a un destino (pestaña Destinos) o suelta sobre la tarjeta."
             ),
-            wraplength=760,
+            wraplength=900,
             foreground="#565f89",
-        )
-        help_sel.pack(anchor="w", padx=8, pady=(0, 6))
+        ).pack(anchor="w", pady=(4, 0))
 
-        row1 = ttk.Frame(self)
-        row1.pack(fill=tk.X, pady=(0, 8))
+        # --- Pestaña Ruta (carpeta, navegacion, zoom miniaturas) ---
+        page_ruta = cinta.add_tab("ruta", "Ruta")
+        row1 = ttk.Frame(page_ruta)
+        row1.pack(fill=tk.X, pady=(0, 4))
         ttk.Label(row1, text="Carpeta:").pack(side=tk.LEFT)
         entry = ttk.Entry(row1, textvariable=self.folder_var, width=70)
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8))
@@ -58,58 +65,25 @@ class GalleryUIBuildMixin:
         self.more_thumbs_btn.pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(row1, text="Ajustes destinos...", command=self._open_settings).pack(side=tk.LEFT, padx=(8, 0))
 
-        nav_row = ttk.Frame(self)
-        nav_row.pack(fill=tk.X, pady=(0, 6))
+        nav_row = ttk.Frame(page_ruta)
+        nav_row.pack(fill=tk.X, pady=(0, 4))
         ttk.Button(nav_row, text="Carpeta superior", command=self._nav_up).pack(side=tk.LEFT)
         ttk.Button(nav_row, text="Actualizar esta carpeta", command=self._reload_current_folder).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        ttk.Label(nav_row, textvariable=self.path_display_var, wraplength=560, foreground="#a9b1d6").pack(
+        ttk.Label(nav_row, textvariable=self.path_display_var, wraplength=400, foreground="#a9b1d6").pack(
             side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True
         )
 
-        sub_frame = ttk.LabelFrame(self, text="Subcarpetas (doble clic o Enter para entrar)")
-        sub_frame.pack(fill=tk.X, pady=(0, 8))
-        self.subfolder_lb = tk.Listbox(
-            sub_frame,
-            height=5,
-            bg="#16161e",
-            fg="#c0caf5",
-            selectbackground="#414868",
-            selectforeground="#c0caf5",
-            relief=tk.FLAT,
-            highlightthickness=0,
-        )
-        sf_scroll = ttk.Scrollbar(sub_frame, orient="vertical", command=self.subfolder_lb.yview)
-        self.subfolder_lb.configure(yscrollcommand=sf_scroll.set)
-        self.subfolder_lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0), pady=4)
-        sf_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=4, padx=(0, 4))
-        self.subfolder_lb.bind("<Double-Button-1>", self._on_subfolder_activate)
-        self.subfolder_lb.bind("<Return>", self._on_subfolder_activate)
-
-        self.main_pane = tk.PanedWindow(
-            self,
-            orient=tk.HORIZONTAL,
-            sashwidth=5,
-            bg="#1a1b26",
-            sashrelief=tk.FLAT,
-        )
-        self.main_pane.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-
-        gallery_wrap = ttk.Frame(self.main_pane)
-        self.preview_column = ttk.Frame(self.main_pane, width=460)
-        self.main_pane.add(gallery_wrap, minsize=420)
-        self.main_pane.add(self.preview_column, minsize=360)
-
-        zoom_row = ttk.Frame(gallery_wrap)
-        zoom_row.pack(fill=tk.X, pady=(0, 6))
+        zoom_row = ttk.Frame(page_ruta)
+        zoom_row.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(zoom_row, text="Tamaño miniaturas:").pack(side=tk.LEFT, padx=(0, 8))
         self.thumb_scale_slider = ttk.Scale(
             zoom_row,
             from_=0.75,
             to=2.25,
             orient=tk.HORIZONTAL,
-            length=260,
+            length=280,
             variable=self.thumb_scale_var,
             command=self._on_thumb_scale_slider,
         )
@@ -119,9 +93,75 @@ class GalleryUIBuildMixin:
         self.thumb_scale_label.configure(text=f"{int(self.thumb_scale_var.get() * 100)}%")
         ttk.Label(
             zoom_row,
-            text="(Derecha = menos columnas y mas grande | miniaturas recortan para llenar el cuadrado)",
+            text="(Derecha = menos columnas y mas grande | recortan para cuadrado)",
             foreground="#565f89",
         ).pack(side=tk.LEFT, padx=(12, 0))
+
+        # --- Pestaña Subcarpetas ---
+        page_sub = cinta.add_tab("sub", "Subcarpetas")
+        ttk.Label(
+            page_sub,
+            text="Doble clic o Enter en una fila para entrar en esa carpeta.",
+            foreground="#565f89",
+        ).pack(anchor="w", pady=(0, 4))
+        sub_inner = ttk.Frame(page_sub)
+        sub_inner.pack(fill=tk.BOTH, expand=True)
+        self.subfolder_lb = tk.Listbox(
+            sub_inner,
+            height=5,
+            bg="#16161e",
+            fg="#c0caf5",
+            selectbackground="#414868",
+            selectforeground="#c0caf5",
+            relief=tk.FLAT,
+            highlightthickness=0,
+        )
+        sf_scroll = ttk.Scrollbar(sub_inner, orient="vertical", command=self.subfolder_lb.yview)
+        self.subfolder_lb.configure(yscrollcommand=sf_scroll.set)
+        self.subfolder_lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sf_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.subfolder_lb.bind("<Double-Button-1>", self._on_subfolder_activate)
+        self.subfolder_lb.bind("<Return>", self._on_subfolder_activate)
+
+        # --- Pestaña Destinos ---
+        page_dest = cinta.add_tab("dest", "Destinos")
+        ttk.Label(
+            page_dest,
+            text="Arrastra seleccion aqui o pulsa una tarjeta. '+' anade carpeta (tambien en Ajustes destinos).",
+            foreground="#565f89",
+        ).pack(anchor="w", pady=(0, 4))
+        dest_outer = ttk.Frame(page_dest)
+        dest_outer.pack(fill=tk.X)
+        self.dest_hcanvas = tk.Canvas(dest_outer, bg="#1a1b26", height=104, highlightthickness=0)
+        dest_hscroll = ttk.Scrollbar(dest_outer, orient="horizontal", command=self.dest_hcanvas.xview)
+        self.dest_container = tk.Frame(self.dest_hcanvas, bg="#1a1b26")
+        self.dest_hcanvas.create_window((0, 0), window=self.dest_container, anchor="nw")
+
+        def _on_dest_configure(_event: tk.Event) -> None:
+            self.dest_hcanvas.configure(scrollregion=self.dest_hcanvas.bbox("all"))
+
+        self.dest_container.bind("<Configure>", _on_dest_configure)
+        self.dest_hcanvas.pack(side=tk.TOP, fill=tk.X, expand=True)
+        dest_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.dest_hcanvas.configure(xscrollcommand=dest_hscroll.set)
+        self._refresh_destinations()
+
+        cinta.select("sel")
+
+        # --- Cuerpo principal: galeria + vista previa (todo el espacio vertical restante) ---
+        self.main_pane = tk.PanedWindow(
+            self,
+            orient=tk.HORIZONTAL,
+            sashwidth=5,
+            bg="#1a1b26",
+            sashrelief=tk.FLAT,
+        )
+        self.main_pane.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+
+        gallery_wrap = ttk.Frame(self.main_pane)
+        self.preview_column = ttk.Frame(self.main_pane, width=460)
+        self.main_pane.add(gallery_wrap, minsize=420)
+        self.main_pane.add(self.preview_column, minsize=360)
 
         self.gallery_canvas = tk.Canvas(gallery_wrap, bg="#16161e", highlightthickness=0, height=380)
         scroll_y = ttk.Scrollbar(gallery_wrap, orient="vertical", command=self.gallery_canvas.yview)
@@ -163,23 +203,5 @@ class GalleryUIBuildMixin:
         )
         self.preview_meta_label.pack(anchor="w", fill=tk.X)
 
-        dest_frame = ttk.LabelFrame(self, text="Destinos rapidos (+ anade carpeta | arrastra o clic con seleccion)")
-        dest_frame.pack(fill=tk.X, pady=(12, 0))
-        dest_outer = ttk.Frame(dest_frame)
-        dest_outer.pack(fill=tk.X, padx=4, pady=4)
-        self.dest_hcanvas = tk.Canvas(dest_outer, bg="#1a1b26", height=104, highlightthickness=0)
-        dest_hscroll = ttk.Scrollbar(dest_outer, orient="horizontal", command=self.dest_hcanvas.xview)
-        self.dest_container = tk.Frame(self.dest_hcanvas, bg="#1a1b26")
-        self.dest_hcanvas.create_window((0, 0), window=self.dest_container, anchor="nw")
-
-        def _on_dest_configure(_event: tk.Event) -> None:
-            self.dest_hcanvas.configure(scrollregion=self.dest_hcanvas.bbox("all"))
-
-        self.dest_container.bind("<Configure>", _on_dest_configure)
-        self.dest_hcanvas.pack(side=tk.TOP, fill=tk.X, expand=True)
-        dest_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
-        self.dest_hcanvas.configure(xscrollcommand=dest_hscroll.set)
-        self._refresh_destinations()
-
         st = ttk.Label(self, textvariable=self.status_gallery, foreground="#7aa2f7")
-        st.pack(anchor="w", pady=(8, 0))
+        st.pack(anchor="w", fill=tk.X, pady=(6, 0))
