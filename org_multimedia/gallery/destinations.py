@@ -165,6 +165,6 @@ class GalleryDestinationsMixin:
         self.ordered_paths = scan_images_flat(self.gallery_folder)
         self.selected.clear()
         self.anchor_index = None
-        self._thumb_offset = 0
+        self._gallery_page = 0
         self._update_selection_label()
-        self._start_thumb_worker(reset_offset=True)
+        self._start_thumb_worker(scroll_top_after=True)

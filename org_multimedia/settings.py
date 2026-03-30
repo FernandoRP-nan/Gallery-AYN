@@ -19,7 +19,15 @@ def _settings_path() -> Path:
 def load_app_settings() -> dict:
     path = _settings_path()
     if not path.exists():
-        return {"destinations": [], "gallery_last_folder": "", "gallery_thumb_scale": 1.0}
+        return {
+            "destinations": [],
+            "gallery_last_folder": "",
+            "gallery_thumb_scale": 1.0,
+            "gallery_show_thumb_filename": True,
+            "gallery_thumbs_per_page": 120,
+            "gallery_scroll_top_on_page_change": True,
+            "gallery_compact_thumb_padding": False,
+        }
     try:
         with path.open(encoding="utf-8") as f:
             data = json.load(f)
@@ -33,9 +41,27 @@ def load_app_settings() -> dict:
             # Migrar valores viejos (0.5) a rango usable
             gs = float(data["gallery_thumb_scale"])
             data["gallery_thumb_scale"] = max(0.75, min(2.25, gs))
+        if "gallery_show_thumb_filename" not in data:
+            data["gallery_show_thumb_filename"] = True
+        if "gallery_thumbs_per_page" not in data:
+            data["gallery_thumbs_per_page"] = 120
+        else:
+            data["gallery_thumbs_per_page"] = int(data["gallery_thumbs_per_page"])
+        if "gallery_scroll_top_on_page_change" not in data:
+            data["gallery_scroll_top_on_page_change"] = True
+        if "gallery_compact_thumb_padding" not in data:
+            data["gallery_compact_thumb_padding"] = False
         return data
     except (OSError, json.JSONDecodeError):
-        return {"destinations": [], "gallery_last_folder": "", "gallery_thumb_scale": 1.0}
+        return {
+            "destinations": [],
+            "gallery_last_folder": "",
+            "gallery_thumb_scale": 1.0,
+            "gallery_show_thumb_filename": True,
+            "gallery_thumbs_per_page": 120,
+            "gallery_scroll_top_on_page_change": True,
+            "gallery_compact_thumb_padding": False,
+        }
 
 
 def save_app_settings(data: dict) -> None:

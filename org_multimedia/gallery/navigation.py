@@ -52,7 +52,7 @@ class GalleryNavigationMixin:
         self.ordered_paths = scan_images_flat(folder)
         self.selected.clear()
         self.anchor_index = None
-        self._thumb_offset = 0
+        self._gallery_page = 0
         self._update_selection_label()
         n_img = len(self.ordered_paths)
         n_sub = len(self._subfolder_paths)
@@ -60,7 +60,7 @@ class GalleryNavigationMixin:
             f"En esta carpeta: {n_img} imagen(es), {n_sub} subcarpeta(s). "
             "(Solo archivos directos; no se busca en subcarpetas.)"
         )
-        self._start_thumb_worker(reset_offset=True)
+        self._start_thumb_worker(scroll_top_after=True)
 
     def _nav_up(self) -> None:
         if not self.gallery_folder:

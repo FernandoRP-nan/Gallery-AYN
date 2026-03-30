@@ -122,6 +122,6 @@ class GalleryCanvasLayoutMixin:
         self._photos.clear()
         self.selected.clear()
         self.anchor_index = None
-        self._thumb_offset = 0
+        self._clamp_gallery_page()
         self._update_selection_label()
-        self._start_thumb_worker(reset_offset=True)
+        self._start_thumb_worker(scroll_top_after=False)

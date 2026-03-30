@@ -10,13 +10,20 @@ from .ribbon_word_tabs import GalleryWordRibbon
 
 class GalleryUIBuildMixin:
     def _build_ui(self) -> None:
-        title = ttk.Label(self, text="Galeria manual", style="GalleryTitle.TLabel")
-        title.pack(anchor="w", pady=(0, 2))
+        head = ttk.Frame(self)
+        head.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(head, text="Galeria manual", style="GalleryTitle.TLabel").pack(side=tk.LEFT)
+        ttk.Button(
+            head,
+            text="\u2699",
+            width=3,
+            command=self._open_gallery_settings_dialog,
+        ).pack(side=tk.RIGHT, padx=(8, 0))
         sub = ttk.Label(
             self,
             text=(
                 "Cinta superior tipo Word: elige pestaña para opciones. "
-                "Abajo, galería y vista previa ocupan el área principal."
+                "Paginacion abajo. Tuerca: apariencia y tamano de pagina."
             ),
             wraplength=780,
             foreground="#565f89",
@@ -61,8 +68,6 @@ class GalleryUIBuildMixin:
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8))
         ttk.Button(row1, text="Explorar...", command=self._browse_folder).pack(side=tk.LEFT)
         ttk.Button(row1, text="Cargar galeria", command=self._load_gallery).pack(side=tk.LEFT, padx=(4, 0))
-        self.more_thumbs_btn = ttk.Button(row1, text="Mas miniaturas", command=self._load_more_thumbs, state=tk.DISABLED)
-        self.more_thumbs_btn.pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(row1, text="Ajustes destinos...", command=self._open_settings).pack(side=tk.LEFT, padx=(8, 0))
 
         nav_row = ttk.Frame(page_ruta)
@@ -202,6 +207,22 @@ class GalleryUIBuildMixin:
             text="",
         )
         self.preview_meta_label.pack(anchor="w", fill=tk.X)
+
+        self.gallery_pager = tk.Frame(self, bg="#16161e", highlightthickness=1, highlightbackground="#414868")
+        self.gallery_pager.pack(fill=tk.X, pady=(4, 0))
+        pinner = ttk.Frame(self.gallery_pager)
+        pinner.pack(fill=tk.X, padx=10, pady=8)
+        self.gallery_pager_first = ttk.Button(pinner, text="|<<", width=5, command=self._gallery_first_page)
+        self.gallery_pager_first.pack(side=tk.LEFT, padx=(0, 4))
+        self.gallery_pager_prev = ttk.Button(pinner, text="<", width=4, command=self._gallery_prev_page)
+        self.gallery_pager_prev.pack(side=tk.LEFT, padx=(0, 8))
+        self.gallery_pager_label = ttk.Label(pinner, text="", font=("Sans", 10))
+        self.gallery_pager_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.gallery_pager_next = ttk.Button(pinner, text=">", width=4, command=self._gallery_next_page)
+        self.gallery_pager_next.pack(side=tk.LEFT, padx=(8, 0))
+        self.gallery_pager_last = ttk.Button(pinner, text=">>|", width=5, command=self._gallery_last_page)
+        self.gallery_pager_last.pack(side=tk.LEFT, padx=(4, 0))
+        self._update_pager_ui()
 
         st = ttk.Label(self, textvariable=self.status_gallery, foreground="#7aa2f7")
         st.pack(anchor="w", fill=tk.X, pady=(6, 0))

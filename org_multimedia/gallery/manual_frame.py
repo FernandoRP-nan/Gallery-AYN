@@ -13,6 +13,7 @@ from ..settings import load_app_settings
 from .canvas_layout import GalleryCanvasLayoutMixin
 from .destinations import GalleryDestinationsMixin
 from .navigation import GalleryNavigationMixin
+from .pager_config import GalleryPagerAndSettingsMixin
 from .preview_grid import GalleryPreviewGridMixin
 from .selection_bar import GallerySelectionBarMixin
 from .thumb_interaction import GalleryThumbInteractionMixin
@@ -26,6 +27,7 @@ class GalleryManualFrame(
     GalleryNavigationMixin,
     GalleryDestinationsMixin,
     GalleryPreviewGridMixin,
+    GalleryPagerAndSettingsMixin,
     GalleryThumbnailsMixin,
     GalleryThumbInteractionMixin,
     GallerySelectionBarMixin,
@@ -34,8 +36,6 @@ class GalleryManualFrame(
     """Galeria con miniaturas, seleccion multiple y destinos por arrastre."""
 
     PREVIEW_MAX = (440, 480)
-    # Pixmaps en X por lote; subir mucho el valor aumenta el riesgo de BadAlloc al cargar carpetas grandes.
-    BATCH_THUMBS = 120
 
     def __init__(self, parent: ttk.Frame, **kwargs) -> None:
         super().__init__(parent, **kwargs)
@@ -65,7 +65,8 @@ class GalleryManualFrame(
         self._drag_start: tuple[int, int] | None = None
         self._drag_active = False
         self._photos: dict[str, object] = {}
-        self._thumb_offset = 0
+        self._gallery_page = 0
+        self._scroll_top_after_load = False
         self.folder_var = tk.StringVar(value=self.settings.get("gallery_last_folder", ""))
         self.path_display_var = tk.StringVar(value="")
         self._subfolder_paths: list[Path] = []

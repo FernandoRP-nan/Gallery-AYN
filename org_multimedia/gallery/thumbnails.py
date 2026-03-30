@@ -1,4 +1,4 @@
-"""Carga por lotes de miniaturas y colocación en la rejilla."""
+"""Carga de miniaturas por pagina y colocacion en la rejilla."""
 
 from __future__ import annotations
 
@@ -12,35 +12,36 @@ from ..pil_compat import HAS_PIL
 
 
 class GalleryThumbnailsMixin:
-    def _load_more_thumbs(self) -> None:
-        if not self.ordered_paths:
-            return
-        self._start_thumb_worker(reset_offset=False)
-
-    def _start_thumb_worker(self, reset_offset: bool = False) -> None:
-        if self._thumb_worker and self._thumb_worker.is_alive() and not reset_offset:
-            return
-        if reset_offset:
-            self._thumb_gen += 1
-            while True:
-                try:
-                    self._thumb_queue.get_nowait()
-                except queue.Empty:
-                    break
+    def _start_thumb_worker(self, *, scroll_top_after: bool = False) -> None:
+        self._scroll_top_after_load = scroll_top_after
+        self._thumb_gen += 1
+        while True:
+            try:
+                self._thumb_queue.get_nowait()
+            except queue.Empty:
+                break
         gen = self._thumb_gen
-        if reset_offset:
-            self._thumb_offset = 0
+
+        total = len(self.ordered_paths)
+        self._update_pager_ui()
+        if total == 0:
+            self.status_gallery.set("No hay imagenes en esta carpeta.")
+            self._thumb_worker = None
+            return
+
+        self._clamp_gallery_page()
+        self._update_pager_ui()
+        start, end = self._gallery_page_slice()
+        paths = self.ordered_paths[start:end]
+
         cw = self._effective_gallery_canvas_width(self.gallery_canvas.winfo_width())
         self._update_layout_metrics(cw)
         self._prepare_grid_columns()
-        total = len(self.ordered_paths)
-        if self._thumb_offset >= total:
-            self.status_gallery.set("No hay mas miniaturas para cargar.")
-            self.more_thumbs_btn.config(state=tk.DISABLED)
+
+        if not paths:
+            self.status_gallery.set("Pagina vacia.")
+            self._thumb_worker = None
             return
-        end = min(self._thumb_offset + self.BATCH_THUMBS, total)
-        paths = self.ordered_paths[self._thumb_offset : end]
-        self._thumb_offset = end
 
         def worker() -> None:
             for path in paths:
@@ -52,15 +53,14 @@ class GalleryThumbnailsMixin:
                 self._thumb_queue.put(("thumb", gen, path, thumb_img))
             if gen != self._thumb_gen:
                 return
-            self._thumb_queue.put(("done", gen, len(paths), end, total))
+            self._thumb_queue.put(("done", gen, len(paths), start, end, total))
 
         self._thumb_worker = threading.Thread(target=worker, daemon=True)
         self._thumb_worker.start()
-        self.more_thumbs_btn.config(state=tk.DISABLED)
         self._poll_thumb_queue()
 
     def _poll_thumb_queue(self) -> None:
-        done_batch: tuple[int, int, int] | None = None
+        done_batch: tuple[int, int, int, int] | None = None
         try:
             while True:
                 item = self._thumb_queue.get_nowait()
@@ -70,24 +70,21 @@ class GalleryThumbnailsMixin:
                         continue
                     self._add_thumb_cell(path, photo)
                 elif item[0] == "done":
-                    _, gen, n, offset_end, total = item
+                    _, gen, n_done, start, end, total = item
                     if gen != self._thumb_gen:
                         continue
-                    done_batch = (n, offset_end, total)
+                    done_batch = (n_done, start, end, total)
         except queue.Empty:
             pass
         if done_batch is not None:
-            _n, offset_end, total = done_batch
+            n_done, start, end, total = done_batch
             extra = "" if HAS_PIL else " Instala Pillow: pip install pillow."
-            remaining = max(0, total - offset_end)
             self.status_gallery.set(
-                f"Miniaturas mostradas hasta {offset_end} de {total}.{extra}"
-                + (f" Quedan {remaining}; pulsa 'Mas miniaturas'." if remaining > 0 else "")
+                f"Pagina actual: miniaturas {start + 1}-{end} de {total} ({n_done} cargadas).{extra}"
             )
-            if remaining > 0:
-                self.more_thumbs_btn.config(state=tk.NORMAL)
-            else:
-                self.more_thumbs_btn.config(state=tk.DISABLED)
+            if getattr(self, "_scroll_top_after_load", False):
+                self._scroll_top_after_load = False
+                self.gallery_canvas.yview_moveto(0)
         if self._thumb_worker and self._thumb_worker.is_alive():
             self.root.after(80, self._poll_thumb_queue)
         elif not self._thumb_queue.empty():
@@ -102,8 +99,10 @@ class GalleryThumbnailsMixin:
         gap = getattr(self, "_gallery_cell_gap", 6)
         gx = max(1, gap // 2)
         thumb = self._thumb_size_tuple[0]
-        outer = tk.Frame(self.gallery_inner, bg="#24283b", padx=2, pady=4)
-        outer.grid(row=row, column=col, padx=(gx, gx), pady=4, sticky="nsew")
+        compact = bool(self.settings.get("gallery_compact_thumb_padding", False))
+        py = 2 if compact else 4
+        outer = tk.Frame(self.gallery_inner, bg="#24283b", padx=2, pady=py)
+        outer.grid(row=row, column=col, padx=(gx, gx), pady=py, sticky="nsew")
         self.path_to_frame[path] = outer
         img_box = tk.Frame(outer, bg="#24283b", width=thumb, height=thumb, highlightthickness=0)
         img_box.pack(anchor=tk.CENTER, pady=(0, 2))
@@ -116,13 +115,20 @@ class GalleryThumbnailsMixin:
         else:
             lbl = tk.Label(img_box, text="(sin vista previa)", bg="#24283b", fg="#565f89", font=("Sans", 8))
             lbl.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        name = path.name if len(path.name) < 28 else path.name[:12] + "..." + path.name[-10:]
-        wrap = max(60, thumb - 4)
-        cap = tk.Label(outer, text=name, bg="#24283b", fg="#a9b1d6", font=("Sans", 8), wraplength=wrap)
-        cap.pack(fill=tk.X, pady=(2, 0))
-        for w in (outer, img_box, lbl, cap):
-            w.bind("<Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
-            w.bind("<Shift-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
-            w.bind("<Control-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
-            w.bind("<B1-Motion>", self._on_thumb_motion)
+
+        cap: tk.Label | None = None
+        if self._gallery_show_filename():
+            name = path.name if len(path.name) < 28 else path.name[:12] + "..." + path.name[-10:]
+            wrap = max(60, thumb - 4)
+            cap = tk.Label(outer, text=name, bg="#24283b", fg="#a9b1d6", font=("Sans", 8), wraplength=wrap)
+            cap.pack(fill=tk.X, pady=(2, 0))
+
+        bind_widgets: list[tk.Misc] = [outer, img_box, lbl]
+        if cap is not None:
+            bind_widgets.append(cap)
+        for wgt in bind_widgets:
+            wgt.bind("<Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
+            wgt.bind("<Shift-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
+            wgt.bind("<Control-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
+            wgt.bind("<B1-Motion>", self._on_thumb_motion)
         outer.bind("<ButtonRelease-1>", lambda e: self._on_thumb_release(e))
