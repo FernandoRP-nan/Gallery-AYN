@@ -12,12 +12,38 @@ class GalleryThumbInteractionMixin:
         self._update_thumb_check_visibility()
 
     def _update_thumb_check_visibility(self) -> None:
-        show_checks = getattr(self, "_active_ribbon_tab", "ruta") == "sel"
+        show_checks = getattr(self, "_active_ribbon_tab", "ruta") in ("sel", "dest")
         for chk in getattr(self, "path_to_checkwidget", {}).values():
             if show_checks:
                 chk.place(relx=0.98, rely=0.98, anchor="se")
             else:
                 chk.place_forget()
+
+    def _show_drag_badge(self, x_root: int, y_root: int) -> None:
+        if self._drag_badge is None or not self._drag_badge.winfo_exists():
+            self._drag_badge = tk.Toplevel(self.root)
+            self._drag_badge.overrideredirect(True)
+            self._drag_badge.attributes("-topmost", True)
+            self._drag_badge.configure(bg="#24283b")
+            self._drag_badge_label = tk.Label(
+                self._drag_badge,
+                bg="#24283b",
+                fg="#c0caf5",
+                padx=10,
+                pady=6,
+                font=("Sans", 10, "bold"),
+                text="",
+            )
+            self._drag_badge_label.pack()
+        if self._drag_badge_label is not None:
+            n = len(self.selected)
+            self._drag_badge_label.configure(text=f"Moviendo {n} imagen(es)")
+        self._drag_badge.geometry(f"+{x_root + 18}+{y_root + 18}")
+        self._drag_badge.deiconify()
+
+    def _hide_drag_badge(self) -> None:
+        if self._drag_badge is not None and self._drag_badge.winfo_exists():
+            self._drag_badge.withdraw()
 
     def _index_of(self, path: Path) -> int | None:
         try:
@@ -65,6 +91,10 @@ class GalleryThumbInteractionMixin:
         dy = event.y_root - self._drag_start[1]
         if (dx * dx + dy * dy) ** 0.5 > 10:
             self._drag_active = True
+            if self.selected:
+                self._show_drag_badge(event.x_root, event.y_root)
+        if self._drag_active and self.selected:
+            self._show_drag_badge(event.x_root, event.y_root)
 
     def _on_thumb_release(self, _event: tk.Event) -> None:
         self._drag_start = None
@@ -72,15 +102,18 @@ class GalleryThumbInteractionMixin:
     def _on_global_release(self, event: tk.Event) -> None:
         if not self._drag_active or not self.selected:
             self._drag_active = False
+            self._hide_drag_badge()
             return
         w = self.root.winfo_containing(event.x_root, event.y_root)
         dest_path = self._find_dest_path_widget(w)
         self._drag_active = False
+        self._hide_drag_badge()
         if dest_path:
             self._move_to_dest(dest_path)
 
     def _release_on_destination(self, dest_path: Path) -> None:
         self._drag_active = False
+        self._hide_drag_badge()
         if not self.selected:
             self.status_gallery.set("Selecciona imagenes en la galeria (usa 'Un clic alterna' o Ctrl+clic).")
             return

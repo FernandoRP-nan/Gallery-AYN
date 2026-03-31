@@ -99,18 +99,30 @@ class GalleryUIBuildMixin:
         page_dest = self.ribbon.add_tab("dest", "Destinos")
         ttk.Label(
             page_dest,
-            text="Arrastra seleccion aqui o pulsa una tarjeta. '+' anade carpeta (tambien en Ajustes destinos).",
+            text="Arrastra seleccion aqui o pulsa una tarjeta para previsualizar destino.",
             foreground="#565f89",
         ).pack(anchor="w", pady=(0, 4))
+        dest_sel = ttk.Frame(page_dest)
+        dest_sel.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(dest_sel, text="Seleccionar pagina actual", command=self._select_all).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(dest_sel, text="Quitar seleccion", command=self._select_none).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(dest_sel, text="Invertir seleccion", command=self._invert_selection).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(dest_sel, textvariable=self.selection_count_var, foreground="#9ece6a", font=("Sans", 10, "bold")).pack(
+            side=tk.RIGHT, padx=(8, 0)
+        )
         dest_outer = ttk.Frame(page_dest)
-        dest_outer.pack(fill=tk.X)
-        self.dest_hcanvas = tk.Canvas(dest_outer, bg="#1a1b26", height=104, highlightthickness=0)
+        dest_outer.pack(fill=tk.BOTH, expand=True)
+        self.dest_hcanvas = tk.Canvas(dest_outer, bg="#1a1b26", height=150, highlightthickness=0)
         dest_hscroll = ttk.Scrollbar(dest_outer, orient="horizontal", command=self.dest_hcanvas.xview)
         self.dest_container = tk.Frame(self.dest_hcanvas, bg="#1a1b26")
         self.dest_hcanvas.create_window((0, 0), window=self.dest_container, anchor="nw")
 
         def _on_dest_configure(_event: tk.Event) -> None:
-            self.dest_hcanvas.configure(scrollregion=self.dest_hcanvas.bbox("all"))
+            bbox = self.dest_hcanvas.bbox("all")
+            self.dest_hcanvas.configure(scrollregion=bbox)
+            if bbox is not None:
+                target_h = max(120, min(240, int(bbox[3] - bbox[1] + 10)))
+                self.dest_hcanvas.configure(height=target_h)
 
         self.dest_container.bind("<Configure>", _on_dest_configure)
         self.dest_hcanvas.pack(side=tk.TOP, fill=tk.X, expand=True)

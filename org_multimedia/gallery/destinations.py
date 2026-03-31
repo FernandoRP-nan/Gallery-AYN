@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..fs_utils import ensure_unique_destination
+from ..gallery_images import make_thumbnail_photoimage
 from ..gallery_paths import scan_images_flat
 from ..settings import save_app_settings
 
@@ -77,9 +78,91 @@ class GalleryDestinationsMixin:
                 c.configure(bg="#24283b")
 
             for w in (card, l1, l2):
-                w.bind("<ButtonRelease-1>", lambda e, p=dest_path: self._release_on_destination(p))
+                w.bind("<ButtonRelease-1>", lambda _e, p=dest_path: self._open_destination_preview(p))
                 w.bind("<Enter>", on_enter)
                 w.bind("<Leave>", on_leave)
+
+    def _open_destination_preview(self, dest_path: Path) -> None:
+        dest_dir = dest_path.expanduser().resolve()
+        if not dest_dir.is_dir():
+            messagebox.showwarning("Destino", f"No existe la carpeta destino:\n{dest_dir}")
+            return
+        top = tk.Toplevel(self.root)
+        top.title(f"Destino: {dest_dir.name}")
+        top.configure(bg="#1a1b26")
+        top.geometry("860x620")
+        top.transient(self.root)
+
+        header = ttk.Frame(top, padding=10)
+        header.pack(fill=tk.X)
+        ttk.Label(header, text=str(dest_dir), foreground="#a9b1d6").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(header, text="Cerrar", command=top.destroy).pack(side=tk.RIGHT)
+
+        ctrl = ttk.Frame(top, padding=(10, 0, 10, 8))
+        ctrl.pack(fill=tk.X)
+        ttk.Label(ctrl, text="Tamaño miniaturas:").pack(side=tk.LEFT)
+        size_var = tk.DoubleVar(value=1.0)
+        size_lbl = ttk.Label(ctrl, text="100%", width=5)
+        size_lbl.pack(side=tk.RIGHT)
+        ttk.Scale(ctrl, from_=0.7, to=2.1, orient=tk.HORIZONTAL, variable=size_var).pack(
+            side=tk.RIGHT, fill=tk.X, expand=True, padx=(8, 12)
+        )
+
+        canvas = tk.Canvas(top, bg="#16161e", highlightthickness=0)
+        yscroll = ttk.Scrollbar(top, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg="#16161e")
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=yscroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=(0, 10))
+        yscroll.pack(side=tk.RIGHT, fill=tk.Y, pady=(0, 10), padx=(0, 10))
+
+        photo_refs: list[object] = []
+
+        def render() -> None:
+            for w in inner.winfo_children():
+                w.destroy()
+            photo_refs.clear()
+            paths = scan_images_flat(dest_dir)
+            if not paths:
+                ttk.Label(inner, text="Sin imagenes en este destino.", foreground="#565f89").grid(
+                    row=0, column=0, sticky="w", padx=12, pady=12
+                )
+                return
+            thumb = max(72, int(132 * float(size_var.get())))
+            cols = max(2, min(8, int(canvas.winfo_width() // (thumb + 34)) if canvas.winfo_width() > 0 else 5))
+            for i in range(cols):
+                inner.columnconfigure(i, weight=1, uniform="dest_prev_col")
+            for idx, p in enumerate(paths):
+                r, c = divmod(idx, cols)
+                card = tk.Frame(inner, bg="#24283b", padx=4, pady=4)
+                card.grid(row=r, column=c, padx=6, pady=6, sticky="nsew")
+                box = tk.Frame(card, bg="#24283b", width=thumb, height=thumb)
+                box.pack()
+                box.pack_propagate(False)
+                photo = make_thumbnail_photoimage(p, (thumb, thumb))
+                if photo is not None:
+                    photo_refs.append(photo)
+                    tk.Label(box, image=photo, bg="#24283b").place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+                else:
+                    tk.Label(box, text="(sin vista previa)", bg="#24283b", fg="#565f89").place(
+                        relx=0.5, rely=0.5, anchor=tk.CENTER
+                    )
+                name = p.name if len(p.name) < 26 else p.name[:10] + "..." + p.name[-12:]
+                tk.Label(card, text=name, bg="#24283b", fg="#a9b1d6", font=("Sans", 8), wraplength=thumb).pack(
+                    fill=tk.X, pady=(4, 0)
+                )
+            top._photo_refs = photo_refs  # type: ignore[attr-defined]
+
+        def on_scale(_value: str) -> None:
+            size_lbl.configure(text=f"{int(size_var.get() * 100)}%")
+            render()
+
+        for child in ctrl.winfo_children():
+            if isinstance(child, ttk.Scale):
+                child.configure(command=on_scale)
+        canvas.bind("<Configure>", lambda _e: render())
+        render()
 
     def _open_settings(self) -> None:
         top = tk.Toplevel(self.root)

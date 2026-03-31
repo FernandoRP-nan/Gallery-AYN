@@ -70,6 +70,8 @@ class GalleryManualFrame(
         self._thumb_worker: threading.Thread | None = None
         self._drag_start: tuple[int, int] | None = None
         self._drag_active = False
+        self._drag_badge: tk.Toplevel | None = None
+        self._drag_badge_label: tk.Label | None = None
         self._photos: dict[str, object] = {}
         self._gallery_page = 0
         self._scroll_top_after_load = False
