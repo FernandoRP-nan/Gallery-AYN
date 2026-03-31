@@ -12,6 +12,25 @@ from ..pil_compat import HAS_PIL
 
 
 class GalleryThumbnailsMixin:
+    def _add_folder_tile(self, folder: Path, *, title: str, hint: str) -> None:
+        cols = max(2, self._layout_cols)
+        row = len(self.path_to_frame) // cols
+        col = len(self.path_to_frame) % cols
+        gap = getattr(self, "_gallery_cell_gap", 6)
+        gx = max(1, gap // 2)
+        outer = tk.Frame(self.gallery_inner, bg="#2a2f45", padx=8, pady=8, cursor="hand2")
+        outer.grid(row=row, column=col, padx=(gx, gx), pady=4, sticky="nsew")
+        self.path_to_frame[folder] = outer
+        icon = tk.Label(outer, text="📁", bg="#2a2f45", fg="#c0caf5", font=("Sans", 26))
+        icon.pack(pady=(4, 6))
+        name = tk.Label(outer, text=title, bg="#2a2f45", fg="#c0caf5", font=("Sans", 10, "bold"), wraplength=170)
+        name.pack(fill=tk.X)
+        sub = tk.Label(outer, text=hint, bg="#2a2f45", fg="#7aa2f7", font=("Sans", 8), wraplength=170)
+        sub.pack(fill=tk.X, pady=(4, 0))
+        for w in (outer, icon, name, sub):
+            self._bind_gallery_scroll_events(w)
+            w.bind("<Button-1>", lambda _e, p=folder: self._open_folder_from_tile(p))
+
     def _start_thumb_worker(self, *, scroll_top_after: bool = False) -> None:
         self._scroll_top_after_load = scroll_top_after
         self._thumb_gen += 1
@@ -45,7 +64,17 @@ class GalleryThumbnailsMixin:
         self._update_layout_metrics(cw)
         self._prepare_grid_columns()
 
-        if not paths:
+        folder_tiles = 0
+        if self._gallery_page == 0 and self.gallery_folder is not None:
+            parent = self.gallery_folder.parent
+            if parent != self.gallery_folder and parent.is_dir():
+                self._add_folder_tile(parent, title=".. Carpeta superior", hint=str(parent))
+                folder_tiles += 1
+            for d in self._subfolder_paths:
+                self._add_folder_tile(d, title=d.name, hint="Abrir subcarpeta")
+                folder_tiles += 1
+
+        if not paths and folder_tiles == 0:
             self.status_gallery.set("Pagina vacia.")
             self._thumb_worker = None
             return
@@ -97,6 +126,8 @@ class GalleryThumbnailsMixin:
         elif not self._thumb_queue.empty():
             self.root.after(80, self._poll_thumb_queue)
         else:
+            if not self.ordered_paths and self._subfolder_paths and self._gallery_page == 0:
+                self.status_gallery.set(f"Solo subcarpetas: {len(self._subfolder_paths)}")
             self._thumb_worker = None
 
     def _add_thumb_cell(self, path: Path, photo: object | None) -> None:

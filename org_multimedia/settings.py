@@ -28,6 +28,8 @@ def load_app_settings() -> dict:
             "gallery_scroll_top_on_page_change": True,
             "gallery_compact_thumb_padding": False,
             "gallery_preview_sash_x": None,
+            "dest_preview_thumb_scale": 1.0,
+            "dest_preview_geometry": "",
             "window_start_maximized": True,
         }
     try:
@@ -55,6 +57,13 @@ def load_app_settings() -> dict:
             data["gallery_compact_thumb_padding"] = False
         if "gallery_preview_sash_x" not in data:
             data["gallery_preview_sash_x"] = None
+        if "dest_preview_thumb_scale" not in data:
+            data["dest_preview_thumb_scale"] = 1.0
+        else:
+            ds = float(data["dest_preview_thumb_scale"])
+            data["dest_preview_thumb_scale"] = max(0.7, min(2.1, ds))
+        if "dest_preview_geometry" not in data:
+            data["dest_preview_geometry"] = ""
         if "window_start_maximized" not in data:
             data["window_start_maximized"] = True
         return data
@@ -68,6 +77,8 @@ def load_app_settings() -> dict:
             "gallery_scroll_top_on_page_change": True,
             "gallery_compact_thumb_padding": False,
             "gallery_preview_sash_x": None,
+            "dest_preview_thumb_scale": 1.0,
+            "dest_preview_geometry": "",
             "window_start_maximized": True,
         }
 

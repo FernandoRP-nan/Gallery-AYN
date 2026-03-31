@@ -14,6 +14,12 @@ from ..settings import save_app_settings
 
 
 class GalleryDestinationsMixin:
+    def _on_destination_card_click(self, dest_path: Path) -> None:
+        # Si venimos de un arrastre, el suelto ya se procesa por _on_global_release.
+        if getattr(self, "_drag_active", False):
+            return
+        self._open_destination_preview(dest_path)
+
     def _quick_add_destination(self) -> None:
         path = self._browse_dest_folder()
         if not path:
@@ -78,7 +84,7 @@ class GalleryDestinationsMixin:
                 c.configure(bg="#24283b")
 
             for w in (card, l1, l2):
-                w.bind("<ButtonRelease-1>", lambda _e, p=dest_path: self._open_destination_preview(p))
+                w.bind("<ButtonRelease-1>", lambda _e, p=dest_path: self._on_destination_card_click(p))
                 w.bind("<Enter>", on_enter)
                 w.bind("<Leave>", on_leave)
 
@@ -90,7 +96,14 @@ class GalleryDestinationsMixin:
         top = tk.Toplevel(self.root)
         top.title(f"Destino: {dest_dir.name}")
         top.configure(bg="#1a1b26")
-        top.geometry("860x620")
+        saved_geo = str(self.settings.get("dest_preview_geometry", "")).strip()
+        if saved_geo:
+            try:
+                top.geometry(saved_geo)
+            except tk.TclError:
+                top.geometry("860x620")
+        else:
+            top.geometry("860x620")
         top.transient(self.root)
 
         header = ttk.Frame(top, padding=10)
@@ -101,10 +114,12 @@ class GalleryDestinationsMixin:
         ctrl = ttk.Frame(top, padding=(10, 0, 10, 8))
         ctrl.pack(fill=tk.X)
         ttk.Label(ctrl, text="Tamaño miniaturas:").pack(side=tk.LEFT)
-        size_var = tk.DoubleVar(value=1.0)
+        start_scale = float(self.settings.get("dest_preview_thumb_scale", 1.0))
+        size_var = tk.DoubleVar(value=max(0.7, min(2.1, start_scale)))
         size_lbl = ttk.Label(ctrl, text="100%", width=5)
         size_lbl.pack(side=tk.RIGHT)
-        ttk.Scale(ctrl, from_=0.7, to=2.1, orient=tk.HORIZONTAL, variable=size_var).pack(
+        scale = ttk.Scale(ctrl, from_=0.7, to=2.1, orient=tk.HORIZONTAL, variable=size_var)
+        scale.pack(
             side=tk.RIGHT, fill=tk.X, expand=True, padx=(8, 12)
         )
 
@@ -156,12 +171,22 @@ class GalleryDestinationsMixin:
 
         def on_scale(_value: str) -> None:
             size_lbl.configure(text=f"{int(size_var.get() * 100)}%")
+            self.settings["dest_preview_thumb_scale"] = round(float(size_var.get()), 3)
+            save_app_settings(self.settings)
             render()
-
-        for child in ctrl.winfo_children():
-            if isinstance(child, ttk.Scale):
-                child.configure(command=on_scale)
+        scale.configure(command=on_scale)
+        size_lbl.configure(text=f"{int(size_var.get() * 100)}%")
         canvas.bind("<Configure>", lambda _e: render())
+
+        def save_geo(_event: tk.Event | None = None) -> None:
+            try:
+                self.settings["dest_preview_geometry"] = top.geometry()
+                save_app_settings(self.settings)
+            except tk.TclError:
+                return
+
+        top.bind("<Configure>", save_geo)
+        top.protocol("WM_DELETE_WINDOW", lambda: (save_geo(), top.destroy()))
         render()
 
     def _open_settings(self) -> None:

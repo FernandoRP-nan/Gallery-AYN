@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -44,7 +43,6 @@ class GalleryNavigationMixin:
             return
         self.gallery_folder = folder
         self.folder_var.set(str(folder))
-        self.path_display_var.set(str(folder))
         self.settings["gallery_last_folder"] = str(folder)
         save_app_settings(self.settings)
         self._refresh_subfolder_list()
@@ -76,22 +74,15 @@ class GalleryNavigationMixin:
         save_app_settings(self.settings)
         self._reload_current_folder()
 
-    def _on_subfolder_activate(self, _event: tk.Event | None = None) -> None:
-        sel = self.subfolder_lb.curselection()
-        if not sel:
-            return
-        idx = int(sel[0])
-        if 0 <= idx < len(self._subfolder_paths):
-            self.gallery_folder = self._subfolder_paths[idx].resolve()
-            self.settings["gallery_last_folder"] = str(self.gallery_folder)
-            save_app_settings(self.settings)
-            self._reload_current_folder()
+    def _open_folder_from_tile(self, folder: Path) -> None:
+        self.gallery_folder = folder.resolve()
+        self.settings["gallery_last_folder"] = str(self.gallery_folder)
+        save_app_settings(self.settings)
+        self._reload_current_folder()
 
     def _refresh_subfolder_list(self) -> None:
-        self.subfolder_lb.delete(0, tk.END)
         self._subfolder_paths = []
         if not self.gallery_folder:
             return
         for d in list_subdirs(self.gallery_folder):
-            self.subfolder_lb.insert(tk.END, f"  {d.name}")
             self._subfolder_paths.append(d)

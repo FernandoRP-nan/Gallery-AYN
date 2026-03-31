@@ -27,19 +27,10 @@ class GalleryUIBuildMixin:
         ttk.Label(row1, text="Carpeta:").pack(side=tk.LEFT)
         entry = ttk.Entry(row1, textvariable=self.folder_var, width=70)
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8))
+        ttk.Button(row1, text="↻", width=3, command=self._reload_current_folder).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(row1, text="Explorar...", command=self._browse_folder).pack(side=tk.LEFT)
         ttk.Button(row1, text="Cargar galeria", command=self._load_gallery).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(row1, text="Ajustes destinos...", command=self._open_settings).pack(side=tk.LEFT, padx=(8, 0))
-
-        nav_row = ttk.Frame(page_ruta)
-        nav_row.pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(nav_row, text="Carpeta superior", command=self._nav_up).pack(side=tk.LEFT)
-        ttk.Button(nav_row, text="Actualizar esta carpeta", command=self._reload_current_folder).pack(
-            side=tk.LEFT, padx=(8, 0)
-        )
-        ttk.Label(nav_row, textvariable=self.path_display_var, wraplength=400, foreground="#a9b1d6").pack(
-            side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True
-        )
 
         # --- Pestaña Seleccion ---
         page_sel = self.ribbon.add_tab("sel", "Seleccion")
@@ -68,32 +59,6 @@ class GalleryUIBuildMixin:
             wraplength=900,
             foreground="#565f89",
         ).pack(anchor="w", pady=(4, 0))
-
-        # --- Pestaña Subcarpetas ---
-        page_sub = self.ribbon.add_tab("sub", "Subcarpetas")
-        ttk.Label(
-            page_sub,
-            text="Doble clic o Enter en una fila para entrar en esa carpeta.",
-            foreground="#565f89",
-        ).pack(anchor="w", pady=(0, 4))
-        sub_inner = ttk.Frame(page_sub)
-        sub_inner.pack(fill=tk.BOTH, expand=True)
-        self.subfolder_lb = tk.Listbox(
-            sub_inner,
-            height=5,
-            bg="#16161e",
-            fg="#c0caf5",
-            selectbackground="#414868",
-            selectforeground="#c0caf5",
-            relief=tk.FLAT,
-            highlightthickness=0,
-        )
-        sf_scroll = ttk.Scrollbar(sub_inner, orient="vertical", command=self.subfolder_lb.yview)
-        self.subfolder_lb.configure(yscrollcommand=sf_scroll.set)
-        self.subfolder_lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sf_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.subfolder_lb.bind("<Double-Button-1>", self._on_subfolder_activate)
-        self.subfolder_lb.bind("<Return>", self._on_subfolder_activate)
 
         # --- Pestaña Destinos ---
         page_dest = self.ribbon.add_tab("dest", "Destinos")
