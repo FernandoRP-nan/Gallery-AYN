@@ -10,13 +10,16 @@ class GallerySelectionBarMixin:
         self.selection_count_var.set(f"{n} de {total} seleccionadas")
 
     def _select_all(self) -> None:
-        self.selected = set(self.ordered_paths)
-        if self.ordered_paths:
-            self.anchor_index = 0
+        if not self.ordered_paths:
+            return
+        start, end = self._gallery_page_slice()
+        page_paths = self.ordered_paths[start:end]
+        self.selected = set(page_paths)
+        self.anchor_index = start if page_paths else None
         self._highlight_selection()
         self._update_selection_label()
-        if self.ordered_paths:
-            self._schedule_preview(self.ordered_paths[0])
+        if page_paths:
+            self._schedule_preview(page_paths[0])
 
     def _select_none(self) -> None:
         self.selected.clear()

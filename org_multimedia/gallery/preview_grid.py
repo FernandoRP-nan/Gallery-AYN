@@ -6,7 +6,7 @@ import threading
 import tkinter as tk
 from pathlib import Path
 
-from ..gallery_images import load_preview_photoimage
+from ..gallery_images import load_preview_photoimage_fill_box
 from ..pil_compat import HAS_PIL
 
 
@@ -40,7 +40,7 @@ class GalleryPreviewGridMixin:
 
         def worker() -> None:
             try:
-                photo = load_preview_photoimage(path, self.PREVIEW_MAX)
+                photo = load_preview_photoimage_fill_box(path, self.PREVIEW_MAX)
                 self.root.after(0, lambda: self._apply_preview_image(gen, photo, path))
             except Exception:
                 self.root.after(0, lambda: self._apply_preview_error(gen, path))

@@ -37,7 +37,9 @@ class GalleryUIBuildMixin:
         page_sel = cinta.add_tab("sel", "Seleccion")
         sel_inner = ttk.Frame(page_sel)
         sel_inner.pack(fill=tk.X, pady=2)
-        ttk.Button(sel_inner, text="Seleccionar todas", command=self._select_all).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(sel_inner, text="Seleccionar pagina actual", command=self._select_all).pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
         ttk.Button(sel_inner, text="Quitar seleccion", command=self._select_none).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(sel_inner, text="Invertir seleccion", command=self._invert_selection).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Checkbutton(
@@ -180,9 +182,8 @@ class GalleryUIBuildMixin:
         self.gallery_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         self.gallery_canvas.bind("<Configure>", self._on_gallery_canvas_configure)
-        self.gallery_canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self.gallery_canvas.bind("<Button-4>", lambda e: self.gallery_canvas.yview_scroll(-2, "units"))
-        self.gallery_canvas.bind("<Button-5>", lambda e: self.gallery_canvas.yview_scroll(2, "units"))
+        self._bind_gallery_scroll_events(self.gallery_canvas)
+        self._bind_gallery_scroll_events(self.gallery_inner)
 
         preview_title = ttk.Label(self.preview_column, text="Vista previa", font=("Sans", 11, "bold"))
         preview_title.pack(anchor="w", pady=(0, 6))
@@ -211,17 +212,38 @@ class GalleryUIBuildMixin:
         self.gallery_pager = tk.Frame(self, bg="#16161e", highlightthickness=1, highlightbackground="#414868")
         self.gallery_pager.pack(fill=tk.X, pady=(4, 0))
         pinner = ttk.Frame(self.gallery_pager)
-        pinner.pack(fill=tk.X, padx=10, pady=8)
-        self.gallery_pager_first = ttk.Button(pinner, text="|<<", width=5, command=self._gallery_first_page)
+        pinner.pack(fill=tk.X, padx=10, pady=(8, 4))
+        row_nav = ttk.Frame(pinner)
+        row_nav.pack(fill=tk.X)
+        self.gallery_pager_first = ttk.Button(row_nav, text="|<<", width=5, command=self._gallery_first_page)
         self.gallery_pager_first.pack(side=tk.LEFT, padx=(0, 4))
-        self.gallery_pager_prev = ttk.Button(pinner, text="<", width=4, command=self._gallery_prev_page)
-        self.gallery_pager_prev.pack(side=tk.LEFT, padx=(0, 8))
-        self.gallery_pager_label = ttk.Label(pinner, text="", font=("Sans", 10))
-        self.gallery_pager_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.gallery_pager_next = ttk.Button(pinner, text=">", width=4, command=self._gallery_next_page)
-        self.gallery_pager_next.pack(side=tk.LEFT, padx=(8, 0))
-        self.gallery_pager_last = ttk.Button(pinner, text=">>|", width=5, command=self._gallery_last_page)
+        self.gallery_pager_prev = ttk.Button(row_nav, text="<", width=4, command=self._gallery_prev_page)
+        self.gallery_pager_prev.pack(side=tk.LEFT, padx=(0, 6))
+        self.gallery_pager_numbers = ttk.Frame(row_nav)
+        self.gallery_pager_numbers.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.gallery_pager_next = ttk.Button(row_nav, text=">", width=4, command=self._gallery_next_page)
+        self.gallery_pager_next.pack(side=tk.LEFT, padx=(6, 0))
+        self.gallery_pager_last = ttk.Button(row_nav, text=">>|", width=5, command=self._gallery_last_page)
         self.gallery_pager_last.pack(side=tk.LEFT, padx=(4, 0))
+        row_meta = ttk.Frame(pinner)
+        row_meta.pack(fill=tk.X, pady=(6, 4))
+        self.gallery_pager_label = ttk.Label(row_meta, text="", font=("Sans", 10))
+        self.gallery_pager_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        jump = ttk.Frame(row_meta)
+        jump.pack(side=tk.RIGHT)
+        ttk.Label(jump, text="Ir a pag.").pack(side=tk.LEFT, padx=(0, 4))
+        self.gallery_pager_jump_var = tk.StringVar(value="1")
+        self.gallery_pager_jump_spin = ttk.Spinbox(
+            jump,
+            from_=1,
+            to=1,
+            width=5,
+            textvariable=self.gallery_pager_jump_var,
+            command=self._gallery_jump_from_spin,
+        )
+        self.gallery_pager_jump_spin.pack(side=tk.LEFT, padx=(0, 4))
+        self.gallery_pager_jump_spin.bind("<Return>", lambda _e: self._gallery_jump_from_spin())
+        ttk.Button(jump, text="Ir", width=4, command=self._gallery_jump_from_spin).pack(side=tk.LEFT)
         self._update_pager_ui()
 
         st = ttk.Label(self, textvariable=self.status_gallery, foreground="#7aa2f7")

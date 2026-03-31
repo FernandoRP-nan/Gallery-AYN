@@ -10,8 +10,29 @@ from ..settings import save_app_settings
 
 
 class GalleryCanvasLayoutMixin:
+    def _on_gallery_scroll_up(self, _event: tk.Event | None = None) -> None:
+        self.gallery_canvas.yview_scroll(-3, "units")
+
+    def _on_gallery_scroll_down(self, _event: tk.Event | None = None) -> None:
+        self.gallery_canvas.yview_scroll(3, "units")
+
     def _on_mousewheel(self, event: tk.Event) -> None:
-        self.gallery_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        # Windows / macOS: delta multiplo de 120. Linux X11: suele ser Button-4/5 en los hijos.
+        d = int(getattr(event, "delta", 0) or 0)
+        if d != 0:
+            self.gallery_canvas.yview_scroll(int(-1 * (d / 120)), "units")
+            return
+        num = int(getattr(event, "num", 0) or 0)
+        if num == 4:
+            self._on_gallery_scroll_up()
+        elif num == 5:
+            self._on_gallery_scroll_down()
+
+    def _bind_gallery_scroll_events(self, widget: tk.Misc) -> None:
+        """La rueda actua sobre el widget bajo el cursor; el canvas solo la recibe en zonas vacias."""
+        widget.bind("<MouseWheel>", self._on_mousewheel)
+        widget.bind("<Button-4>", self._on_gallery_scroll_up)
+        widget.bind("<Button-5>", self._on_gallery_scroll_down)
 
     def _effective_gallery_canvas_width(self, w: int | float) -> int:
         return GalleryGridLayout.effective_canvas_width(w, int(self._last_canvas_width or 0))

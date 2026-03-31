@@ -39,3 +39,29 @@ def load_preview_photoimage(path: Path, max_size: tuple[int, int]) -> object:
         im = im.copy()
         im.thumbnail(max_size, Image.Resampling.LANCZOS)
         return ImageTk.PhotoImage(im)
+
+
+def load_preview_photoimage_fill_box(path: Path, box: tuple[int, int]) -> object:
+    """Escala la imagen para caber en la caja y rellena el resto (color fondo galeria #16161e)."""
+    if Image is None or ImageTk is None:
+        raise RuntimeError("Pillow no disponible")
+    bw, bh = int(box[0]), int(box[1])
+    bg = (22, 22, 30)  # #16161e
+    with Image.open(path) as im:
+        im = im.convert("RGBA")
+        if ImageOps is not None:
+            im = ImageOps.pad(
+                im,
+                (bw, bh),
+                method=Image.Resampling.LANCZOS,
+                color=bg + (255,),
+                centering=(0.5, 0.5),
+            )
+        else:
+            im.thumbnail((bw, bh), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (bw, bh), bg + (255,))
+            x = (bw - im.width) // 2
+            y = (bh - im.height) // 2
+            canvas.paste(im, (x, y), im)
+            im = canvas
+    return ImageTk.PhotoImage(im.convert("RGB"))

@@ -127,6 +127,7 @@ class GalleryThumbnailsMixin:
         if cap is not None:
             bind_widgets.append(cap)
         for wgt in bind_widgets:
+            self._bind_gallery_scroll_events(wgt)
             wgt.bind("<Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
             wgt.bind("<Shift-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
             wgt.bind("<Control-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))

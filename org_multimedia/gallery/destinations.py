@@ -161,10 +161,14 @@ class GalleryDestinationsMixin:
     def _refresh_after_move(self) -> None:
         if not self.gallery_folder:
             return
+        saved_page = self._gallery_page
         self._clear_grid()
         self.ordered_paths = scan_images_flat(self.gallery_folder)
         self.selected.clear()
         self.anchor_index = None
-        self._gallery_page = 0
+        self._gallery_page = saved_page
+        self._clamp_gallery_page()
         self._update_selection_label()
-        self._start_thumb_worker(scroll_top_after=True)
+        self._start_thumb_worker(
+            scroll_top_after=bool(self.settings.get("gallery_scroll_top_on_page_change", True)),
+        )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 from ..settings import save_app_settings
 
@@ -39,6 +39,78 @@ class GalleryPagerAndSettingsMixin:
         end = min(start + ps, len(self.ordered_paths))
         return start, end
 
+    @staticmethod
+    def _pager_compact_page_list(total_pages: int, current_1: int) -> list[int | None]:
+        """Lista de numeros de pagina (1-based); None = hueco (puntos suspensivos)."""
+        tp = total_pages
+        if tp <= 0:
+            return []
+        if tp <= 14:
+            return list(range(1, tp + 1))
+        cur = max(1, min(current_1, tp))
+        edges = {1, 2, tp - 1, tp, cur - 2, cur - 1, cur, cur + 1, cur + 2}
+        nums = sorted({p for p in edges if 1 <= p <= tp})
+        out: list[int | None] = []
+        prev = 0
+        for p in nums:
+            if prev and p > prev + 1:
+                out.append(None)
+            out.append(p)
+            prev = p
+        return out
+
+    def _rebuild_pager_number_buttons(self) -> None:
+        if not hasattr(self, "gallery_pager_numbers"):
+            return
+        for w in self.gallery_pager_numbers.winfo_children():
+            w.destroy()
+        total = len(self.ordered_paths)
+        if total == 0:
+            return
+        tp = self._gallery_total_pages()
+        cur_1 = self._gallery_page + 1
+        pages = self._pager_compact_page_list(tp, cur_1)
+        wrap = ttk.Frame(self.gallery_pager_numbers)
+        wrap.pack(expand=True)
+        row = ttk.Frame(wrap)
+        row.pack(anchor="center")
+        for item in pages:
+            if item is None:
+                ttk.Label(row, text="…", width=2).pack(side=tk.LEFT, padx=2)
+                continue
+            if item == cur_1:
+                ttk.Label(
+                    row,
+                    text=str(item),
+                    font=("Sans", 10, "bold"),
+                    foreground="#7aa2f7",
+                    width=3,
+                ).pack(side=tk.LEFT, padx=2)
+            else:
+                ttk.Button(
+                    row,
+                    text=str(item),
+                    width=3,
+                    command=lambda p=item: self._gallery_go_page(p - 1),
+                ).pack(side=tk.LEFT, padx=2)
+
+    def _gallery_jump_from_spin(self) -> None:
+        if not self.ordered_paths or not hasattr(self, "gallery_pager_jump_var"):
+            return
+        tp = self._gallery_total_pages()
+        try:
+            p1 = int(str(self.gallery_pager_jump_var.get()).strip())
+        except ValueError:
+            return
+        p1 = max(1, min(p1, tp))
+        self.gallery_pager_jump_var.set(str(p1))
+        self._gallery_go_page(p1 - 1)
+
+    def _apply_gallery_settings_refresh(self) -> None:
+        self._update_pager_ui()
+        if self.ordered_paths:
+            self._start_thumb_worker(scroll_top_after=False)
+
     def _update_pager_ui(self) -> None:
         if not hasattr(self, "gallery_pager_label"):
             return
@@ -53,6 +125,10 @@ class GalleryPagerAndSettingsMixin:
                 f"imagenes {start + 1}-{end} de {total}" if total else "Sin imagenes en esta carpeta"
             )
         )
+        if hasattr(self, "gallery_pager_jump_spin"):
+            tp_spin = max(1, tp) if total else 1
+            self.gallery_pager_jump_spin.config(from_=1, to=tp_spin)
+            self.gallery_pager_jump_var.set(str(page_1 if total else 1))
         empty = total == 0
         first = self._gallery_page <= 0 or empty
         last = self._gallery_page >= tp - 1 or empty
@@ -63,6 +139,7 @@ class GalleryPagerAndSettingsMixin:
             (self.gallery_pager_last, last),
         ):
             btn.config(state=tk.DISABLED if dis else tk.NORMAL)
+        self._rebuild_pager_number_buttons()
 
     def _gallery_go_page(self, index: int) -> None:
         if not self.ordered_paths:
@@ -101,6 +178,12 @@ class GalleryPagerAndSettingsMixin:
         frm.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(frm, text="Apariencia y listado", font=("Sans", 11, "bold")).pack(anchor="w", pady=(0, 10))
+        ttk.Label(
+            frm,
+            text="Los cambios se aplican al instante.",
+            foreground="#565f89",
+            font=("Sans", 9),
+        ).pack(anchor="w", pady=(0, 8))
 
         show_name = tk.BooleanVar(value=bool(self.settings.get("gallery_show_thumb_filename", True)))
         ttk.Checkbutton(
@@ -147,29 +230,26 @@ class GalleryPagerAndSettingsMixin:
         )
         hint.pack(anchor="w", pady=(0, 12))
 
-        def apply_settings() -> None:
+        def sync_from_dialog(*_args: object) -> None:
             try:
                 pp = int(per_page.get())
             except ValueError:
-                pp = 120
-            if pp not in ALLOWED_THUMBS_PER_PAGE:
-                messagebox.showwarning("Valor invalido", "Elige un tamano de pagina de la lista.", parent=top)
                 return
-            old_pp = self._thumbs_per_page()
+            if pp not in ALLOWED_THUMBS_PER_PAGE:
+                return
             self.settings["gallery_show_thumb_filename"] = show_name.get()
             self.settings["gallery_thumbs_per_page"] = pp
             self.settings["gallery_scroll_top_on_page_change"] = scroll_top.get()
             self.settings["gallery_compact_thumb_padding"] = dense.get()
             save_app_settings(self.settings)
-            if pp != old_pp:
-                self._gallery_page = 0
             self._clamp_gallery_page()
-            self._update_pager_ui()
-            top.destroy()
-            if self.ordered_paths:
-                self._start_thumb_worker(scroll_top_after=True)
+            self._apply_gallery_settings_refresh()
+
+        show_name.trace_add("write", lambda *_a: sync_from_dialog())
+        scroll_top.trace_add("write", lambda *_a: sync_from_dialog())
+        dense.trace_add("write", lambda *_a: sync_from_dialog())
+        cb.bind("<<ComboboxSelected>>", sync_from_dialog)
 
         btn_row = ttk.Frame(frm)
         btn_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(btn_row, text="Aplicar", command=apply_settings).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(btn_row, text="Cancelar", command=top.destroy).pack(side=tk.RIGHT)
+        ttk.Button(btn_row, text="Cerrar", command=top.destroy).pack(side=tk.RIGHT)
