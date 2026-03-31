@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 from pathlib import Path
 
 from .pil_compat import HAS_PIL, Image, ImageOps, ImageTk
+
+
+def _thumb_cache_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    p = Path(base) / "organizador_multimedia" / "thumbs"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _thumb_cache_key(path: Path, size: tuple[int, int]) -> str:
+    try:
+        st = path.stat()
+        sig = f"{path.resolve()}|{st.st_mtime_ns}|{st.st_size}|{size[0]}x{size[1]}"
+    except OSError:
+        sig = f"{path.resolve()}|{size[0]}x{size[1]}"
+    return hashlib.sha1(sig.encode("utf-8")).hexdigest()
 
 
 def make_thumbnail_photoimage(path: Path, thumb_size: tuple[int, int]) -> object | None:
@@ -12,6 +30,16 @@ def make_thumbnail_photoimage(path: Path, thumb_size: tuple[int, int]) -> object
         return None
     tw, th = int(thumb_size[0]), int(thumb_size[1])
     size = (tw, th)
+    cache_file = _thumb_cache_dir() / f"{_thumb_cache_key(path, size)}.png"
+    if cache_file.exists():
+        try:
+            with Image.open(cache_file) as im_cached:
+                return ImageTk.PhotoImage(im_cached.convert("RGBA"))
+        except Exception:
+            try:
+                cache_file.unlink()
+            except OSError:
+                pass
     try:
         with Image.open(path) as im:
             im = im.convert("RGBA")
@@ -26,6 +54,10 @@ def make_thumbnail_photoimage(path: Path, thumb_size: tuple[int, int]) -> object
                 )
             else:
                 im.thumbnail(size, Image.Resampling.LANCZOS)
+            try:
+                im.save(cache_file, format="PNG", optimize=True)
+            except Exception:
+                pass
             return ImageTk.PhotoImage(im)
     except Exception:
         return None

@@ -20,6 +20,13 @@ class GalleryThumbnailsMixin:
                 self._thumb_queue.get_nowait()
             except queue.Empty:
                 break
+        # Al paginar, reemplaza la rejilla visible completa (no acumular miniaturas).
+        for w in self.gallery_inner.winfo_children():
+            w.destroy()
+        self.path_to_frame.clear()
+        self.path_to_checkvar.clear()
+        self.path_to_checkwidget.clear()
+        self._photos.clear()
         gen = self._thumb_gen
 
         total = len(self.ordered_paths)

@@ -38,6 +38,12 @@ def main() -> None:
                 pass
 
     def _on_close() -> None:
+        # Asegura persistir el sash más reciente justo antes de cerrar.
+        if hasattr(_gallery, "_save_preview_pane_position"):
+            try:
+                _gallery._save_preview_pane_position()  # type: ignore[attr-defined]
+            except Exception:
+                pass
         is_zoomed = False
         try:
             is_zoomed = root.state() == "zoomed"
@@ -46,8 +52,10 @@ def main() -> None:
                 is_zoomed = bool(root.attributes("-zoomed"))
             except tk.TclError:
                 is_zoomed = False
-        settings["window_start_maximized"] = is_zoomed or bool(settings.get("window_start_maximized", True))
-        save_app_settings(settings)
+        # Recarga para no pisar ajustes guardados durante la sesión.
+        merged = load_app_settings()
+        merged["window_start_maximized"] = is_zoomed or bool(merged.get("window_start_maximized", True))
+        save_app_settings(merged)
         root.destroy()
 
     root.after(10, _set_start_maximized)

@@ -119,7 +119,7 @@ class GalleryUIBuildMixin:
         self._refresh_destinations()
 
         self.ribbon.select("ruta")
-        self.ribbon.set_collapsed(True)
+        self.ribbon.set_collapsed(False)
 
         # Control global: visible siempre, sin depender de la pestaña activa.
         zoom_row = ttk.Frame(self)
