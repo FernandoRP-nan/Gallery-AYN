@@ -15,6 +15,10 @@ class GalleryPreviewGridMixin:
         for w in self.gallery_inner.winfo_children():
             w.destroy()
         self.path_to_frame.clear()
+        if hasattr(self, "path_to_checkvar"):
+            self.path_to_checkvar.clear()
+        if hasattr(self, "path_to_checkwidget"):
+            self.path_to_checkwidget.clear()
         self.thumb_refs.clear()
         self._photos.clear()
         self._clear_preview()

@@ -104,6 +104,9 @@ class GalleryThumbnailsMixin:
         outer = tk.Frame(self.gallery_inner, bg="#24283b", padx=2, pady=py)
         outer.grid(row=row, column=col, padx=(gx, gx), pady=py, sticky="nsew")
         self.path_to_frame[path] = outer
+
+        chk_var = tk.BooleanVar(value=path in self.selected)
+        self.path_to_checkvar[path] = chk_var
         img_box = tk.Frame(outer, bg="#24283b", width=thumb, height=thumb, highlightthickness=0)
         img_box.pack(anchor=tk.CENTER, pady=(0, 2))
         img_box.pack_propagate(False)
@@ -115,6 +118,21 @@ class GalleryThumbnailsMixin:
         else:
             lbl = tk.Label(img_box, text="(sin vista previa)", bg="#24283b", fg="#565f89", font=("Sans", 8))
             lbl.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        chk = tk.Checkbutton(
+            img_box,
+            variable=chk_var,
+            text="",
+            width=2,
+            bg="#24283b",
+            fg="#a9b1d6",
+            activebackground="#24283b",
+            activeforeground="#c0caf5",
+            selectcolor="#1a1b26",
+            highlightthickness=0,
+            command=lambda p=path: self._on_thumb_checkbox_toggle(p),
+        )
+        self.path_to_checkwidget[path] = chk
+        self._update_thumb_check_visibility()
 
         cap: tk.Label | None = None
         if self._gallery_show_filename():
@@ -123,11 +141,14 @@ class GalleryThumbnailsMixin:
             cap = tk.Label(outer, text=name, bg="#24283b", fg="#a9b1d6", font=("Sans", 8), wraplength=wrap)
             cap.pack(fill=tk.X, pady=(2, 0))
 
-        bind_widgets: list[tk.Misc] = [outer, img_box, lbl]
+        scroll_widgets: list[tk.Misc] = [outer, chk, img_box, lbl]
+        click_widgets: list[tk.Misc] = [outer, img_box, lbl]
         if cap is not None:
-            bind_widgets.append(cap)
-        for wgt in bind_widgets:
+            scroll_widgets.append(cap)
+            click_widgets.append(cap)
+        for wgt in scroll_widgets:
             self._bind_gallery_scroll_events(wgt)
+        for wgt in click_widgets:
             wgt.bind("<Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
             wgt.bind("<Shift-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))
             wgt.bind("<Control-Button-1>", lambda e, p=path: self._on_thumb_press(e, p))

@@ -30,7 +30,7 @@ class GalleryUIBuildMixin:
         )
         sub.pack(anchor="w", pady=(0, 4))
 
-        cinta = GalleryWordRibbon(self)
+        cinta = GalleryWordRibbon(self, on_tab_changed=self._on_ribbon_tab_changed)
         cinta.pack(fill=tk.X)
 
         # --- Pestaña Seleccion ---

@@ -7,6 +7,18 @@ from pathlib import Path
 
 
 class GalleryThumbInteractionMixin:
+    def _on_ribbon_tab_changed(self, tab_id: str) -> None:
+        self._active_ribbon_tab = tab_id
+        self._update_thumb_check_visibility()
+
+    def _update_thumb_check_visibility(self) -> None:
+        show_checks = getattr(self, "_active_ribbon_tab", "sel") == "sel"
+        for chk in getattr(self, "path_to_checkwidget", {}).values():
+            if show_checks:
+                chk.place(relx=0.02, rely=0.98, anchor="sw")
+            else:
+                chk.place_forget()
+
     def _index_of(self, path: Path) -> int | None:
         try:
             return self.ordered_paths.index(path)
@@ -88,16 +100,41 @@ class GalleryThumbInteractionMixin:
                 break
         return None
 
+    def _on_thumb_checkbox_toggle(self, path: Path) -> None:
+        """Casilla por miniatura: mismo criterio que Ctrl+clic (añade o quita)."""
+        var = self.path_to_checkvar.get(path)
+        if var is None:
+            return
+        if var.get():
+            self.selected.add(path)
+            idx = self._index_of(path)
+            if idx is not None:
+                self.anchor_index = idx
+        else:
+            self.selected.discard(path)
+        self._highlight_selection()
+        self._schedule_preview(path)
+        self.status_gallery.set("Listo. Arrastra a un destino o usa los botones de seleccion.")
+
     def _highlight_selection(self) -> None:
         for path, frame in self.path_to_frame.items():
             col = "#414868" if path in self.selected else "#24283b"
             self._apply_bg_recursive(frame, col)
+        for path, var in getattr(self, "path_to_checkvar", {}).items():
+            want = path in self.selected
+            if var.get() != want:
+                var.set(want)
         self._update_selection_label()
 
     def _apply_bg_recursive(self, widget: tk.Misc, col: str) -> None:
         if isinstance(widget, (tk.Frame, tk.Label, tk.Canvas)):
             try:
                 widget.configure(bg=col)
+            except tk.TclError:
+                pass
+        elif isinstance(widget, tk.Checkbutton):
+            try:
+                widget.configure(bg=col, activebackground=col, highlightbackground=col)
             except tk.TclError:
                 pass
         for ch in widget.winfo_children():

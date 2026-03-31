@@ -140,6 +140,10 @@ class GalleryCanvasLayoutMixin:
         for w in self.gallery_inner.winfo_children():
             w.destroy()
         self.path_to_frame.clear()
+        if hasattr(self, "path_to_checkvar"):
+            self.path_to_checkvar.clear()
+        if hasattr(self, "path_to_checkwidget"):
+            self.path_to_checkwidget.clear()
         self._photos.clear()
         self.selected.clear()
         self.anchor_index = None

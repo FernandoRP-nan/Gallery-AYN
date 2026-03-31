@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
 
 
@@ -15,8 +16,9 @@ class GalleryWordRibbon(tk.Frame):
     TAB_HOVER = "#414868"
     FG = "#c0caf5"
 
-    def __init__(self, parent: tk.Misc) -> None:
+    def __init__(self, parent: tk.Misc, on_tab_changed: Callable[[str], None] | None = None) -> None:
         super().__init__(parent, bg="#1a1b26")
+        self._on_tab_changed = on_tab_changed
         self._tabs_bar = tk.Frame(self, bg=self.STRIP_BG)
         self._tabs_bar.pack(fill=tk.X)
         tk.Frame(self, height=1, bg="#565f89").pack(fill=tk.X)
@@ -64,3 +66,5 @@ class GalleryWordRibbon(tk.Frame):
         self._active = tab_id
         self._pages[tab_id].pack(fill=tk.X)
         self._labels[tab_id].configure(bg=self.TAB_ACTIVE)
+        if self._on_tab_changed is not None:
+            self._on_tab_changed(tab_id)
