@@ -196,6 +196,8 @@ class GalleryUIBuildMixin:
             font=("Sans", 8),
             wraplength=420,
             justify=tk.LEFT,
+            anchor="nw",
+            height=3,
             text="",
         )
         self.preview_meta_label.pack(anchor="w", fill=tk.X)

@@ -45,8 +45,9 @@ class GalleryPreviewGridMixin:
         self._preview_current_path = path
         target_size = self._current_preview_target_size()
         gen = self._preview_gen
-        self.preview_meta_label.configure(text=str(path))
         same_path = prev_path == path and self._preview_photo_large is not None
+        if not same_path:
+            self.preview_meta_label.configure(text=f"{path.name}\n{path.parent}")
         if show_loading and not same_path:
             self.preview_image_label.configure(image="", text="Cargando vista previa...", fg="#7aa2f7")
         if not HAS_PIL:
@@ -86,4 +87,4 @@ class GalleryPreviewGridMixin:
             return
         self._preview_photo_large = None
         self.preview_image_label.configure(image="", text="No se pudo cargar la vista previa", fg="#f7768e")
-        self.preview_meta_label.configure(text=str(path))
+        self.preview_meta_label.configure(text=f"{path.name}\n{path.parent}")
