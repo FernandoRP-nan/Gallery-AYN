@@ -27,6 +27,7 @@ class GalleryWordRibbon(tk.Frame):
         self._pages: dict[str, ttk.Frame] = {}
         self._labels: dict[str, tk.Label] = {}
         self._active: str | None = None
+        self._collapsed = False
 
     def add_tab(self, tab_id: str, title: str) -> ttk.Frame:
         lbl = tk.Label(
@@ -40,13 +41,29 @@ class GalleryWordRibbon(tk.Frame):
             cursor="hand2",
         )
         lbl.pack(side=tk.LEFT, padx=(2, 0), pady=(4, 0))
-        lbl.bind("<Button-1>", lambda _e, tid=tab_id: self.select(tid))
+        lbl.bind("<Button-1>", lambda _e, tid=tab_id: self._on_tab_click(tid))
         lbl.bind("<Enter>", lambda _e, tid=tab_id: self._hover(tid, True))
         lbl.bind("<Leave>", lambda _e, tid=tab_id: self._hover(tid, False))
         page = ttk.Frame(self._body)
         self._pages[tab_id] = page
         self._labels[tab_id] = lbl
         return page
+
+    def _on_tab_click(self, tab_id: str) -> None:
+        if self._active == tab_id:
+            self.set_collapsed(not self._collapsed)
+            return
+        self.select(tab_id)
+        self.set_collapsed(True)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._collapsed = bool(collapsed)
+        if self._collapsed:
+            self._body.pack_forget()
+        else:
+            self._body.pack(fill=tk.X, padx=4, pady=(6, 8))
+            if self._active is not None:
+                self._pages[self._active].pack(fill=tk.X)
 
     def _hover(self, tab_id: str, on: bool) -> None:
         if self._active == tab_id:
@@ -64,7 +81,8 @@ class GalleryWordRibbon(tk.Frame):
             if self._active in self._labels:
                 self._labels[self._active].configure(bg=self.TAB_INACTIVE)
         self._active = tab_id
-        self._pages[tab_id].pack(fill=tk.X)
+        if not self._collapsed:
+            self._pages[tab_id].pack(fill=tk.X)
         self._labels[tab_id].configure(bg=self.TAB_ACTIVE)
         if self._on_tab_changed is not None:
             self._on_tab_changed(tab_id)

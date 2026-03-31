@@ -48,6 +48,8 @@ class GalleryManualFrame(
         self._gallery_window_id: int | None = None
         self._preview_gen = 0
         self._preview_photo_large: object | None = None
+        self._preview_current_path: Path | None = None
+        self._preview_resize_after: str | None = None
         self.toggle_click_var = tk.BooleanVar(value=True)
         self.selection_count_var = tk.StringVar(value="0 imagenes seleccionadas")
         self.settings = load_app_settings()

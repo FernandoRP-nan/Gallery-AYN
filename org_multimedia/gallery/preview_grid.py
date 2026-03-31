@@ -25,12 +25,24 @@ class GalleryPreviewGridMixin:
 
     def _clear_preview(self) -> None:
         self._preview_gen += 1
+        self._preview_current_path = None
         self._preview_photo_large = None
         self.preview_image_label.configure(image="", text="Clic en una miniatura", fg="#565f89")
         self.preview_meta_label.configure(text="")
 
+    def _current_preview_target_size(self) -> tuple[int, int]:
+        w = int(self.preview_image_label.winfo_width())
+        h = int(self.preview_image_label.winfo_height())
+        fw = int(getattr(self, "preview_box", self.preview_image_label).winfo_width())
+        fh = int(getattr(self, "preview_box", self.preview_image_label).winfo_height())
+        tw = max(w, fw, 120)
+        th = max(h, fh, 120)
+        return tw, th
+
     def _schedule_preview(self, path: Path) -> None:
         self._preview_gen += 1
+        self._preview_current_path = path
+        target_size = self._current_preview_target_size()
         gen = self._preview_gen
         self.preview_meta_label.configure(text=str(path))
         self.preview_image_label.configure(image="", text="Cargando vista previa...", fg="#7aa2f7")
@@ -44,7 +56,7 @@ class GalleryPreviewGridMixin:
 
         def worker() -> None:
             try:
-                photo = load_preview_photoimage_fill_box(path, self.PREVIEW_MAX)
+                photo = load_preview_photoimage_fill_box(path, target_size)
                 self.root.after(0, lambda: self._apply_preview_image(gen, photo, path))
             except Exception:
                 self.root.after(0, lambda: self._apply_preview_error(gen, path))

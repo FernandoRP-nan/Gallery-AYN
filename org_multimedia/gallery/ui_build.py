@@ -6,35 +6,25 @@ import tkinter as tk
 from tkinter import ttk
 
 from .ribbon_word_tabs import GalleryWordRibbon
+from ..settings import save_app_settings
 
 
 class GalleryUIBuildMixin:
     def _build_ui(self) -> None:
-        head = ttk.Frame(self)
-        head.pack(fill=tk.X, pady=(0, 2))
-        ttk.Label(head, text="Galeria manual", style="GalleryTitle.TLabel").pack(side=tk.LEFT)
+        top_actions = ttk.Frame(self)
+        top_actions.pack(fill=tk.X, pady=(0, 4))
         ttk.Button(
-            head,
+            top_actions,
             text="\u2699",
             width=3,
             command=self._open_gallery_settings_dialog,
         ).pack(side=tk.RIGHT, padx=(8, 0))
-        sub = ttk.Label(
-            self,
-            text=(
-                "Cinta superior tipo Word: elige pestaña para opciones. "
-                "Paginacion abajo. Tuerca: apariencia y tamano de pagina."
-            ),
-            wraplength=780,
-            foreground="#565f89",
-        )
-        sub.pack(anchor="w", pady=(0, 4))
 
-        cinta = GalleryWordRibbon(self, on_tab_changed=self._on_ribbon_tab_changed)
-        cinta.pack(fill=tk.X)
+        self.ribbon = GalleryWordRibbon(self, on_tab_changed=self._on_ribbon_tab_changed)
+        self.ribbon.pack(fill=tk.X)
 
         # --- Pestaña Ruta (carpeta y navegacion) ---
-        page_ruta = cinta.add_tab("ruta", "Ruta")
+        page_ruta = self.ribbon.add_tab("ruta", "Ruta")
         row1 = ttk.Frame(page_ruta)
         row1.pack(fill=tk.X, pady=(0, 4))
         ttk.Label(row1, text="Carpeta:").pack(side=tk.LEFT)
@@ -55,7 +45,7 @@ class GalleryUIBuildMixin:
         )
 
         # --- Pestaña Seleccion ---
-        page_sel = cinta.add_tab("sel", "Seleccion")
+        page_sel = self.ribbon.add_tab("sel", "Seleccion")
         sel_inner = ttk.Frame(page_sel)
         sel_inner.pack(fill=tk.X, pady=2)
         ttk.Button(sel_inner, text="Seleccionar pagina actual", command=self._select_all).pack(
@@ -83,7 +73,7 @@ class GalleryUIBuildMixin:
         ).pack(anchor="w", pady=(4, 0))
 
         # --- Pestaña Subcarpetas ---
-        page_sub = cinta.add_tab("sub", "Subcarpetas")
+        page_sub = self.ribbon.add_tab("sub", "Subcarpetas")
         ttk.Label(
             page_sub,
             text="Doble clic o Enter en una fila para entrar en esa carpeta.",
@@ -109,7 +99,7 @@ class GalleryUIBuildMixin:
         self.subfolder_lb.bind("<Return>", self._on_subfolder_activate)
 
         # --- Pestaña Destinos ---
-        page_dest = cinta.add_tab("dest", "Destinos")
+        page_dest = self.ribbon.add_tab("dest", "Destinos")
         ttk.Label(
             page_dest,
             text="Arrastra seleccion aqui o pulsa una tarjeta. '+' anade carpeta (tambien en Ajustes destinos).",
@@ -131,7 +121,8 @@ class GalleryUIBuildMixin:
         self.dest_hcanvas.configure(xscrollcommand=dest_hscroll.set)
         self._refresh_destinations()
 
-        cinta.select("ruta")
+        self.ribbon.select("ruta")
+        self.ribbon.set_collapsed(True)
 
         # Control global: visible siempre, sin depender de la pestaña activa.
         zoom_row = ttk.Frame(self)
@@ -170,6 +161,7 @@ class GalleryUIBuildMixin:
         self.preview_column = ttk.Frame(self.main_pane, width=460)
         self.main_pane.add(gallery_wrap, minsize=420)
         self.main_pane.add(self.preview_column, minsize=360)
+        self.main_pane.bind("<ButtonRelease-1>", self._save_preview_pane_position, add="+")
 
         self.gallery_canvas = tk.Canvas(gallery_wrap, bg="#16161e", highlightthickness=0, height=380)
         scroll_y = ttk.Scrollbar(gallery_wrap, orient="vertical", command=self.gallery_canvas.yview)
@@ -188,17 +180,17 @@ class GalleryUIBuildMixin:
 
         preview_title = ttk.Label(self.preview_column, text="Vista previa", font=("Sans", 11, "bold"))
         preview_title.pack(anchor="w", pady=(0, 6))
-        prev_box = tk.Frame(self.preview_column, bg="#16161e", height=self.PREVIEW_MAX[1], width=self.PREVIEW_MAX[0])
-        prev_box.pack(fill=tk.X, pady=(0, 6))
-        prev_box.pack_propagate(False)
+        self.preview_box = tk.Frame(self.preview_column, bg="#16161e")
+        self.preview_box.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
         self.preview_image_label = tk.Label(
-            prev_box,
+            self.preview_box,
             bg="#16161e",
             fg="#565f89",
             text="Clic en una miniatura",
             font=("Sans", 10),
         )
         self.preview_image_label.pack(expand=True, fill=tk.BOTH)
+        self.preview_box.bind("<Configure>", self._on_preview_box_configure)
         self.preview_meta_label = tk.Label(
             self.preview_column,
             bg="#1a1b26",
@@ -249,3 +241,35 @@ class GalleryUIBuildMixin:
 
         st = ttk.Label(self, textvariable=self.status_gallery, foreground="#7aa2f7")
         st.pack(anchor="w", fill=tk.X, pady=(6, 0))
+        self.root.after(120, self._restore_preview_pane_position)
+
+    def _restore_preview_pane_position(self) -> None:
+        x = self.settings.get("gallery_preview_sash_x")
+        if x is None:
+            return
+        try:
+            self.main_pane.sash_place(0, int(x), 1)
+        except (tk.TclError, ValueError):
+            return
+
+    def _save_preview_pane_position(self, _event: tk.Event | None = None) -> None:
+        try:
+            x, _y = self.main_pane.sash_coord(0)
+        except tk.TclError:
+            return
+        self.settings["gallery_preview_sash_x"] = int(x)
+        save_app_settings(self.settings)
+
+    def _on_preview_box_configure(self, _event: tk.Event) -> None:
+        if getattr(self, "_preview_resize_after", None) is not None:
+            try:
+                self.root.after_cancel(self._preview_resize_after)
+            except tk.TclError:
+                pass
+        self._preview_resize_after = self.root.after(120, self._refresh_preview_on_resize)
+
+    def _refresh_preview_on_resize(self) -> None:
+        self._preview_resize_after = None
+        path = getattr(self, "_preview_current_path", None)
+        if path is not None:
+            self._schedule_preview(path)

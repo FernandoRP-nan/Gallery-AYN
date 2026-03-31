@@ -27,6 +27,8 @@ def load_app_settings() -> dict:
             "gallery_thumbs_per_page": 120,
             "gallery_scroll_top_on_page_change": True,
             "gallery_compact_thumb_padding": False,
+            "gallery_preview_sash_x": None,
+            "window_start_maximized": True,
         }
     try:
         with path.open(encoding="utf-8") as f:
@@ -51,6 +53,10 @@ def load_app_settings() -> dict:
             data["gallery_scroll_top_on_page_change"] = True
         if "gallery_compact_thumb_padding" not in data:
             data["gallery_compact_thumb_padding"] = False
+        if "gallery_preview_sash_x" not in data:
+            data["gallery_preview_sash_x"] = None
+        if "window_start_maximized" not in data:
+            data["window_start_maximized"] = True
         return data
     except (OSError, json.JSONDecodeError):
         return {
@@ -61,6 +67,8 @@ def load_app_settings() -> dict:
             "gallery_thumbs_per_page": 120,
             "gallery_scroll_top_on_page_change": True,
             "gallery_compact_thumb_padding": False,
+            "gallery_preview_sash_x": None,
+            "window_start_maximized": True,
         }
 
 
