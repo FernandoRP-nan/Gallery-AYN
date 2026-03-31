@@ -50,6 +50,7 @@ class GalleryManualFrame(
         self._preview_photo_large: object | None = None
         self._preview_current_path: Path | None = None
         self._preview_resize_after: str | None = None
+        self._preview_last_target_size: tuple[int, int] = (0, 0)
         self.toggle_click_var = tk.BooleanVar(value=True)
         self.selection_count_var = tk.StringVar(value="0 imagenes seleccionadas")
         self.settings = load_app_settings()

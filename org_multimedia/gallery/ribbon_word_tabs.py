@@ -54,7 +54,7 @@ class GalleryWordRibbon(tk.Frame):
             self.set_collapsed(not self._collapsed)
             return
         self.select(tab_id)
-        self.set_collapsed(True)
+        self.set_collapsed(False)
 
     def set_collapsed(self, collapsed: bool) -> None:
         self._collapsed = bool(collapsed)

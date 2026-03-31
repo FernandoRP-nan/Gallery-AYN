@@ -11,17 +11,14 @@ from ..settings import save_app_settings
 
 class GalleryUIBuildMixin:
     def _build_ui(self) -> None:
-        top_actions = ttk.Frame(self)
-        top_actions.pack(fill=tk.X, pady=(0, 4))
+        self.ribbon = GalleryWordRibbon(self, on_tab_changed=self._on_ribbon_tab_changed)
+        self.ribbon.pack(fill=tk.X)
         ttk.Button(
-            top_actions,
+            self.ribbon._tabs_bar,
             text="\u2699",
             width=3,
             command=self._open_gallery_settings_dialog,
-        ).pack(side=tk.RIGHT, padx=(8, 0))
-
-        self.ribbon = GalleryWordRibbon(self, on_tab_changed=self._on_ribbon_tab_changed)
-        self.ribbon.pack(fill=tk.X)
+        ).pack(side=tk.RIGHT, padx=(8, 6), pady=(4, 0))
 
         # --- Pestaña Ruta (carpeta y navegacion) ---
         page_ruta = self.ribbon.add_tab("ruta", "Ruta")
@@ -182,6 +179,7 @@ class GalleryUIBuildMixin:
         preview_title.pack(anchor="w", pady=(0, 6))
         self.preview_box = tk.Frame(self.preview_column, bg="#16161e")
         self.preview_box.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+        self.preview_box.pack_propagate(False)
         self.preview_image_label = tk.Label(
             self.preview_box,
             bg="#16161e",
@@ -261,15 +259,20 @@ class GalleryUIBuildMixin:
         save_app_settings(self.settings)
 
     def _on_preview_box_configure(self, _event: tk.Event) -> None:
+        w = int(self.preview_box.winfo_width())
+        h = int(self.preview_box.winfo_height())
+        lw, lh = getattr(self, "_preview_last_target_size", (0, 0))
+        if abs(w - lw) < 24 and abs(h - lh) < 24:
+            return
         if getattr(self, "_preview_resize_after", None) is not None:
             try:
                 self.root.after_cancel(self._preview_resize_after)
             except tk.TclError:
                 pass
-        self._preview_resize_after = self.root.after(120, self._refresh_preview_on_resize)
+        self._preview_resize_after = self.root.after(220, self._refresh_preview_on_resize)
 
     def _refresh_preview_on_resize(self) -> None:
         self._preview_resize_after = None
         path = getattr(self, "_preview_current_path", None)
         if path is not None:
-            self._schedule_preview(path)
+            self._schedule_preview(path, show_loading=False)
