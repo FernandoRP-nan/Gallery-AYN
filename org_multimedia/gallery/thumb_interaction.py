@@ -12,10 +12,10 @@ class GalleryThumbInteractionMixin:
         self._update_thumb_check_visibility()
 
     def _update_thumb_check_visibility(self) -> None:
-        show_checks = getattr(self, "_active_ribbon_tab", "sel") == "sel"
+        show_checks = getattr(self, "_active_ribbon_tab", "ruta") == "sel"
         for chk in getattr(self, "path_to_checkwidget", {}).values():
             if show_checks:
-                chk.place(relx=0.02, rely=0.98, anchor="sw")
+                chk.place(relx=0.98, rely=0.98, anchor="se")
             else:
                 chk.place_forget()
 

@@ -62,7 +62,7 @@ class GalleryManualFrame(
         self.path_to_frame: dict[Path, tk.Widget] = {}
         self.path_to_checkvar: dict[Path, tk.BooleanVar] = {}
         self.path_to_checkwidget: dict[Path, tk.Checkbutton] = {}
-        self._active_ribbon_tab = "sel"
+        self._active_ribbon_tab = "ruta"
         self._thumb_queue: queue.Queue = queue.Queue()
         self._thumb_worker: threading.Thread | None = None
         self._drag_start: tuple[int, int] | None = None

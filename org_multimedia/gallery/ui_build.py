@@ -33,6 +33,27 @@ class GalleryUIBuildMixin:
         cinta = GalleryWordRibbon(self, on_tab_changed=self._on_ribbon_tab_changed)
         cinta.pack(fill=tk.X)
 
+        # --- Pestaña Ruta (carpeta y navegacion) ---
+        page_ruta = cinta.add_tab("ruta", "Ruta")
+        row1 = ttk.Frame(page_ruta)
+        row1.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(row1, text="Carpeta:").pack(side=tk.LEFT)
+        entry = ttk.Entry(row1, textvariable=self.folder_var, width=70)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8))
+        ttk.Button(row1, text="Explorar...", command=self._browse_folder).pack(side=tk.LEFT)
+        ttk.Button(row1, text="Cargar galeria", command=self._load_gallery).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(row1, text="Ajustes destinos...", command=self._open_settings).pack(side=tk.LEFT, padx=(8, 0))
+
+        nav_row = ttk.Frame(page_ruta)
+        nav_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(nav_row, text="Carpeta superior", command=self._nav_up).pack(side=tk.LEFT)
+        ttk.Button(nav_row, text="Actualizar esta carpeta", command=self._reload_current_folder).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Label(nav_row, textvariable=self.path_display_var, wraplength=400, foreground="#a9b1d6").pack(
+            side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True
+        )
+
         # --- Pestaña Seleccion ---
         page_sel = cinta.add_tab("sel", "Seleccion")
         sel_inner = ttk.Frame(page_sel)
@@ -60,49 +81,6 @@ class GalleryUIBuildMixin:
             wraplength=900,
             foreground="#565f89",
         ).pack(anchor="w", pady=(4, 0))
-
-        # --- Pestaña Ruta (carpeta, navegacion, zoom miniaturas) ---
-        page_ruta = cinta.add_tab("ruta", "Ruta")
-        row1 = ttk.Frame(page_ruta)
-        row1.pack(fill=tk.X, pady=(0, 4))
-        ttk.Label(row1, text="Carpeta:").pack(side=tk.LEFT)
-        entry = ttk.Entry(row1, textvariable=self.folder_var, width=70)
-        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8))
-        ttk.Button(row1, text="Explorar...", command=self._browse_folder).pack(side=tk.LEFT)
-        ttk.Button(row1, text="Cargar galeria", command=self._load_gallery).pack(side=tk.LEFT, padx=(4, 0))
-        ttk.Button(row1, text="Ajustes destinos...", command=self._open_settings).pack(side=tk.LEFT, padx=(8, 0))
-
-        nav_row = ttk.Frame(page_ruta)
-        nav_row.pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(nav_row, text="Carpeta superior", command=self._nav_up).pack(side=tk.LEFT)
-        ttk.Button(nav_row, text="Actualizar esta carpeta", command=self._reload_current_folder).pack(
-            side=tk.LEFT, padx=(8, 0)
-        )
-        ttk.Label(nav_row, textvariable=self.path_display_var, wraplength=400, foreground="#a9b1d6").pack(
-            side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True
-        )
-
-        zoom_row = ttk.Frame(page_ruta)
-        zoom_row.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(zoom_row, text="Tamaño miniaturas:").pack(side=tk.LEFT, padx=(0, 8))
-        self.thumb_scale_slider = ttk.Scale(
-            zoom_row,
-            from_=0.75,
-            to=2.25,
-            orient=tk.HORIZONTAL,
-            length=280,
-            variable=self.thumb_scale_var,
-            command=self._on_thumb_scale_slider,
-        )
-        self.thumb_scale_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.thumb_scale_label = ttk.Label(zoom_row, text="", foreground="#a9b1d6", width=6)
-        self.thumb_scale_label.pack(side=tk.LEFT, padx=(8, 0))
-        self.thumb_scale_label.configure(text=f"{int(self.thumb_scale_var.get() * 100)}%")
-        ttk.Label(
-            zoom_row,
-            text="(Derecha = menos columnas y mas grande | recortan para cuadrado)",
-            foreground="#565f89",
-        ).pack(side=tk.LEFT, padx=(12, 0))
 
         # --- Pestaña Subcarpetas ---
         page_sub = cinta.add_tab("sub", "Subcarpetas")
@@ -153,7 +131,30 @@ class GalleryUIBuildMixin:
         self.dest_hcanvas.configure(xscrollcommand=dest_hscroll.set)
         self._refresh_destinations()
 
-        cinta.select("sel")
+        cinta.select("ruta")
+
+        # Control global: visible siempre, sin depender de la pestaña activa.
+        zoom_row = ttk.Frame(self)
+        zoom_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(zoom_row, text="Tamaño miniaturas:").pack(side=tk.LEFT, padx=(0, 8))
+        self.thumb_scale_slider = ttk.Scale(
+            zoom_row,
+            from_=0.75,
+            to=2.25,
+            orient=tk.HORIZONTAL,
+            length=280,
+            variable=self.thumb_scale_var,
+            command=self._on_thumb_scale_slider,
+        )
+        self.thumb_scale_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.thumb_scale_label = ttk.Label(zoom_row, text="", foreground="#a9b1d6", width=6)
+        self.thumb_scale_label.pack(side=tk.LEFT, padx=(8, 0))
+        self.thumb_scale_label.configure(text=f"{int(self.thumb_scale_var.get() * 100)}%")
+        ttk.Label(
+            zoom_row,
+            text="(Derecha = menos columnas y mas grande | recortan para cuadrado)",
+            foreground="#565f89",
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
         # --- Cuerpo principal: galeria + vista previa (todo el espacio vertical restante) ---
         self.main_pane = tk.PanedWindow(
