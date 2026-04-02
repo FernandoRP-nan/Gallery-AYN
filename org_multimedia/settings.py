@@ -35,6 +35,7 @@ def load_app_settings() -> dict:
             "web_preview_ratio": 0.4,
             "web_dest_panel_ratio": 0.26,
             "web_preview_visible": True,
+            "web_pinned_folder_labels": {},
             "web_shortcuts": {
                 "toggleMode": "Shift",
                 "deleteAction": "R",
@@ -110,6 +111,8 @@ def load_app_settings() -> dict:
             data["web_preview_visible"] = True
         else:
             data["web_preview_visible"] = bool(data["web_preview_visible"])
+        if "web_pinned_folder_labels" not in data or not isinstance(data.get("web_pinned_folder_labels"), dict):
+            data["web_pinned_folder_labels"] = {}
         if "web_shortcuts" not in data or not isinstance(data.get("web_shortcuts"), dict):
             data["web_shortcuts"] = {
                 "toggleMode": "Shift",
@@ -142,6 +145,7 @@ def load_app_settings() -> dict:
             "web_preview_ratio": 0.4,
             "web_dest_panel_ratio": 0.26,
             "web_preview_visible": True,
+            "web_pinned_folder_labels": {},
             "web_shortcuts": {
                 "toggleMode": "Shift",
                 "deleteAction": "R",

@@ -86,6 +86,7 @@
   let galleryLoadingMore = false;
   let galleryHasMore = false;
   let galleryAutoLoadRunId = 0;
+  let galleryScrollAtTop = true;
   let previewThumbHydrationToken = 0;
   let previewVisible = true;
   let previewDestPath = "";
@@ -150,7 +151,11 @@
   let recentFolders: string[] = [];
   /** Rutas ancladas (no se descartan del historial). */
   let pinnedFolders: string[] = [];
+  let pinnedFolderLabels: Record<string, string> = {};
   $: recentUnpinnedFolders = recentFolders.filter((p) => !pinnedFolders.includes(p));
+  let pinMarkerOpen = false;
+  let pinMarkerName = "";
+  let pinMarkerPath = "";
 
   let ghostVisible = false;
   let ghostX = 0;
@@ -417,6 +422,9 @@
     pinnedFolders = Array.isArray(data.settings?.gallery_pinned_folders)
       ? (data.settings.gallery_pinned_folders as string[])
       : [];
+    pinnedFolderLabels = typeof data.settings?.web_pinned_folder_labels === "object" && data.settings?.web_pinned_folder_labels
+      ? (data.settings.web_pinned_folder_labels as Record<string, string>)
+      : {};
     const initialPerPage = Number(data.settings?.gallery_thumbs_per_page ?? 48);
     const perPageRaw = Number.isFinite(initialPerPage) ? Math.round(initialPerPage) : 48;
     thumbsPerPage = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
@@ -507,6 +515,12 @@
     try {
       const out = await bridge.galleryUnpinFolder(path);
       pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders.filter((x) => x !== path);
+      if (pinnedFolderLabels[path]) {
+        const next = { ...pinnedFolderLabels };
+        delete next[path];
+        pinnedFolderLabels = next;
+        await bridge.settingsPatch({ web_pinned_folder_labels: next });
+      }
       status = "Ruta desanclada";
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : "No se pudo quitar el anclaje";
@@ -563,9 +577,10 @@
   };
 
   async function onGalleryScroll(e: Event) {
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
     const el = e.currentTarget as HTMLElement | null;
     if (!el) return;
+    galleryScrollAtTop = el.scrollTop <= 2;
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
     if (!nearBottom) return;
     await loadMoreGalleryBatch();
@@ -1182,6 +1197,51 @@
       if (!routePathEl) return;
       routePathEl.scrollLeft = routePathEl.scrollWidth;
     });
+  }
+
+  function pathTailLabel(path: string, max = 56): string {
+    const p = String(path ?? "");
+    if (p.length <= max) return p;
+    return `…${p.slice(-Math.max(1, max - 1))}`;
+  }
+
+  function defaultMarkerNameForPath(path: string): string {
+    const s = String(path ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+    const i = s.lastIndexOf("/");
+    const base = i >= 0 ? s.slice(i + 1) : s;
+    return base || s || "Marcador";
+  }
+
+  function markerLabelForPath(path: string): string {
+    const custom = String(pinnedFolderLabels[path] ?? "").trim();
+    return custom || defaultMarkerNameForPath(path);
+  }
+
+  function openPinMarkerModal(path: string) {
+    const p = String(path ?? "").trim();
+    if (!p) return;
+    pinMarkerPath = p;
+    pinMarkerName = markerLabelForPath(p);
+    pinMarkerOpen = true;
+  }
+
+  function closePinMarkerModal() {
+    pinMarkerOpen = false;
+  }
+
+  async function savePinMarkerModal() {
+    const path = pinMarkerPath.trim();
+    if (!path) {
+      status = "Ruta inválida para marcador";
+      return;
+    }
+    const label = pinMarkerName.trim() || defaultMarkerNameForPath(path);
+    await pinFolder(path);
+    const next = { ...pinnedFolderLabels, [path]: label };
+    pinnedFolderLabels = next;
+    await bridge.settingsPatch({ web_pinned_folder_labels: next });
+    pinMarkerOpen = false;
+    status = "Marcador guardado";
   }
 
   async function toggleDestinationsModePreserveScroll() {
@@ -1962,6 +2022,8 @@
 
   /** Menú contextual (clic derecho) en un chip de destino. */
   let destCtxMenu: { x: number; y: number; idx: number; source: "gallery" | "fullscreen" } | null = null;
+  /** Menú contextual (clic derecho) en marcador anclado del modal de rutas. */
+  let pinnedCtxMenu: { x: number; y: number; path: string } | null = null;
   let draggedDestIdx: number | null = null;
   let previewZoomSkipMoveConfirm = false;
 
@@ -2091,6 +2153,10 @@
     destCtxMenu = null;
   }
 
+  function closePinnedCtxMenu() {
+    pinnedCtxMenu = null;
+  }
+
   function onDestContextMenu(e: MouseEvent, idx: number, source: "gallery" | "fullscreen" = "gallery") {
     e.preventDefault();
     e.stopPropagation();
@@ -2104,6 +2170,45 @@
     x = Math.max(pad, x);
     y = Math.max(pad, y);
     destCtxMenu = { x, y, idx, source };
+  }
+
+  function onPinnedContextMenu(e: MouseEvent, path: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const p = String(path ?? "").trim();
+    if (!p) return;
+    const pad = 8;
+    const mw = 200;
+    const mh = 88;
+    let x = e.clientX;
+    let y = e.clientY;
+    x = Math.min(x, window.innerWidth - mw - pad);
+    y = Math.min(y, window.innerHeight - mh - pad);
+    x = Math.max(pad, x);
+    y = Math.max(pad, y);
+    pinnedCtxMenu = { x, y, path: p };
+  }
+
+  function openEditPinnedFromCtx() {
+    if (!pinnedCtxMenu) return;
+    const p = pinnedCtxMenu.path;
+    closePinnedCtxMenu();
+    openPinMarkerModal(p);
+  }
+
+  function askUnpinPinnedFromCtx() {
+    if (!pinnedCtxMenu) return;
+    const p = pinnedCtxMenu.path;
+    const label = markerLabelForPath(p);
+    closePinnedCtxMenu();
+    openConfirmDelete(
+      "Desanclar marcador",
+      `¿Desanclar "${label}"?`,
+      async () => {
+        await unpinFolder(p);
+      },
+      { confirmLabel: "Desanclar" }
+    );
   }
 
   function openAddDestForm() {
@@ -2221,6 +2326,10 @@
     if (destFormOpen) destFormOpen = false;
   }
 
+  $: if (!routePickerOpen) {
+    pinnedCtxMenu = null;
+  }
+
   $: if (!previewZoomOpen && deferredZoomMoveRefresh) {
     applyGalleryRefreshFromMove(deferredZoomMoveRefresh.state, deferredZoomMoveRefresh.items);
     deferredZoomMoveRefresh = null;
@@ -2328,7 +2437,7 @@
       e.preventDefault();
       if (previewZoomOpen) {
         previewZoomDestMode = !previewZoomDestMode;
-        status = previewZoomDestMode ? "Destinos activado (fullscreen)" : "Destinos desactivado (fullscreen)";
+        status = previewZoomDestMode ? "Edición activado (fullscreen)" : "Edición desactivado (fullscreen)";
       } else if (previewOpen) {
         previewSelectionMode = !previewSelectionMode;
         if (!previewSelectionMode) previewSelectedPaths = [];
@@ -2336,7 +2445,7 @@
       } else {
         const nextMode = !destinationsMode;
         void toggleDestinationsModePreserveScroll();
-        status = nextMode ? "Modo Destinos activado" : "Modo Destinos desactivado";
+        status = nextMode ? "Modo Edición activado" : "Modo Edición desactivado";
       }
       return;
     }
@@ -2449,7 +2558,8 @@
       status = "Selección limpiada";
       return;
     }
-    if (destCtxMenu) closeDestCtxMenu();
+    if (pinnedCtxMenu) closePinnedCtxMenu();
+    else if (destCtxMenu) closeDestCtxMenu();
     else if (destFormOpen) closeDestForm();
     else if (settingsOpen) settingsOpen = false;
     else if (previewZoomOpen) previewZoomOpen = false;
@@ -2475,7 +2585,7 @@
         class:om-btn--active={destinationsMode}
         on:click={() => void toggleDestinationsModePreserveScroll()}
         title="Activa/desactiva modo selección y panel de destinos"
-      >Destinos</button>
+      >Edición</button>
       <button
         type="button"
         class="om-btn om-btn--tab"
@@ -2504,7 +2614,7 @@
           type="button"
           class="om-btn om-btn--ghost om-btn--icon route__path-action"
           title={pinnedFolders.includes(folder.trim()) ? "Quitar anclaje de esta ruta" : "Anclar esta ruta"}
-          on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : pinFolder(folder))}
+          on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : openPinMarkerModal(folder))}
         >{pinnedFolders.includes(folder.trim()) ? "★" : "☆"}</button>
         <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Recargar galería" on:click={reload}>↻</button>
         <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Explorar carpeta" on:click={pickGalleryFolder}>
@@ -2559,12 +2669,15 @@
             </div>
             <div class="recent-folders__list">
               {#each pinnedFolders as p}
-                <div class="recent-folders__chip-wrap">
-                  <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
-                    {p.length > 56 ? `${p.slice(0, 53)}…` : p}
-                  </button>
-                  <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Quitar anclaje" on:click={() => unpinFolder(p)}>★</button>
-                </div>
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost recent-folders__chip recent-folders__chip--pinned"
+                  title={p}
+                  on:click={() => pickRecentFolder(p)}
+                  on:contextmenu={(e) => onPinnedContextMenu(e, p)}
+                >
+                  {markerLabelForPath(p)}
+                </button>
               {/each}
             </div>
           {/if}
@@ -2576,14 +2689,43 @@
               {#each recentUnpinnedFolders as p}
                 <div class="recent-folders__chip-wrap">
                   <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
-                    {p.length > 56 ? `${p.slice(0, 53)}…` : p}
+                    {pathTailLabel(p)}
                   </button>
-                  <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Anclar ruta" on:click={() => pinFolder(p)}>☆</button>
+                  <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Crear marcador" on:click={() => openPinMarkerModal(p)}>☆</button>
                 </div>
               {/each}
             </div>
           {/if}
         </section>
+      </div>
+    </div>
+  {/if}
+
+  {#if pinMarkerOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim overlay--dest-form" role="presentation" on:click|self={closePinMarkerModal}>
+      <div
+        class="modal modal--dest-form om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pin-marker-title"
+        tabindex="-1"
+        on:click|stopPropagation={() => undefined}
+      >
+        <header class="modal__head">
+          <strong id="pin-marker-title">Guardar marcador</strong>
+          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={closePinMarkerModal}>✕</button>
+        </header>
+        <section class="dest-form-body">
+          <label class="field-label" for="pin-marker-name">Nombre</label>
+          <input id="pin-marker-name" class="om-input" type="text" bind:value={pinMarkerName} placeholder="Nombre corto del marcador" />
+          <label class="field-label" for="pin-marker-path">Ruta</label>
+          <input id="pin-marker-path" class="om-input" type="text" bind:value={pinMarkerPath} placeholder="Ruta de carpeta" />
+        </section>
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--ghost" on:click={closePinMarkerModal}>Cancelar</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={savePinMarkerModal}>Guardar</button>
+        </div>
       </div>
     </div>
   {/if}
@@ -2664,7 +2806,7 @@
               {/each}
               <div class="grid-end-spacer" aria-hidden="true"></div>
               </div>
-              <div class="selection-float" role="toolbar" aria-label="Selección">
+              <div class="selection-float" class:selection-float--top-gap={galleryScrollAtTop} role="toolbar" aria-label="Selección">
                 <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
                 <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
                 <button
@@ -2683,7 +2825,7 @@
               </div>
               <div class="dest-float-chips" aria-label="Carpetas destino">
                 <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
-                  + Agregar carpeta
+                  +
                 </button>
                 {#if destRows.length === 0}
                   <span class="dest-float-empty">No hay carpetas destino</span>
@@ -3237,6 +3379,24 @@
     </div>
   {/if}
 
+  {#if pinnedCtxMenu}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="ctx-menu-backdrop" role="presentation" on:click={closePinnedCtxMenu}></div>
+    <!-- svelte-ignore a11y-interactive-supports-focus -->
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div
+      class="dest-ctx-menu om-panel om-panel--lift"
+      role="menu"
+      tabindex="-1"
+      aria-label="Acciones del marcador"
+      style={`left:${pinnedCtxMenu.x}px;top:${pinnedCtxMenu.y}px`}
+      on:click|stopPropagation
+    >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditPinnedFromCtx}>Editar…</button>
+      <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={askUnpinPinnedFromCtx}>Desanclar</button>
+    </div>
+  {/if}
+
   {#if destFormOpen}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <div class="overlay overlay--dim overlay--dest-form" role="presentation" on:click|self={closeDestForm}>
@@ -3770,12 +3930,15 @@
   .gallery--with-float .gallery__scroll > .selection-float {
     grid-column: 1;
     grid-row: 1;
-    align-self: start;
-    justify-self: end;
-    position: sticky;
-    top: var(--om-space-2);
-    margin: var(--om-space-2);
+    position: absolute;
+    right: var(--om-space-2);
+    top: 0;
+    margin: 0 var(--om-space-2) 0 0;
     z-index: 5;
+  }
+
+  .gallery--with-float .gallery__scroll > .selection-float.selection-float--top-gap {
+    top: var(--om-space-2);
   }
 
   .selection-float {
