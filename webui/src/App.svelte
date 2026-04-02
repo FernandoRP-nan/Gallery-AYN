@@ -64,6 +64,7 @@
   let galleryThumbHydrationToken = 0;
   let galleryLoadingMore = false;
   let galleryHasMore = false;
+  let galleryAutoLoadRunId = 0;
   let previewThumbHydrationToken = 0;
   let previewScale = 1;
   let previewVisible = true;
@@ -82,11 +83,13 @@
   let thumbCardStyle: "soft" | "flat" | "outlined" = "soft";
   let thumbFrameVisible = true;
   let thumbImageRadiusPx = 6;
+  let thumbTileRadiusPx = 12;
   let thumbGapPxBackup = 12;
   let showThumbLabelsBackup = true;
   let thumbCardStyleBackup: "soft" | "flat" | "outlined" = "soft";
   let thumbFrameVisibleBackup = true;
   let thumbImageRadiusPxBackup = 6;
+  let thumbTileRadiusPxBackup = 12;
   const thumbScalePresets = [
     { id: "compacto", label: "Compacto", value: 0.62 },
     { id: "medio", label: "Medio", value: 1.0 },
@@ -134,15 +137,18 @@
   /** Contador para overlay de carga (carpetas, API, etc.). */
   let loadCount = 0;
   $: uiLoading = loadCount > 0;
-  $: galleryHasMore =
-    thumbsPerPage === 0 &&
-    Number(galleryState?.endIndex ?? 0) < Number(galleryState?.total ?? 0);
+  $: galleryHasMore = galleryHasMoreNow();
 
   function trackLoad<T>(promise: Promise<T>): Promise<T> {
     loadCount++;
     return promise.finally(() => {
       loadCount--;
     });
+  }
+
+  function galleryHasMoreNow(): boolean {
+    if (thumbsPerPage !== 0) return false;
+    return Number(galleryState?.endIndex ?? 0) < Number(galleryState?.total ?? 0);
   }
 
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
@@ -318,6 +324,7 @@
     }
     thumbFrameVisible = Boolean(data.settings?.web_thumb_frame_visible ?? true);
     thumbImageRadiusPx = Math.max(0, Math.min(18, Number(data.settings?.web_thumb_image_radius_px ?? 6)));
+    thumbTileRadiusPx = Math.max(0, Math.min(28, Number(data.settings?.web_thumb_tile_radius_px ?? 12)));
     previewScale = Number(data.settings?.dest_preview_thumb_scale ?? 1);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
@@ -354,6 +361,7 @@
     if (thumbsPerPage === 0) {
       await tick();
       void maybeAutoLoadMoreForViewport();
+      void autoLoadUnlimitedBatches();
     }
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
     pageJumpDraft = out.state.page;
@@ -459,6 +467,7 @@
     if (thumbsPerPage === 0) {
       await tick();
       void maybeAutoLoadMoreForViewport();
+      void autoLoadUnlimitedBatches();
     }
   };
 
@@ -472,7 +481,7 @@
   };
 
   async function onGalleryScroll(e: Event) {
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMore) return;
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
     const el = e.currentTarget as HTMLElement | null;
     if (!el) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
@@ -481,9 +490,10 @@
   }
 
   async function loadMoreGalleryBatch() {
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMore) return;
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return false;
     galleryLoadingMore = true;
     try {
+      const beforeEnd = Number(galleryState?.endIndex ?? 0);
       const out = await bridge.galleryLoadMore();
       if (out?.state) galleryState = out.state;
       const extra = Array.isArray(out?.items) ? out.items : [];
@@ -492,13 +502,15 @@
         // No incrementar token: evita cancelar hidración HQ en curso de tandas previas.
         void hydrateGalleryThumbsHq(extra, thumbScale, galleryThumbHydrationToken);
       }
+      const afterEnd = Number(galleryState?.endIndex ?? 0);
+      return afterEnd > beforeEnd || extra.length > 0;
     } finally {
       galleryLoadingMore = false;
     }
   }
 
   async function maybeAutoLoadMoreForViewport() {
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMore) return;
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
     const el = galleryScrollEl ?? galleryPlainEl;
     if (!el) return;
     // Si aún no hay suficiente contenido para scrollear, precarga otra tanda.
@@ -507,7 +519,19 @@
     }
   }
 
-  $: if (thumbsPerPage === 0 && galleryHasMore && !galleryLoadingMore && items.length > 0 && (galleryScrollEl || galleryPlainEl)) {
+  async function autoLoadUnlimitedBatches() {
+    const runId = ++galleryAutoLoadRunId;
+    let guard = 0;
+    while (runId === galleryAutoLoadRunId && thumbsPerPage === 0 && galleryHasMoreNow() && guard < 200) {
+      guard++;
+      const progressed = await loadMoreGalleryBatch();
+      await tick();
+      if (!progressed) break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  $: if (thumbsPerPage === 0 && galleryHasMoreNow() && !galleryLoadingMore && items.length > 0 && (galleryScrollEl || galleryPlainEl)) {
     setTimeout(() => {
       void maybeAutoLoadMoreForViewport();
     }, 0);
@@ -526,6 +550,7 @@
     thumbCardStyleBackup = thumbCardStyle;
     thumbFrameVisibleBackup = thumbFrameVisible;
     thumbImageRadiusPxBackup = thumbImageRadiusPx;
+    thumbTileRadiusPxBackup = thumbTileRadiusPx;
     settingsThumbScaleDraft = thumbScale;
     let bestIdx = 0;
     let bestDiff = Number.POSITIVE_INFINITY;
@@ -547,6 +572,7 @@
     thumbCardStyle = thumbCardStyleBackup;
     thumbFrameVisible = thumbFrameVisibleBackup;
     thumbImageRadiusPx = thumbImageRadiusPxBackup;
+    thumbTileRadiusPx = thumbTileRadiusPxBackup;
     settingsOpen = false;
   };
 
@@ -564,7 +590,8 @@
       web_show_thumb_labels: Boolean(showThumbLabels),
       web_thumb_card_style: thumbCardStyle,
       web_thumb_frame_visible: Boolean(thumbFrameVisible),
-      web_thumb_image_radius_px: Math.round(thumbImageRadiusPx)
+      web_thumb_image_radius_px: Math.round(thumbImageRadiusPx),
+      web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx)
     });
     await reload();
     settingsOpen = false;
@@ -1580,7 +1607,7 @@
   class:app--tile-flat={thumbCardStyle === "flat"}
   class:app--tile-outlined={thumbCardStyle === "outlined"}
   class:app--tile-no-frame={!thumbFrameVisible}
-  style={`--thumb-image-radius:${thumbImageRadiusPx}px`}
+  style={`--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
 >
   <header class="tabs-bar om-panel">
     <nav class="tabs__nav">
@@ -2364,6 +2391,22 @@
               step="1"
               bind:value={thumbImageRadiusPx}
             />
+            <label class="field-label" for="set-tile-radius">Redondeado del elemento {Math.round(thumbTileRadiusPx)}px</label>
+            <input
+              id="set-tile-radius"
+              class="om-range"
+              type="range"
+              min="0"
+              max="28"
+              step="1"
+              bind:value={thumbTileRadiusPx}
+            />
+            <div class="settings-preset-row">
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 0)}>Sin redondeo</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 6)}>Suave</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 12)}>Medio</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 18)}>Alto</button>
+            </div>
           </div>
 
           <div class="settings-group">
@@ -2397,7 +2440,7 @@
             <div
               class="settings-thumb-preview"
               class:settings-thumb-preview--no-frame={!thumbFrameVisible}
-              style={`--cell:${settingsPreviewCellPx}px;--thumb-gap:${thumbGapPx}px;--thumb-image-radius:${thumbImageRadiusPx}px`}
+              style={`--cell:${settingsPreviewCellPx}px;--thumb-gap:${thumbGapPx}px;--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
             >
               <div class="tile"><div class="folder-ph">A</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 1</span>{/if}</div>
               <div class="tile"><div class="folder-ph">B</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 2</span>{/if}</div>
@@ -2805,12 +2848,13 @@
     user-select: none;
     background: linear-gradient(180deg, var(--om-surface-3) 0%, var(--om-surface-2) 100%);
     border: 1px solid var(--om-border-default);
-    border-radius: var(--om-radius-md);
+    border-radius: var(--thumb-tile-radius, var(--om-radius-md));
     color: var(--om-text-primary);
     text-align: left;
     padding: var(--om-space-2);
     cursor: pointer;
     box-shadow: var(--om-shadow-sm);
+    overflow: hidden;
     transition:
       transform var(--om-transition),
       box-shadow var(--om-transition),
@@ -2921,11 +2965,23 @@
   }
 
   .tile__name {
-    display: block;
-    margin-top: var(--om-space-2);
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 20%;
+    min-height: 1.6rem;
+    max-height: 2.4rem;
+    display: flex;
+    align-items: center;
+    padding: 0 var(--om-space-2);
     font-size: 0.7rem;
-    line-height: 1.25;
-    color: var(--om-text-secondary);
+    line-height: 1.2;
+    color: var(--om-text-primary);
+    background: linear-gradient(180deg, rgb(7 8 14 / 0.2) 0%, rgb(7 8 14 / 0.74) 100%);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-sizing: border-box;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
