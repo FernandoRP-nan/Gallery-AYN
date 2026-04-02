@@ -35,6 +35,13 @@ def load_app_settings() -> dict:
             "web_preview_ratio": 0.4,
             "web_dest_panel_ratio": 0.26,
             "web_preview_visible": True,
+            "web_shortcuts": {
+                "toggleMode": "Shift",
+                "deleteAction": "R",
+                "zoomPrev": "ArrowLeft,ArrowUp,A,W",
+                "zoomNext": "ArrowRight,ArrowDown,D,S",
+                "escape": "Escape",
+            },
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
@@ -103,6 +110,14 @@ def load_app_settings() -> dict:
             data["web_preview_visible"] = True
         else:
             data["web_preview_visible"] = bool(data["web_preview_visible"])
+        if "web_shortcuts" not in data or not isinstance(data.get("web_shortcuts"), dict):
+            data["web_shortcuts"] = {
+                "toggleMode": "Shift",
+                "deleteAction": "R",
+                "zoomPrev": "ArrowLeft,ArrowUp,A,W",
+                "zoomNext": "ArrowRight,ArrowDown,D,S",
+                "escape": "Escape",
+            }
         if "dest_preview_modal_w" not in data:
             data["dest_preview_modal_w"] = 0.9
         if "dest_preview_modal_h" not in data:
@@ -127,6 +142,13 @@ def load_app_settings() -> dict:
             "web_preview_ratio": 0.4,
             "web_dest_panel_ratio": 0.26,
             "web_preview_visible": True,
+            "web_shortcuts": {
+                "toggleMode": "Shift",
+                "deleteAction": "R",
+                "zoomPrev": "ArrowLeft,ArrowUp,A,W",
+                "zoomNext": "ArrowRight,ArrowDown,D,S",
+                "escape": "Escape",
+            },
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,

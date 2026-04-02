@@ -105,6 +105,15 @@
   let thumbFrameVisibleBackup = true;
   let thumbImageRadiusPxBackup = 6;
   let thumbTileRadiusPxBackup = 12;
+  const defaultKeyboardShortcuts = {
+    toggleMode: "Shift",
+    deleteAction: "R",
+    zoomPrev: "ArrowLeft,ArrowUp,A,W",
+    zoomNext: "ArrowRight,ArrowDown,D,S",
+    escape: "Escape",
+  };
+  let keyboardShortcuts = { ...defaultKeyboardShortcuts };
+  let keyboardShortcutsBackup = { ...defaultKeyboardShortcuts };
   const thumbScalePresets = [
     { id: "compacto", label: "Compacto", value: 0.62 },
     { id: "medio", label: "Medio", value: 1.0 },
@@ -217,6 +226,32 @@
       out.push({ label, path });
     }
     return out;
+  }
+
+  function normalizeShortcutValue(raw: unknown, fallback: string): string {
+    const v = String(raw ?? "").trim();
+    return v.length > 0 ? v : fallback;
+  }
+
+  function eventKeyToken(e: KeyboardEvent): string {
+    const k = String(e.key ?? "").trim();
+    if (k.length === 1) return k.toLowerCase();
+    return k;
+  }
+
+  function shortcutMatchesSingle(e: KeyboardEvent, binding: string): boolean {
+    const token = eventKeyToken(e);
+    const want = normalizeShortcutValue(binding, "").trim();
+    return token === want || token.toLowerCase() === want.toLowerCase();
+  }
+
+  function shortcutMatchesList(e: KeyboardEvent, bindingsCsv: string): boolean {
+    const token = eventKeyToken(e);
+    const opts = String(bindingsCsv ?? "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+    return opts.some((x) => token === x || token.toLowerCase() === x.toLowerCase());
   }
 
   function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: GalleryItem[]): GalleryItem[] {
@@ -356,6 +391,14 @@
     thumbFrameVisible = Boolean(data.settings?.web_thumb_frame_visible ?? true);
     thumbImageRadiusPx = Math.max(0, Math.min(18, Number(data.settings?.web_thumb_image_radius_px ?? 6)));
     thumbTileRadiusPx = Math.max(0, Math.min(28, Number(data.settings?.web_thumb_tile_radius_px ?? 12)));
+    const persistedShortcuts = (data.settings?.web_shortcuts ?? {}) as Record<string, unknown>;
+    keyboardShortcuts = {
+      toggleMode: normalizeShortcutValue(persistedShortcuts?.toggleMode, defaultKeyboardShortcuts.toggleMode),
+      deleteAction: normalizeShortcutValue(persistedShortcuts?.deleteAction, defaultKeyboardShortcuts.deleteAction),
+      zoomPrev: normalizeShortcutValue(persistedShortcuts?.zoomPrev, defaultKeyboardShortcuts.zoomPrev),
+      zoomNext: normalizeShortcutValue(persistedShortcuts?.zoomNext, defaultKeyboardShortcuts.zoomNext),
+      escape: normalizeShortcutValue(persistedShortcuts?.escape, defaultKeyboardShortcuts.escape),
+    };
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
@@ -585,6 +628,7 @@
     thumbFrameVisibleBackup = thumbFrameVisible;
     thumbImageRadiusPxBackup = thumbImageRadiusPx;
     thumbTileRadiusPxBackup = thumbTileRadiusPx;
+    keyboardShortcutsBackup = { ...keyboardShortcuts };
     settingsThumbScaleDraft = thumbScale;
     let bestIdx = 0;
     let bestDiff = Number.POSITIVE_INFINITY;
@@ -607,6 +651,7 @@
     thumbFrameVisible = thumbFrameVisibleBackup;
     thumbImageRadiusPx = thumbImageRadiusPxBackup;
     thumbTileRadiusPx = thumbTileRadiusPxBackup;
+    keyboardShortcuts = { ...keyboardShortcutsBackup };
     settingsOpen = false;
   };
 
@@ -617,6 +662,13 @@
     thumbsPerPage = n;
     const ts = Math.max(0.01, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
     thumbScale = ts;
+    keyboardShortcuts = {
+      toggleMode: normalizeShortcutValue(keyboardShortcuts.toggleMode, defaultKeyboardShortcuts.toggleMode),
+      deleteAction: normalizeShortcutValue(keyboardShortcuts.deleteAction, defaultKeyboardShortcuts.deleteAction),
+      zoomPrev: normalizeShortcutValue(keyboardShortcuts.zoomPrev, defaultKeyboardShortcuts.zoomPrev),
+      zoomNext: normalizeShortcutValue(keyboardShortcuts.zoomNext, defaultKeyboardShortcuts.zoomNext),
+      escape: normalizeShortcutValue(keyboardShortcuts.escape, defaultKeyboardShortcuts.escape),
+    };
     await bridge.settingsPatch({
       gallery_thumbs_per_page: n, // 0 = sin límite
       gallery_thumb_scale: Number(ts.toFixed(3)),
@@ -625,7 +677,8 @@
       web_thumb_card_style: thumbCardStyle,
       web_thumb_frame_visible: Boolean(thumbFrameVisible),
       web_thumb_image_radius_px: Math.round(thumbImageRadiusPx),
-      web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx)
+      web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx),
+      web_shortcuts: { ...keyboardShortcuts },
     });
     await reload();
     settingsOpen = false;
@@ -2034,7 +2087,7 @@
           activeEl.closest('[contenteditable="true"]'))
     );
     if (
-      e.key === "Shift" &&
+      shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.toggleMode) &&
       !e.repeat &&
       !isTypingEl &&
       !e.ctrlKey &&
@@ -2058,19 +2111,50 @@
     if (previewZoomOpen) {
       const typingInDestForm = Boolean(activeEl?.closest(".modal--dest-form"));
       if (destFormOpen && isTypingEl && typingInDestForm) return;
-      const key = e.key.toLowerCase();
-      if (["arrowleft", "arrowup", "a", "w"].includes(key)) {
+      if (shortcutMatchesList(e as KeyboardEvent, keyboardShortcuts.zoomPrev)) {
         e.preventDefault();
         moveZoomBy(-1);
         return;
       }
-      if (["arrowright", "arrowdown", "d", "s"].includes(key)) {
+      if (shortcutMatchesList(e as KeyboardEvent, keyboardShortcuts.zoomNext)) {
         e.preventDefault();
         moveZoomBy(1);
         return;
       }
     }
-    if (e.key !== "Escape") return;
+    if (!isTypingEl && shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.deleteAction)) {
+      const hasPreviewSelectionForDelete = previewOpen && previewSelectedPaths.length > 0;
+      const hasGallerySelectionForDelete =
+        Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => x.kind === "image" && Boolean(x.selected));
+      if (previewZoomOpen && previewZoomPath) {
+        e.preventDefault();
+        openConfirmDelete(
+          "Eliminar imagen",
+          "¿Eliminar la imagen actual? Esta acción no se puede deshacer.",
+          deleteCurrentZoomImage
+        );
+        return;
+      }
+      if (hasPreviewSelectionForDelete) {
+        e.preventDefault();
+        openConfirmDelete(
+          "Eliminar selección",
+          `¿Eliminar ${previewSelectedPaths.length} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+          deletePreviewSelectedItems
+        );
+        return;
+      }
+      if (hasGallerySelectionForDelete) {
+        e.preventDefault();
+        openConfirmDelete(
+          "Eliminar selección",
+          `¿Eliminar ${galleryState.selectedCount} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+          deleteSelectedGalleryItems
+        );
+        return;
+      }
+    }
+    if (!shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.escape)) return;
     const hasPreviewSelection = previewSelectedPaths.length > 0 || previewRangeSelecting;
     const hasGallerySelection =
       Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => x.kind === "image" && Boolean(x.selected));
@@ -3057,6 +3141,28 @@
               <div class="tile"><div class="folder-ph">A</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 1</span>{/if}</div>
               <div class="tile"><div class="folder-ph">B</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 2</span>{/if}</div>
               <div class="tile"><div class="folder-ph">C</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 3</span>{/if}</div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h3 class="settings-group__title">Atajos de teclado</h3>
+            <p class="settings-hint">Configurables. Usa nombres como Shift, Escape, ArrowLeft, o letras. Listas separadas por comas.</p>
+            <label class="field-label" for="set-shortcut-toggle">Alternar modo Destinos/Selección</label>
+            <input id="set-shortcut-toggle" class="om-input" type="text" bind:value={keyboardShortcuts.toggleMode} />
+            <label class="field-label" for="set-shortcut-delete">Eliminar (contextual)</label>
+            <input id="set-shortcut-delete" class="om-input" type="text" bind:value={keyboardShortcuts.deleteAction} />
+            <label class="field-label" for="set-shortcut-zoom-prev">Fullscreen anterior</label>
+            <input id="set-shortcut-zoom-prev" class="om-input" type="text" bind:value={keyboardShortcuts.zoomPrev} />
+            <label class="field-label" for="set-shortcut-zoom-next">Fullscreen siguiente</label>
+            <input id="set-shortcut-zoom-next" class="om-input" type="text" bind:value={keyboardShortcuts.zoomNext} />
+            <label class="field-label" for="set-shortcut-escape">Escape (limpiar/cerrar)</label>
+            <input id="set-shortcut-escape" class="om-input" type="text" bind:value={keyboardShortcuts.escape} />
+            <div class="settings-preset-row">
+              <button
+                type="button"
+                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+                on:click={() => (keyboardShortcuts = { ...defaultKeyboardShortcuts })}
+              >Restaurar atajos por defecto</button>
             </div>
           </div>
         </section>
