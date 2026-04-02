@@ -2094,7 +2094,7 @@
       <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
     {:else}
       <span class="pager__google-line">
-        Cargadas {Number(galleryState?.endIndex ?? 0)}/{Number(galleryState?.total ?? 0)} imágenes · {Number(galleryState?.totalElements ?? Number(galleryState?.total ?? 0) + Number(galleryState?.subfoldersCount ?? 0))} elementos · peso total {formatBytes(Number(galleryState?.totalBytes ?? 0))}
+        Cargadas {Number(galleryState?.endIndex ?? 0)}/{Number(galleryState?.total ?? 0)} imágenes · {Number(galleryState?.totalElements ?? Number(galleryState?.total ?? 0) + Number(galleryState?.subfoldersCount ?? 0))} elementos · peso total {Number(galleryState?.totalBytes ?? -1) < 0 ? "calculando…" : formatBytes(Number(galleryState?.totalBytes ?? 0))}
       </span>
     {/if}
     <div class="grow"></div>
@@ -2348,6 +2348,11 @@
                 <div class="zoom-dest-chips" class:zoom-dest-chips--carousel-hidden={!previewZoomCarouselVisible}>
                   <button
                     type="button"
+                    class="om-btn om-btn--ghost om-btn--compact zoom-dest-add"
+                    on:click={openAddDestForm}
+                  >+ Agregar</button>
+                  <button
+                    type="button"
                     class="om-btn om-btn--ghost om-btn--compact"
                     disabled={!previewZoomCanUndoMove}
                     on:click={undoLastZoomMove}
@@ -2455,7 +2460,7 @@
 
   {#if destFormOpen}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <div class="overlay overlay--dim" role="presentation" on:click|self={closeDestForm}>
+    <div class="overlay overlay--dim overlay--dest-form" role="presentation" on:click|self={closeDestForm}>
       <div
         class="modal modal--dest-form om-panel om-panel--lift"
         role="dialog"
@@ -2650,7 +2655,7 @@
 
   {#if confirmDeleteOpen}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <div class="overlay overlay--dim" role="presentation" on:click|self={closeConfirmDelete}>
+    <div class="overlay overlay--dim overlay--confirm" role="presentation" on:click|self={closeConfirmDelete}>
       <div
         class="modal modal--confirm om-panel om-panel--lift"
         role="dialog"
@@ -3534,6 +3539,10 @@
     z-index: 45;
   }
 
+  .overlay--confirm {
+    z-index: 75;
+  }
+
   .modal--settings {
     width: min(760px, 96vw);
     max-height: min(92vh, 780px);
@@ -3554,6 +3563,10 @@
     gap: var(--om-space-4);
     padding: var(--om-space-5);
     box-sizing: border-box;
+  }
+
+  .overlay--dest-form {
+    z-index: 85;
   }
 
   .modal--route-picker {
@@ -3583,6 +3596,7 @@
   .modal--confirm {
     width: min(520px, 92vw);
     max-height: min(72vh, 340px);
+    z-index: 76;
   }
 
   .dest-form-body {
@@ -4010,6 +4024,12 @@
     padding: 4px 12px;
     cursor: pointer;
     flex: 0 0 auto;
+  }
+
+  .zoom-dest-add {
+    flex: 0 0 auto;
+    min-height: 1.9rem;
+    border-radius: 999px;
   }
 
   .zoom-dest-chip:hover {

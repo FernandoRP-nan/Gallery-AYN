@@ -119,6 +119,7 @@ class WebApi:
         self.ordered_paths: list[Path] = []
         self.subfolders: list[Path] = []
         self.gallery_total_bytes = 0
+        self._gallery_bytes_gen = 0
         self.selected: set[Path] = set()
         self.gallery_page = 0
         self.gallery_unlimited_loaded = 0
@@ -211,14 +212,26 @@ class WebApi:
             return self._unlimited_batch_size()
         return max(12, n)
 
-    def _recompute_gallery_total_bytes(self) -> None:
-        total = 0
-        for p in self.ordered_paths:
-            try:
-                total += int(p.stat().st_size)
-            except OSError:
-                continue
-        self.gallery_total_bytes = max(0, total)
+    def _schedule_gallery_total_bytes_recompute(self) -> None:
+        with self.lock:
+            self._gallery_bytes_gen += 1
+            gen = self._gallery_bytes_gen
+            snapshot = list(self.ordered_paths)
+            self.gallery_total_bytes = -1  # frontend: "calculando…"
+
+        def worker() -> None:
+            total = 0
+            for p in snapshot:
+                try:
+                    total += int(p.stat().st_size)
+                except OSError:
+                    continue
+            with self.lock:
+                if gen != self._gallery_bytes_gen:
+                    return
+                self.gallery_total_bytes = max(0, total)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _total_pages(self) -> int:
         total = len(self.ordered_paths)
@@ -308,7 +321,7 @@ class WebApi:
             save_app_settings(self.settings)
             self.subfolders = list_subdirs(folder)
             self.ordered_paths = scan_images_flat(folder)
-            self._recompute_gallery_total_bytes()
+            self._schedule_gallery_total_bytes_recompute()
             self.selected.clear()
             self.gallery_page = 0
             self.gallery_unlimited_loaded = (
@@ -329,7 +342,7 @@ class WebApi:
             folder = self.gallery_folder
             self.subfolders = list_subdirs(folder)
             self.ordered_paths = scan_images_flat(folder)
-            self._recompute_gallery_total_bytes()
+            self._schedule_gallery_total_bytes_recompute()
             self._clamp_page()
             if self._is_unlimited_mode():
                 self.gallery_unlimited_loaded = min(len(self.ordered_paths), self._unlimited_batch_size())
