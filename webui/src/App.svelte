@@ -1518,7 +1518,21 @@
                       decoding="async"
                     />
                   {:else}
-                    <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
+                    <div class="folder-ph" class:folder-ph--folder={it.kind !== "image"}>
+                      {#if it.kind === "image"}
+                        Sin preview
+                      {:else if it.kind === "folder_up"}
+                        <span class="folder-ph__icon" aria-hidden="true">↩</span>
+                        <span class="folder-ph__label">Subir</span>
+                      {:else}
+                        <svg class="folder-ph__svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path
+                            d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z"
+                            fill="currentColor"
+                          />
+                        </svg>
+                      {/if}
+                    </div>
                   {/if}
                   <span class="tile__name">{it.name}</span>
                 </div>
@@ -1625,7 +1639,21 @@
               {#if it.thumbDataUrl}
                 <img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} loading="lazy" decoding="async" />
               {:else}
-                <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
+                <div class="folder-ph" class:folder-ph--folder={it.kind !== "image"}>
+                  {#if it.kind === "image"}
+                    Sin preview
+                  {:else if it.kind === "folder_up"}
+                    <span class="folder-ph__icon" aria-hidden="true">↩</span>
+                    <span class="folder-ph__label">Subir</span>
+                  {:else}
+                    <svg class="folder-ph__svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  {/if}
+                </div>
               {/if}
               <span class="tile__name">{it.name}</span>
             </button>
@@ -2445,6 +2473,37 @@
     border-radius: var(--om-radius-sm);
     font-size: 0.75rem;
     color: var(--om-text-muted);
+  }
+
+  .folder-ph--folder {
+    gap: 4px;
+    color: var(--om-text-secondary);
+    border: 1px dashed color-mix(in oklab, var(--om-accent) 42%, transparent);
+    background: linear-gradient(
+      160deg,
+      color-mix(in oklab, var(--om-accent) 14%, transparent),
+      color-mix(in oklab, var(--om-accent-2) 10%, transparent)
+    );
+  }
+
+  .folder-ph__icon {
+    font-size: 1.7rem;
+    line-height: 1;
+    filter: drop-shadow(0 2px 6px rgb(0 0 0 / 0.35));
+  }
+
+  .folder-ph__svg {
+    width: 1.85rem;
+    height: 1.85rem;
+    display: block;
+    color: color-mix(in oklab, var(--om-accent) 55%, var(--om-text-primary));
+    filter: drop-shadow(0 2px 6px rgb(0 0 0 / 0.35));
+  }
+
+  .folder-ph__label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
   }
 
   .tile__name {
