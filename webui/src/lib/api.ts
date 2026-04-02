@@ -98,6 +98,7 @@ const devMockApi: WebApi = {
   destinations_add: async () => ({ destinations: [] }),
   destinations_edit: async () => ({ destinations: [] }),
   destinations_remove: async () => ({ destinations: [] }),
+  destinations_reorder: async () => ({ destinations: [] }),
   destinations_get: async () => ({ destinations: [] }),
   settings_patch: async (data: Record<string, unknown>) => ({ settings: { ...data } }),
   organizer_start: async () => ({ ok: false, error: "Solo disponible con la app Python (PyWebView)." }),
@@ -160,6 +161,7 @@ export const bridge = {
   destinationsEdit: (idx: number, label: string, path: string) =>
     call<any>("destinations_edit", idx, label, path),
   destinationsRemove: (idx: number) => call<any>("destinations_remove", idx),
+  destinationsReorder: (fromIdx: number, toIdx: number) => call<any>("destinations_reorder", fromIdx, toIdx),
   /** Lista corta solo destinos (menos datos que get_initial_state; más fiable con Qt). */
   destinationsGet: () => call<any>("destinations_get"),
   settingsPatch: (data: Record<string, any>) => call<any>("settings_patch", data),

@@ -653,6 +653,21 @@ class WebApi:
             save_app_settings(self.settings)
         return self.destinations_get()
 
+    def destinations_reorder(self, from_idx: int, to_idx: int) -> dict:
+        dests = self._destinations_list()
+        n = len(dests)
+        if n <= 1:
+            return self.destinations_get()
+        if not (0 <= from_idx < n and 0 <= to_idx < n):
+            return self.destinations_get()
+        if from_idx == to_idx:
+            return self.destinations_get()
+        # Reordenar sin perder contenido ni metadatos del destino.
+        item = dests.pop(from_idx)
+        dests.insert(to_idx, item)
+        save_app_settings(self.settings)
+        return self.destinations_get()
+
     def settings_patch(self, data: dict) -> dict:
         self.settings.update(data)
         save_app_settings(self.settings)

@@ -212,6 +212,23 @@
     return out;
   }
 
+  function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: GalleryItem[]): GalleryItem[] {
+    const prevByPath = new Map(prevItems.map((x) => [x.path, x] as const));
+    return nextItems.map((it) => {
+      if (it.kind !== "image") return it;
+      const prev = prevByPath.get(it.path);
+      if (!prev || prev.kind !== "image") return it;
+      const prevQ = prev.thumbQuality ?? (prev.thumbDataUrl ? "hq" : undefined);
+      const nextQ = it.thumbQuality ?? (it.thumbDataUrl ? "hq" : undefined);
+      const prevScore = prevQ === "hq" ? 2 : prevQ === "lq" ? 1 : 0;
+      const nextScore = nextQ === "hq" ? 2 : nextQ === "lq" ? 1 : 0;
+      if (prevScore > nextScore && prev.thumbDataUrl) {
+        return { ...it, thumbDataUrl: prev.thumbDataUrl, thumbQuality: prev.thumbQuality ?? "hq" };
+      }
+      return it;
+    });
+  }
+
   function prioritizePathsByViewport(paths: string[], selector: string, attrName: string): string[] {
     const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
     if (nodes.length === 0) return paths;
@@ -674,9 +691,7 @@
       if (destinationsMode) {
         const out = await bridge.galleryToggleSelect(it.path);
         galleryState = out.state;
-        items = out.items;
-        galleryThumbHydrationToken++;
-        void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+        items = mergeItemsKeepingBestThumb(items, out.items);
         const row = out.items?.find((x: GalleryItem) => x.path === it.path);
         selectedPreview = {
           path: it.path,
@@ -718,25 +733,22 @@
   };
 
   const selectPage = async () => {
+    const prevItems = items;
     const out = await bridge.gallerySelectPage();
     galleryState = out.state;
-    items = out.items;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    items = mergeItemsKeepingBestThumb(prevItems, out.items);
   };
   const clearSelection = async () => {
+    const prevItems = items;
     const out = await bridge.galleryClearSelection();
     galleryState = out.state;
-    items = out.items;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    items = mergeItemsKeepingBestThumb(prevItems, out.items);
   };
   const invertSelection = async () => {
+    const prevItems = items;
     const out = await bridge.galleryInvertSelection();
     galleryState = out.state;
-    items = out.items;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    items = mergeItemsKeepingBestThumb(prevItems, out.items);
   };
 
   const moveToDest = async (path: string) => {
@@ -1140,17 +1152,15 @@
     }, 0);
     if (addPaths.length === 0 && removePaths.length === 0) return;
     try {
+      const prevItems = items;
       const out = await bridge.galleryApplySelectionDelta(addPaths, removePaths);
       galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      items = mergeItemsKeepingBestThumb(prevItems, out.items);
     } catch {
+      const prevItems = items;
       const out = await bridge.galleryRefreshItems();
       galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      items = mergeItemsKeepingBestThumb(prevItems, out.items);
     }
   }
 
@@ -1493,6 +1503,7 @@
 
   /** Menú contextual (clic derecho) en un chip de destino. */
   let destCtxMenu: { x: number; y: number; idx: number } | null = null;
+  let draggedDestIdx: number | null = null;
 
   function clearGhostListeners() {
     if (dragWinMove) {
@@ -1557,9 +1568,45 @@
   function onDestDrop(e: DragEvent, destPath: string) {
     e.preventDefault();
     e.stopPropagation();
+    const fromRaw = e.dataTransfer?.getData("application/x-om-dest-idx") ?? "";
+    const fromIdx = Number.parseInt(fromRaw, 10);
+    const toIdx = destRows.findIndex((x) => x.path === destPath);
+    if (Number.isFinite(fromIdx) && fromIdx >= 0 && toIdx >= 0) {
+      void reorderDestinations(fromIdx, toIdx);
+      return;
+    }
     ignoreDestCardClickUntil = Date.now() + 450;
     endDragSessionAfterGesture();
     moveToDest(destPath);
+  }
+
+  function onDestChipDragStart(e: DragEvent, idx: number) {
+    e.stopPropagation();
+    draggedDestIdx = idx;
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    const asText = String(idx);
+    dt.effectAllowed = "move";
+    dt.setData("application/x-om-dest-idx", asText);
+    dt.setData("text/plain", asText);
+  }
+
+  function onDestChipDragEnd() {
+    draggedDestIdx = null;
+  }
+
+  async function reorderDestinations(fromIdx: number, toIdx: number) {
+    if (fromIdx === toIdx) return;
+    if (fromIdx < 0 || toIdx < 0 || fromIdx >= destRows.length || toIdx >= destRows.length) return;
+    try {
+      const out = await trackLoad(bridge.destinationsReorder(fromIdx, toIdx));
+      destRows = normalizeDestinationsFromPayload(out);
+      status = "Destinos reordenados";
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudieron reordenar los destinos";
+    } finally {
+      draggedDestIdx = null;
+    }
   }
 
   /** Clic en la tarjeta (sin botón): vista previa de carpeta; el drop sigue moviendo archivos. */
@@ -2019,10 +2066,12 @@
                   <div
                     class="dest-float-chip"
                     class:dest-float-chip--drop-target={dragOverDestPath === d.path}
+                    class:dest-float-chip--dragging={draggedDestIdx === i}
                     data-dest-path={d.path}
                     title={d.path}
                     role="button"
                     tabindex="0"
+                    draggable={true}
                     on:click={(e) => onDestCardClick(e, d.path)}
                     on:keydown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -2031,6 +2080,8 @@
                       }
                     }}
                     on:contextmenu={(e) => onDestContextMenu(e, i)}
+                    on:dragstart={(e) => onDestChipDragStart(e, i)}
+                    on:dragend={onDestChipDragEnd}
                     on:dragenter|preventDefault
                     on:dragover|preventDefault
                     on:drop={(e) => onDestDrop(e, d.path)}
@@ -2435,7 +2486,21 @@
                     on:click={undoLastZoomMove}
                   >Deshacer</button>
                   {#each destRows as d, i (d.path + "\0zoom\0" + i)}
-                    <button type="button" class="zoom-dest-chip" title={d.path} on:click={() => moveCurrentZoomToDestination(d.path)}>{d.label}</button>
+                    <button
+                      type="button"
+                      class="zoom-dest-chip"
+                      class:zoom-dest-chip--dragging={draggedDestIdx === i}
+                      data-dest-path={d.path}
+                      title={d.path}
+                      draggable={true}
+                      on:click={() => moveCurrentZoomToDestination(d.path)}
+                      on:contextmenu={(e) => onDestContextMenu(e, i)}
+                      on:dragstart={(e) => onDestChipDragStart(e, i)}
+                      on:dragend={onDestChipDragEnd}
+                      on:dragenter|preventDefault
+                      on:dragover|preventDefault
+                      on:drop={(e) => onDestDrop(e, d.path)}
+                    >{d.label}</button>
                   {/each}
                 </div>
               {/if}
@@ -3227,10 +3292,16 @@
     cursor: pointer;
     box-shadow: var(--om-shadow-sm);
     overflow: hidden;
+    isolation: isolate;
     transition:
       transform var(--om-transition),
       box-shadow var(--om-transition),
       border-color var(--om-transition);
+  }
+
+  .tile > * {
+    position: relative;
+    z-index: 1;
   }
 
   .app.app--tile-flat .tile {
@@ -3267,16 +3338,28 @@
   }
 
   .tile.selected {
-    background: color-mix(in oklab, var(--om-accent) 42%, var(--om-surface-2));
-    border-color: color-mix(in oklab, var(--om-accent) 84%, #ffffff);
+    /* Selección más visible: fondo azul claro con contraste consistente. */
+    background: color-mix(in oklab, var(--om-accent) 34%, #add3ff);
+    border-color: color-mix(in oklab, var(--om-accent) 90%, #edf4ff);
+    color: color-mix(in oklab, var(--om-text-primary) 90%, #ffffff);
     box-shadow:
-      0 0 0 2px color-mix(in oklab, var(--om-accent) 76%, #ffffff),
-      0 0 18px rgb(124 140 255 / 0.3);
+      0 0 0 2px color-mix(in oklab, var(--om-accent) 78%, #eaf1ff),
+      0 0 20px rgb(124 140 255 / 0.34);
+  }
+
+  .tile.selected::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: color-mix(in oklab, var(--om-accent) 24%, #8fc0ff);
+    opacity: 0.9;
   }
 
   .tile.selected img,
   .tile.selected .folder-ph {
-    transform: scale(0.96);
+    transform: scale(0.9);
     transform-origin: center;
     transition: transform var(--om-transition);
   }
@@ -4106,6 +4189,12 @@
     padding: 4px 12px;
     cursor: pointer;
     flex: 0 0 auto;
+  }
+
+  .dest-float-chip--dragging,
+  .zoom-dest-chip--dragging {
+    opacity: 0.58;
+    transform: scale(0.98);
   }
 
   .zoom-dest-add {
