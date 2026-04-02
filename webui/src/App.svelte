@@ -53,6 +53,12 @@
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
+  let galleryGridEl: HTMLDivElement | null = null;
+  let galleryGridObservedEl: HTMLDivElement | null = null;
+  let galleryGridResizeObserver: ResizeObserver | null = null;
+  let galleryGridWidth = 0;
+  const GALLERY_GRID_EDGE_PAD_PX = 8;
+  const GALLERY_GRID_GAP_PX = 12;
   let zoomNavItems: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
   let galleryThumbHydrationToken = 0;
   let previewThumbHydrationToken = 0;
@@ -67,6 +73,15 @@
   let settingsOpen = false;
   let thumbsPerPage = 48;
   let thumbsPerPageBackup = 48;
+  let settingsThumbScaleDraft = 1;
+  const thumbScalePresets = [
+    { id: "compacto", label: "Compacto", value: 0.82 },
+    { id: "medio", label: "Medio", value: 1.0 },
+    { id: "comodo", label: "Cómodo", value: 1.18 },
+    { id: "grande", label: "Grande", value: 1.45 },
+    { id: "xgrande", label: "XL", value: 1.8 }
+  ] as const;
+  let settingsThumbPresetIdx = 1;
   let pageJumpDraft = 1;
   let previewRatio = 0.4;
   /** Fracción de altura para el panel inferior de destinos (solo pestaña Destinos). */
@@ -430,6 +445,17 @@
 
   const openSettingsModal = () => {
     thumbsPerPageBackup = thumbsPerPage;
+    settingsThumbScaleDraft = thumbScale;
+    let bestIdx = 0;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < thumbScalePresets.length; i++) {
+      const d = Math.abs(thumbScalePresets[i].value - settingsThumbScaleDraft);
+      if (d < bestDiff) {
+        bestDiff = d;
+        bestIdx = i;
+      }
+    }
+    settingsThumbPresetIdx = bestIdx;
     settingsOpen = true;
   };
 
@@ -441,7 +467,9 @@
   const saveSettingsModal = async () => {
     const n = Math.min(120, Math.max(12, Math.round(Number(thumbsPerPage)) || 48));
     thumbsPerPage = n;
-    await bridge.settingsPatch({ gallery_thumbs_per_page: n });
+    const ts = Math.max(0.75, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
+    thumbScale = ts;
+    await bridge.settingsPatch({ gallery_thumbs_per_page: n, gallery_thumb_scale: Number(ts.toFixed(3)) });
     await reload();
     settingsOpen = false;
   };
@@ -1321,8 +1349,28 @@
     }
   }
 
-  /** Celdas de ancho fijo (sin 1fr) para que cada paso del slider se note al cambiar columnas. */
-  $: gridCellPx = galleryGridCellPx(thumbScale);
+  // Ajusta el tamaño efectivo de celda a "saltos" que encajan con el ancho actual,
+  // para conservar padding lateral fijo y reducir hueco sobrante en el borde derecho.
+  $: gridCellTargetPx = galleryGridCellPx(thumbScale);
+  $: gridCellPx = (() => {
+    const usableW = Math.max(0, galleryGridWidth - GALLERY_GRID_EDGE_PAD_PX * 2);
+    if (usableW <= 0) return gridCellTargetPx;
+    const cols = Math.max(1, Math.floor((usableW + GALLERY_GRID_GAP_PX) / (gridCellTargetPx + GALLERY_GRID_GAP_PX)));
+    const fitted = Math.floor((usableW - (cols - 1) * GALLERY_GRID_GAP_PX) / cols);
+    return Math.max(72, fitted);
+  })();
+  $: settingsPreviewCellPx = galleryGridCellPx(settingsThumbScaleDraft);
+
+  $: if (galleryGridEl && galleryGridEl !== galleryGridObservedEl) {
+    galleryGridResizeObserver?.disconnect();
+    galleryGridObservedEl = galleryGridEl;
+    galleryGridResizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      galleryGridWidth = Math.max(0, Math.round(entry.contentRect.width));
+    });
+    galleryGridResizeObserver.observe(galleryGridEl);
+  }
 
   $: if (!destinationsMode) {
     destCtxMenu = null;
@@ -1351,6 +1399,8 @@
 
   onDestroy(() => {
     endDragSession();
+    galleryGridResizeObserver?.disconnect();
+    galleryGridResizeObserver = null;
     if (thumbScaleDebounce) clearTimeout(thumbScaleDebounce);
     if (destScaleDebounce) clearTimeout(destScaleDebounce);
     if (zoomHudTimer) clearTimeout(zoomHudTimer);
@@ -1515,7 +1565,7 @@
         >
           <article class="gallery om-panel om-panel--lift gallery--with-float">
             <div class="gallery__scroll">
-              <div class="grid" style={`--cell:${gridCellPx}px`}>
+              <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px`}>
               {#each items as it (it.path)}
                 <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
                 <div
@@ -1659,7 +1709,7 @@
         : "grid-template-columns:minmax(0,1fr)"}
     >
       <article class="gallery om-panel om-panel--lift">
-        <div class="grid" style={`--cell:${gridCellPx}px`}>
+        <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px`}>
           {#each items as it (it.path)}
             <button
               type="button"
@@ -2122,6 +2172,48 @@
             max="120"
             bind:value={thumbsPerPage}
           />
+          <label class="field-label" for="set-thumb-preset">Tamaño de miniaturas (preset)</label>
+          <input
+            id="set-thumb-preset"
+            class="om-range"
+            type="range"
+            min="0"
+            max={thumbScalePresets.length - 1}
+            step="1"
+            bind:value={settingsThumbPresetIdx}
+            on:input={() => {
+              const p = thumbScalePresets[Math.max(0, Math.min(thumbScalePresets.length - 1, Number(settingsThumbPresetIdx) || 0))];
+              settingsThumbScaleDraft = p.value;
+            }}
+          />
+          <div class="settings-preset-row">
+            {#each thumbScalePresets as p, i}
+              <button
+                type="button"
+                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+                class:om-btn--primary={i === settingsThumbPresetIdx}
+                on:click={() => {
+                  settingsThumbPresetIdx = i;
+                  settingsThumbScaleDraft = p.value;
+                }}
+              >{p.label}</button>
+            {/each}
+          </div>
+          <label class="field-label" for="set-thumb-scale">Ajuste fino {Math.round(settingsThumbScaleDraft * 100)}%</label>
+          <input
+            id="set-thumb-scale"
+            class="om-range"
+            type="range"
+            min="0.75"
+            max="2.25"
+            step="0.01"
+            bind:value={settingsThumbScaleDraft}
+          />
+          <div class="settings-thumb-preview" style={`--cell:${settingsPreviewCellPx}px`}>
+            <div class="tile"><div class="folder-ph">A</div><span class="tile__name">Ejemplo 1</span></div>
+            <div class="tile"><div class="folder-ph">B</div><span class="tile__name">Ejemplo 2</span></div>
+            <div class="tile"><div class="folder-ph">C</div><span class="tile__name">Ejemplo 3</span></div>
+          </div>
           <p class="settings-hint">Valores más bajos (p. ej. 24–48) aceleran el cambio de página; el máximo es 120.</p>
         </section>
         <div class="settings-actions">
@@ -2468,6 +2560,9 @@
     grid-template-columns: repeat(auto-fill, minmax(var(--cell, 160px), var(--cell, 160px)));
     gap: var(--om-space-3);
     contain: layout style;
+    justify-content: start;
+    padding-inline: var(--grid-edge-pad, 8px);
+    box-sizing: border-box;
   }
 
   /* Durante DnD, los botones de la tarjeta capturan eventos; el área de drop es la tarjeta. */
@@ -3143,6 +3238,26 @@
     font-size: 0.75rem;
     color: var(--om-text-muted);
     line-height: 1.4;
+  }
+
+  .settings-preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--om-space-1);
+  }
+
+  .settings-preset-chip {
+    min-height: 1.65rem;
+  }
+
+  .settings-thumb-preview {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(var(--cell, 140px), var(--cell, 140px)));
+    gap: var(--om-space-2);
+    justify-content: start;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 2px 0;
   }
 
   .settings-actions {
