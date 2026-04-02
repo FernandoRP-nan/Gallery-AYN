@@ -39,6 +39,7 @@
   let previewZoomDataUrl: string | null = null;
   let previewZoomScale = 1;
   let previewZoomMode: "fit" | "fillWidth" = "fit";
+  let previewFillWidthAlignPending = false;
   let previewPanX = 0;
   let previewPanY = 0;
   let previewPanDrag = false;
@@ -46,6 +47,8 @@
   let previewPanStartX = 0;
   let previewPanStartY = 0;
   let previewZoomCarouselVisible = true;
+  let previewZoomDestMode = false;
+  let previewZoomCanUndoMove = false;
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   let zoomStageEl: HTMLDivElement | null = null;
@@ -370,13 +373,15 @@
     status = `Cargada carpeta: ${folder}`;
   }
 
-  const loadFolder = async () => {
+  const loadFolder = async (closePicker = true) => {
     await navigateToFolder(folder, { pushHistory: true });
+    if (closePicker) routePickerOpen = false;
   };
 
   const pickRecentFolder = async (path: string) => {
     folder = path;
     await navigateToFolder(path, { pushHistory: true });
+    routePickerOpen = false;
   };
 
   function getParentFolder(rawPath: string): string {
@@ -439,6 +444,7 @@
       if (out.cancelled || !out.path) return;
       folder = out.path;
       await loadFolder();
+      routePickerOpen = false;
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : "No se pudo abrir el selector de carpeta";
     }
@@ -596,6 +602,57 @@
     await reload();
     settingsOpen = false;
   };
+
+  function openConfirmDelete(title: string, detail: string, action: () => Promise<void>) {
+    confirmDeleteTitle = title;
+    confirmDeleteDetail = detail;
+    confirmDeleteAction = action;
+    confirmDeleteOpen = true;
+  }
+
+  function closeConfirmDelete() {
+    confirmDeleteOpen = false;
+    confirmDeleteAction = null;
+  }
+
+  async function runConfirmDelete() {
+    if (!confirmDeleteAction) return;
+    const fn = confirmDeleteAction;
+    closeConfirmDelete();
+    await fn();
+  }
+
+  async function deleteSelectedGalleryItems() {
+    try {
+      const out = await trackLoad(bridge.galleryDeleteSelected());
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      const deleted = Number(out.deleteResult?.deleted ?? 0);
+      const errors = Number(out.deleteResult?.errors ?? 0);
+      status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""}`;
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudieron eliminar las imágenes seleccionadas";
+    }
+  }
+
+  async function deleteCurrentZoomImage() {
+    if (!previewZoomPath) return;
+    try {
+      const out = await trackLoad(bridge.galleryDeletePaths([previewZoomPath]));
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      const deleted = Number(out.deleteResult?.deleted ?? 0);
+      const errors = Number(out.deleteResult?.errors ?? 0);
+      status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""}`;
+      previewZoomOpen = false;
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo eliminar la imagen actual";
+    }
+  }
 
   const clickItem = async (it: GalleryItem) => {
     if (suppressNextGalleryClick) {
@@ -908,6 +965,7 @@
     previewPanX = 0;
     previewPanY = 0;
     if (!opts?.preserveMode) previewZoomMode = "fit";
+    previewFillWidthAlignPending = previewZoomMode === "fillWidth";
     previewZoomNaturalW = 1;
     previewZoomNaturalH = 1;
     previewZoomCarouselVisible = opts?.preserveCarousel ? previewZoomCarouselVisible : true;
@@ -1114,6 +1172,7 @@
     const limits = getPanLimits();
     previewPanX = 0;
     previewPanY = -limits.y;
+    previewFillWidthAlignPending = false;
   }
 
   // Snap a "100%" usando el mismo redondeo que muestra la UI.
@@ -1127,6 +1186,9 @@
   // Siempre mantenemos pan dentro de los límites reales del DOM (overflow vs stage).
   $: if (previewZoomOpen && zoomStageEl && zoomImgEl) {
     clampPanToStage();
+    if (previewFillWidthAlignPending) {
+      alignFillWidthToTop();
+    }
   }
 
   $: zoomImgTransform =
@@ -1198,9 +1260,41 @@
       previewPanMoved = false;
       return;
     }
+    if (e.target === e.currentTarget) return;
     previewPanX = 0;
     previewPanY = 0;
     toggleZoomCarousel();
+  }
+
+  async function moveCurrentZoomToDestination(destPath: string) {
+    if (!previewZoomPath) return;
+    try {
+      const out = await trackLoad(bridge.galleryMovePath(previewZoomPath, destPath));
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      previewZoomCanUndoMove = Number(out.moveResult?.moved ?? 0) > 0;
+      status = previewZoomCanUndoMove ? "Imagen movida al destino" : "No se movió la imagen";
+      previewZoomOpen = false;
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo mover la imagen al destino";
+    }
+  }
+
+  async function undoLastZoomMove() {
+    try {
+      const out = await trackLoad(bridge.galleryUndoLastMove());
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      const moved = Number(out.moveResult?.moved ?? 0);
+      previewZoomCanUndoMove = false;
+      status = moved > 0 ? "Movimiento revertido" : "No hay movimiento para deshacer";
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo deshacer el movimiento";
+    }
   }
 
   function onZoomImageLoad() {
@@ -1324,6 +1418,11 @@
   let destFormIdx: number | null = null;
   let destFormLabel = "";
   let destFormPath = "";
+  let routePickerOpen = true;
+  let confirmDeleteOpen = false;
+  let confirmDeleteTitle = "Confirmar eliminación";
+  let confirmDeleteDetail = "";
+  let confirmDeleteAction: (() => Promise<void>) | null = null;
 
   /** Menú contextual (clic derecho) en un chip de destino. */
   let destCtxMenu: { x: number; y: number; idx: number } | null = null;
@@ -1539,9 +1638,9 @@
     await loadInitial();
     if (folder) {
       try {
-        await loadFolder();
+        await loadFolder(false);
       } catch {
-        status = "No se pudo restaurar la última carpeta; revisa la ruta o pulsa Cargar.";
+        status = "No se pudo restaurar la última carpeta; revisa la ruta o selecciónala en el modal.";
       }
     }
     pollTimer = window.setInterval(() => {
@@ -1631,25 +1730,26 @@
       <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Retroceder" on:click={goBackFolder} disabled={folderBackStack.length === 0}>←</button>
       <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Avanzar" on:click={goForwardFolder} disabled={folderForwardStack.length === 0}>→</button>
       <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Carpeta superior" on:click={goUpFolder}>↑</button>
-      <input
-        id="gallery-folder-input"
-        class="om-input route__path"
-        type="text"
-        bind:value={folder}
-        placeholder="Ruta de carpeta…"
-        title="Pega la ruta o pulsa Examinar (app de escritorio)"
-      />
-      <button type="button" class="om-btn om-btn--primary" title="Explorador del sistema" on:click={pickGalleryFolder}>Examinar…</button>
+      <div class="route__path-wrap">
+        <input
+          id="gallery-folder-input"
+          class="om-input route__path"
+          type="text"
+          bind:value={folder}
+          placeholder="Ruta de carpeta…"
+          title="Pega la ruta o pulsa el icono de carpeta"
+          on:focus={() => (routePickerOpen = true)}
+        />
+        <button
+          type="button"
+          class="om-btn om-btn--ghost om-btn--icon route__path-action"
+          title={pinnedFolders.includes(folder.trim()) ? "Quitar anclaje de esta ruta" : "Anclar esta ruta"}
+          on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : pinFolder(folder))}
+        >{pinnedFolders.includes(folder.trim()) ? "★" : "☆"}</button>
+        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Cargar ruta" on:click={loadFolder}>⏎</button>
+        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Explorar carpeta" on:click={pickGalleryFolder}>📁</button>
+      </div>
       <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Recargar galería" on:click={reload}>↻</button>
-      <button
-        type="button"
-        class="om-btn om-btn--ghost om-btn--icon"
-        title={pinnedFolders.includes(folder.trim()) ? "Quitar anclaje de esta ruta" : "Anclar esta ruta"}
-        on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : pinFolder(folder))}
-      >
-        {pinnedFolders.includes(folder.trim()) ? "★" : "☆"}
-      </button>
-      <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Cargar</button>
     </div>
     <button
       type="button"
@@ -1664,6 +1764,62 @@
       </svg>
     </button>
   </header>
+
+  {#if routePickerOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim" role="presentation" on:click|self={() => (routePickerOpen = false)}>
+      <div
+        class="modal modal--route-picker om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="route-picker-title"
+        tabindex="-1"
+        on:click|stopPropagation={() => undefined}
+      >
+        <header class="modal__head">
+          <strong id="route-picker-title">Elegir ruta de galería</strong>
+          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (routePickerOpen = false)}>✕</button>
+        </header>
+        <section class="route-picker__body">
+          <div class="route-picker__input-row">
+            <input class="om-input route-picker__input" bind:value={folder} placeholder="Ruta de carpeta…" />
+            <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Explorar carpeta" on:click={pickGalleryFolder}>📁</button>
+            <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Abrir</button>
+          </div>
+          {#if pinnedFolders.length > 0}
+            <div class="recent-folders__head">
+              <span class="field-label">Rutas ancladas</span>
+            </div>
+            <div class="recent-folders__list">
+              {#each pinnedFolders as p}
+                <div class="recent-folders__chip-wrap">
+                  <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
+                    {p.length > 56 ? `${p.slice(0, 53)}…` : p}
+                  </button>
+                  <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Quitar anclaje" on:click={() => unpinFolder(p)}>★</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if recentUnpinnedFolders.length > 0}
+            <div class="recent-folders__head">
+              <span class="field-label">Rutas recientes</span>
+            </div>
+            <div class="recent-folders__list">
+              {#each recentUnpinnedFolders as p}
+                <div class="recent-folders__chip-wrap">
+                  <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
+                    {p.length > 56 ? `${p.slice(0, 53)}…` : p}
+                  </button>
+                  <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Anclar ruta" on:click={() => pinFolder(p)}>☆</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      </div>
+    </div>
+  {/if}
 
   {#if !destinationsMode}
     {#if !folder.trim() && (pinnedFolders.length > 0 || recentFolders.length > 0)}
@@ -1778,10 +1934,22 @@
                   {#if showThumbLabels || it.kind !== "image"}<span class="tile__name">{it.name}</span>{/if}
                 </div>
               {/each}
+              <div class="grid-end-spacer" aria-hidden="true"></div>
               </div>
               <div class="selection-float" role="toolbar" aria-label="Selección">
                 <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
                 <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--mini"
+                  disabled={Number(galleryState.selectedCount || 0) === 0}
+                  on:click={() =>
+                    openConfirmDelete(
+                      "Eliminar selección",
+                      `¿Eliminar ${galleryState.selectedCount} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+                      deleteSelectedGalleryItems
+                    )}
+                >Eliminar</button>
                 <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
                 <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
               </div>
@@ -2112,6 +2280,7 @@
                 previewPanX = 0;
                 previewPanY = 0;
                 clampPanToStage();
+                previewFillWidthAlignPending = previewZoomMode === "fillWidth";
                 if (previewZoomMode === "fillWidth") alignFillWidthToTop();
               }}
             >
@@ -2131,6 +2300,27 @@
               }}
             >{Math.round(previewZoomScale * 100)}%</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Acercar" on:click={() => zoomStep(0.2)}>＋</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact"
+              title="Mostrar destinos en fullscreen"
+              on:click={() => (previewZoomDestMode = !previewZoomDestMode)}
+            >Destinos</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact"
+              title="Eliminar imagen actual"
+              on:click={() =>
+                openConfirmDelete(
+                  "Eliminar imagen",
+                  "¿Eliminar la imagen actual? Esta acción no se puede deshacer.",
+                  deleteCurrentZoomImage
+                )}
+            >
+              <svg class="trash-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v8h-2V9zm4 0h2v8h-2V9zM7 9h2v8H7V9z" />
+              </svg>
+            </button>
             <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewZoomOpen = false)}>✕</button>
           </div>
         </header>
@@ -2158,11 +2348,25 @@
                 alt={previewZoomName}
                 style={`transform: ${zoomImgTransform};`}
                 on:load={onZoomImageLoad}
+                on:click|stopPropagation={() => undefined}
               />
               {#if zoomHudVisible}
                 <div class="zoom-mini" bind:this={zoomMiniEl}>
                   <img src={previewZoomDataUrl} alt="" />
                   <div class="zoom-mini__rect" style={zoomMiniRect}></div>
+                </div>
+              {/if}
+              {#if previewZoomDestMode}
+                <div class="zoom-dest-chips" class:zoom-dest-chips--carousel-hidden={!previewZoomCarouselVisible}>
+                  <button
+                    type="button"
+                    class="om-btn om-btn--ghost om-btn--compact"
+                    disabled={!previewZoomCanUndoMove}
+                    on:click={undoLastZoomMove}
+                  >Deshacer</button>
+                  {#each destRows as d, i (d.path + "\0zoom\0" + i)}
+                    <button type="button" class="zoom-dest-chip" title={d.path} on:click={() => moveCurrentZoomToDestination(d.path)}>{d.label}</button>
+                  {/each}
                 </div>
               {/if}
             </div>
@@ -2456,6 +2660,30 @@
     </div>
   {/if}
 
+  {#if confirmDeleteOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim" role="presentation" on:click|self={closeConfirmDelete}>
+      <div
+        class="modal modal--confirm om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-delete-title"
+        tabindex="-1"
+        on:click|stopPropagation={() => undefined}
+      >
+        <header class="modal__head">
+          <strong id="confirm-delete-title">{confirmDeleteTitle}</strong>
+          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={closeConfirmDelete}>✕</button>
+        </header>
+        <p class="settings-hint">{confirmDeleteDetail}</p>
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--ghost" on:click={closeConfirmDelete}>Cancelar</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={runConfirmDelete}>Eliminar</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if uiLoading}
     <div class="load-overlay" aria-busy="true" aria-live="polite">
       <div class="load-overlay__spinner"></div>
@@ -2493,6 +2721,14 @@
     flex-wrap: wrap;
     padding-block: 4px;
     padding-inline: 10px;
+  }
+
+  .tabs-bar.om-panel,
+  .route.om-panel,
+  .gallery.om-panel,
+  .preview.om-panel,
+  .pager.om-panel {
+    border-radius: var(--thumb-tile-radius, var(--om-radius-md));
   }
 
   .tabs__nav {
@@ -2577,7 +2813,32 @@
 
   .route__path {
     flex: 1;
-    min-width: min(280px, 100%);
+    min-width: 0;
+  }
+
+  .route__path-wrap {
+    flex: 1;
+    min-width: min(320px, 100%);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    border: 1px solid var(--om-border-default);
+    border-radius: var(--thumb-tile-radius, var(--om-radius-md));
+    background: color-mix(in oklab, var(--om-surface-2) 88%, transparent);
+  }
+
+  .route__path-wrap .route__path {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    padding-inline: 6px;
+  }
+
+  .route__path-action {
+    min-width: 1.8rem;
+    min-height: 1.8rem;
+    padding: 0 6px;
   }
 
   .field-label {
@@ -2585,6 +2846,45 @@
     font-weight: 600;
     color: var(--om-text-secondary);
     white-space: nowrap;
+  }
+
+  .om-range {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgb(124 140 255 / 0.44), rgb(94 228 212 / 0.34));
+    border: 1px solid rgb(255 255 255 / 0.18);
+    outline: none;
+  }
+
+  .om-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--om-accent) 72%, #fff);
+    border: 1px solid rgb(255 255 255 / 0.76);
+    box-shadow: 0 0 0 3px rgb(124 140 255 / 0.2);
+    cursor: pointer;
+  }
+
+  .om-range::-moz-range-track {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgb(124 140 255 / 0.44), rgb(94 228 212 / 0.34));
+    border: 1px solid rgb(255 255 255 / 0.18);
+  }
+
+  .om-range::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--om-accent) 72%, #fff);
+    border: 1px solid rgb(255 255 255 / 0.76);
+    box-shadow: 0 0 0 3px rgb(124 140 255 / 0.2);
+    cursor: pointer;
   }
 
   .content {
@@ -2641,6 +2941,10 @@
     overflow: hidden;
     min-height: 0;
     position: relative;
+  }
+
+  .gallery--with-float.om-panel {
+    padding-bottom: 0;
   }
 
   .gallery--with-float .gallery__scroll {
@@ -2835,6 +3139,12 @@
     box-sizing: border-box;
   }
 
+  .grid-end-spacer {
+    grid-column: 1 / -1;
+    height: 3.6rem;
+    pointer-events: none;
+  }
+
   :global(body.om-dragging) .splitter,
   :global(body.om-dragging) .splitter {
     pointer-events: none;
@@ -2895,9 +3205,11 @@
   }
 
   .tile.selected {
-    background: color-mix(in oklab, var(--om-accent) 24%, var(--om-surface-2));
-    border-color: color-mix(in oklab, var(--om-accent) 68%, var(--om-border-default));
-    box-shadow: 0 0 0 1px color-mix(in oklab, var(--om-accent) 52%, transparent);
+    background: color-mix(in oklab, var(--om-accent) 42%, var(--om-surface-2));
+    border-color: color-mix(in oklab, var(--om-accent) 84%, #ffffff);
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--om-accent) 76%, #ffffff),
+      0 0 18px rgb(124 140 255 / 0.3);
   }
 
   .tile.selected img,
@@ -3262,6 +3574,35 @@
     box-sizing: border-box;
   }
 
+  .modal--route-picker {
+    width: min(840px, 96vw);
+    max-height: min(88vh, 760px);
+  }
+
+  .route-picker__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--om-space-3);
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .route-picker__input-row {
+    display: flex;
+    align-items: center;
+    gap: var(--om-space-2);
+  }
+
+  .route-picker__input {
+    flex: 1;
+    min-width: min(260px, 100%);
+  }
+
+  .modal--confirm {
+    width: min(520px, 92vw);
+    max-height: min(72vh, 340px);
+  }
+
   .dest-form-body {
     display: flex;
     flex-direction: column;
@@ -3585,6 +3926,13 @@
     flex-wrap: wrap;
   }
 
+  .trash-ico {
+    width: 1rem;
+    height: 1rem;
+    display: block;
+    color: currentColor;
+  }
+
   .zoom-modal__body {
     min-width: 0;
     min-height: 0;
@@ -3609,6 +3957,46 @@
     overflow: hidden;
     cursor: default;
     position: relative;
+  }
+
+  .zoom-dest-chips {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: var(--om-space-3);
+    z-index: 7;
+    display: flex;
+    gap: var(--om-space-1);
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: min(900px, calc(100% - var(--om-space-4)));
+    padding: var(--om-space-1) var(--om-space-2);
+    border-radius: var(--om-radius-md);
+    background: rgb(8 10 18 / 0.72);
+    border: 1px solid rgb(255 255 255 / 0.12);
+    backdrop-filter: blur(8px);
+  }
+
+  .zoom-dest-chips--carousel-hidden {
+    bottom: var(--om-space-2);
+  }
+
+  .zoom-dest-chip {
+    border: 1px solid rgb(255 255 255 / 0.18);
+    background: rgb(255 255 255 / 0.07);
+    color: var(--om-text-secondary);
+    border-radius: 999px;
+    min-height: 1.9rem;
+    padding: 4px 12px;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .zoom-dest-chip:hover {
+    border-color: rgb(124 140 255 / 0.48);
+    background: rgb(124 140 255 / 0.16);
+    color: var(--om-text-primary);
   }
 
   .zoom-modal__img {

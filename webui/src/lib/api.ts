@@ -76,6 +76,22 @@ const devMockApi: WebApi = {
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
   }),
+  gallery_delete_selected: async () => ({
+    ...mockGalleryPayload(),
+    deleteResult: { deleted: 0, errors: 0 },
+  }),
+  gallery_delete_paths: async () => ({
+    ...mockGalleryPayload(),
+    deleteResult: { deleted: 0, errors: 0 },
+  }),
+  gallery_move_path: async () => ({
+    ...mockGalleryPayload(),
+    moveResult: { moved: 0, errors: 0 },
+  }),
+  gallery_undo_last_move: async () => ({
+    ...mockGalleryPayload(),
+    moveResult: { moved: 0, errors: 0 },
+  }),
   gallery_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
   destination_preview: async () => ({ items: [], cols: 4 }),
   destination_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
@@ -132,6 +148,10 @@ export const bridge = {
     call<any>("gallery_preview", path, width, height),
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMoveFromPreview: (paths: string[]) => call<any>("destination_move_from_preview", paths),
+  galleryDeleteSelected: () => call<any>("gallery_delete_selected"),
+  galleryDeletePaths: (paths: string[]) => call<any>("gallery_delete_paths", paths),
+  galleryMovePath: (srcPath: string, destPath: string) => call<any>("gallery_move_path", srcPath, destPath),
+  galleryUndoLastMove: () => call<any>("gallery_undo_last_move"),
   galleryThumbHq: (path: string, scale: number) => call<any>("gallery_thumb_hq", path, scale),
   destinationPreview: (path: string, scale: number, width: number) =>
     call<any>("destination_preview", path, scale, width),

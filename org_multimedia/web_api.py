@@ -126,6 +126,7 @@ class WebApi:
         # Candado solo para la caché de miniaturas (los workers no deben tomar `self.lock` mientras el hilo principal construye la página).
         self._thumb_cache_lock = threading.Lock()
         self._organizer_job: dict | None = None
+        self._last_gallery_move: tuple[Path, Path] | None = None
         # Caché (ruta, tamaño, perfil) -> (mtime, data_url)
         self._thumb_cache: dict[tuple[str, int, str], tuple[float, str | None]] = {}
 
@@ -443,6 +444,89 @@ class WebApi:
                 except Exception:
                     errors += 1
             self.selected.clear()
+        data = self.gallery_reload()
+        data["moveResult"] = {"moved": moved, "errors": errors}
+        return data
+
+    def gallery_delete_selected(self) -> dict:
+        """Elimina del disco las imágenes seleccionadas en la galería."""
+        deleted = 0
+        errors = 0
+        with self.lock:
+            for src in list(self.selected):
+                try:
+                    if src.is_file():
+                        src.unlink()
+                        deleted += 1
+                except Exception:
+                    errors += 1
+            self.selected.clear()
+        data = self.gallery_reload()
+        data["deleteResult"] = {"deleted": deleted, "errors": errors}
+        return data
+
+    def gallery_delete_paths(self, paths: list[str]) -> dict:
+        """Elimina una lista explícita de rutas (p. ej. imagen actual en fullscreen)."""
+        deleted = 0
+        errors = 0
+        unique_raw = []
+        seen: set[str] = set()
+        for raw in paths or []:
+            s = str(raw).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            unique_raw.append(s)
+        with self.lock:
+            for raw in unique_raw:
+                try:
+                    src = Path(raw).expanduser().resolve()
+                    if src.is_file():
+                        src.unlink()
+                        deleted += 1
+                except Exception:
+                    errors += 1
+            self.selected = {p for p in self.selected if p.exists()}
+        data = self.gallery_reload()
+        data["deleteResult"] = {"deleted": deleted, "errors": errors}
+        return data
+
+    def gallery_move_path(self, src_path: str, dest_path: str) -> dict:
+        """Mueve una sola imagen a un destino desde fullscreen."""
+        moved = 0
+        errors = 0
+        src = Path(src_path).expanduser().resolve()
+        dest_dir = Path(dest_path).expanduser().resolve()
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            if src.is_file():
+                target = ensure_unique_destination(dest_dir / src.name)
+                if src.resolve() != target.resolve():
+                    shutil.move(str(src), str(target))
+                    moved = 1
+                    self._last_gallery_move = (target, src)
+        except Exception:
+            errors = 1
+        data = self.gallery_reload()
+        data["moveResult"] = {"moved": moved, "errors": errors}
+        return data
+
+    def gallery_undo_last_move(self) -> dict:
+        """Revierte el último movimiento hecho desde fullscreen."""
+        moved = 0
+        errors = 0
+        pair = self._last_gallery_move
+        if pair is not None:
+            cur_path, prev_path = pair
+            try:
+                if cur_path.is_file():
+                    prev_path.parent.mkdir(parents=True, exist_ok=True)
+                    target = ensure_unique_destination(prev_path)
+                    shutil.move(str(cur_path), str(target))
+                    moved = 1
+                self._last_gallery_move = None
+            except Exception:
+                errors = 1
         data = self.gallery_reload()
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
