@@ -8,6 +8,7 @@ import os
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .fs_utils import ensure_unique_destination
@@ -57,6 +58,58 @@ def _img_to_data_url(path: Path, size: tuple[int, int]) -> str | None:
         return None
 
 
+def _img_to_data_url_contain(path: Path, max_w: int, max_h: int) -> str | None:
+    """Vista previa mostrando la imagen completa (sin recorte a 1:1)."""
+    if Image is None:
+        return None
+    try:
+        mw, mh = max(1, int(max_w)), max(1, int(max_h))
+        with Image.open(path) as im:
+            im = im.convert("RGBA")
+            im.thumbnail((mw, mh), Image.Resampling.LANCZOS)
+            bio = io.BytesIO()
+            im.save(bio, format="PNG")
+            payload = base64.b64encode(bio.getvalue()).decode("ascii")
+            return f"data:image/png;base64,{payload}"
+    except Exception:
+        return None
+
+
+def _thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 82) -> str | None:
+    """Miniatura cuadrada para la rejilla; JPEG reduce mucho el tamaño frente a PNG."""
+    if Image is None:
+        return None
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            if ImageOps is not None:
+                im = ImageOps.fit(im, (size, size), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            else:
+                im.thumbnail((size, size), Image.Resampling.LANCZOS)
+            bio = io.BytesIO()
+            im.save(bio, format="JPEG", quality=quality, optimize=True)
+            payload = base64.b64encode(bio.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        return None
+
+
+def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 82) -> str | None:
+    """Miniatura modal destino: encaja en size×size manteniendo proporción."""
+    if Image is None:
+        return None
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((size, size), Image.Resampling.LANCZOS)
+            bio = io.BytesIO()
+            im.save(bio, format="JPEG", quality=quality, optimize=True)
+            payload = base64.b64encode(bio.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        return None
+
+
 class WebApi:
     """Estado y operaciones principales para la UI web."""
 
@@ -68,24 +121,28 @@ class WebApi:
         self.selected: set[Path] = set()
         self.gallery_page = 0
         self.lock = threading.RLock()
+        # Candado solo para la caché de miniaturas (los workers no deben tomar `self.lock` mientras el hilo principal construye la página).
+        self._thumb_cache_lock = threading.Lock()
         self._organizer_job: dict | None = None
-        # Caché (ruta resuelta, tamaño px) -> (mtime, data_url) para no re-encodear PNG en cada clic
-        self._thumb_cache: dict[tuple[str, int], tuple[float, str | None]] = {}
+        # Caché (ruta, tamaño, formato) -> (mtime, data_url)
+        self._thumb_cache: dict[tuple[str, int, str], tuple[float, str | None]] = {}
 
     def _clear_thumb_cache(self) -> None:
         self._thumb_cache.clear()
 
     def _thumb_data_url_cached(self, path: Path, thumb_px: int) -> str | None:
-        key = (str(path.resolve()), thumb_px)
+        key = (str(path.resolve()), thumb_px, "jpeg")
         try:
             mtime = path.stat().st_mtime
         except OSError:
             return None
-        hit = self._thumb_cache.get(key)
-        if hit is not None and hit[0] == mtime:
-            return hit[1]
-        data = _img_to_data_url(path, (thumb_px, thumb_px))
-        self._thumb_cache[key] = (mtime, data)
+        with self._thumb_cache_lock:
+            hit = self._thumb_cache.get(key)
+            if hit is not None and hit[0] == mtime:
+                return hit[1]
+        data = _thumb_jpeg_data_url_square(path, thumb_px)
+        with self._thumb_cache_lock:
+            self._thumb_cache[key] = (mtime, data)
         return data
 
     def _merge_recent_folder(self, path_str: str) -> None:
@@ -111,8 +168,8 @@ class WebApi:
         }
 
     def _thumbs_per_page(self) -> int:
-        n = int(self.settings.get("gallery_thumbs_per_page", 120))
-        return max(30, min(300, n))
+        n = int(self.settings.get("gallery_thumbs_per_page", 48))
+        return max(12, min(120, n))
 
     def _total_pages(self) -> int:
         total = len(self.ordered_paths)
@@ -159,16 +216,24 @@ class WebApi:
             for sub in self.subfolders:
                 items.append({"kind": "folder", "name": sub.name, "path": str(sub), "thumbDataUrl": None})
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
-        for p in self.ordered_paths[s:e]:
-            items.append(
-                {
-                    "kind": "image",
-                    "name": p.name,
-                    "path": str(p),
-                    "selected": p in self.selected,
-                    "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px),
-                }
-            )
+        slice_paths = self.ordered_paths[s:e]
+        selected_frozenset = frozenset(self.selected)
+
+        def _one_image_item(p: Path) -> dict:
+            return {
+                "kind": "image",
+                "name": p.name,
+                "path": str(p),
+                "selected": p in selected_frozenset,
+                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px),
+            }
+
+        if not slice_paths:
+            return items
+        max_workers = min(8, max(1, len(slice_paths)))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            image_items = list(pool.map(_one_image_item, slice_paths))
+        items.extend(image_items)
         return items
 
     def gallery_load_folder(self, raw_path: str) -> dict:
@@ -246,7 +311,7 @@ class WebApi:
 
     def gallery_preview(self, path: str, width: int, height: int) -> dict:
         p = Path(path)
-        data_url = _img_to_data_url(p, (max(80, int(width)), max(80, int(height))))
+        data_url = _img_to_data_url_contain(p, max(80, int(width)), max(80, int(height)))
         return {"path": str(p), "name": p.name, "dataUrl": data_url}
 
     def destination_move_selected(self, dest_path: str) -> dict:
@@ -278,7 +343,11 @@ class WebApi:
         items = []
         for p in paths:
             items.append(
-                {"name": p.name, "path": str(p), "thumbDataUrl": _img_to_data_url(p, (thumb, thumb))}
+                {
+                    "name": p.name,
+                    "path": str(p),
+                    "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(p, thumb),
+                }
             )
         return {"items": items, "cols": cols}
 

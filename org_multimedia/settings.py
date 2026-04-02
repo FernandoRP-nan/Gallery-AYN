@@ -64,9 +64,9 @@ def load_app_settings() -> dict:
         if "gallery_show_thumb_filename" not in data:
             data["gallery_show_thumb_filename"] = True
         if "gallery_thumbs_per_page" not in data:
-            data["gallery_thumbs_per_page"] = 120
+            data["gallery_thumbs_per_page"] = 48
         else:
-            data["gallery_thumbs_per_page"] = int(data["gallery_thumbs_per_page"])
+            data["gallery_thumbs_per_page"] = max(12, min(120, int(data["gallery_thumbs_per_page"])))
         if "gallery_scroll_top_on_page_change" not in data:
             data["gallery_scroll_top_on_page_change"] = True
         if "gallery_compact_thumb_padding" not in data:

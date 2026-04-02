@@ -45,6 +45,7 @@ const devMockApi: WebApi = {
       dest_preview_modal_w: 0.9,
       dest_preview_modal_h: 0.8,
       gallery_recent_folders: [] as string[],
+      gallery_thumbs_per_page: 48,
     },
     gallery: mockGalleryState(),
     destinations: [],

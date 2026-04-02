@@ -18,9 +18,13 @@
   let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null }> = [];
   let previewScale = 1;
   let previewDestPath = "";
-  let activeTab: "ruta" | "destinos" = "ruta";
-  /** Panel organizador en ventana flotante (la galería sigue visible detrás). */
+  let activeTab: "ruta" | "destinos" | "organizar" = "ruta";
+  /** Panel organizador en ventana flotante (tarea por lotes). */
   let orgPanelOpen = false;
+  let settingsOpen = false;
+  let thumbsPerPage = 48;
+  let thumbsPerPageBackup = 48;
+  let pageJumpDraft = 1;
   let previewRatio = 0.4;
   /** Modal “ver carpeta destino”: ~80 % del viewport (sin sliders). */
   const DEST_MODAL_FRAC = 0.8;
@@ -110,6 +114,8 @@
     recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
       ? (data.settings.gallery_recent_folders as string[])
       : [];
+    thumbsPerPage = Math.min(120, Math.max(12, Number(data.settings?.gallery_thumbs_per_page ?? 48)));
+    pageJumpDraft = Number(data.gallery?.page ?? 1);
   };
 
   const loadFolder = async () => {
@@ -117,6 +123,7 @@
     state = out.state;
     items = out.items;
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
+    pageJumpDraft = out.state.page;
     status = `Cargada carpeta: ${folder}`;
   };
 
@@ -161,6 +168,31 @@
     const out = await trackLoad(bridge.galleryGoPage(page));
     state = out.state;
     items = out.items;
+    pageJumpDraft = out.state.page;
+  };
+
+  const jumpToPageDraft = async () => {
+    const n = Math.min(state.totalPages, Math.max(1, Math.round(Number(pageJumpDraft)) || 1));
+    pageJumpDraft = n;
+    await goPage(n);
+  };
+
+  const openSettingsModal = () => {
+    thumbsPerPageBackup = thumbsPerPage;
+    settingsOpen = true;
+  };
+
+  const cancelSettingsModal = () => {
+    thumbsPerPage = thumbsPerPageBackup;
+    settingsOpen = false;
+  };
+
+  const saveSettingsModal = async () => {
+    const n = Math.min(120, Math.max(12, Math.round(Number(thumbsPerPage)) || 48));
+    thumbsPerPage = n;
+    await bridge.settingsPatch({ gallery_thumbs_per_page: n });
+    await reload();
+    settingsOpen = false;
   };
 
   const clickItem = async (it: GalleryItem) => {
@@ -173,6 +205,7 @@
         items = out.items;
         folder = state.folder;
         if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
+        pageJumpDraft = out.state.page;
         return;
       }
       if (activeTab === "destinos") {
@@ -188,7 +221,7 @@
         const pathRef = it.path;
         requestAnimationFrame(() => {
           bridge
-            .galleryPreview(pathRef, 400, 400)
+            .galleryPreview(pathRef, 1200, 900)
             .then((pr) => {
               selectedPreview = pr;
             })
@@ -203,7 +236,7 @@
         const pathRef = it.path;
         requestAnimationFrame(() => {
           bridge
-            .galleryPreview(pathRef, 400, 400)
+            .galleryPreview(pathRef, 1200, 900)
             .then((pr) => {
               selectedPreview = pr;
             })
@@ -437,18 +470,26 @@
 <svelte:window
   on:keydown={(e) => {
     if (e.key !== "Escape") return;
-    if (previewOpen) previewOpen = false;
+    if (settingsOpen) settingsOpen = false;
+    else if (previewOpen) previewOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
   }}
 />
 
-<main class="app" class:app--with-actions={activeTab === "destinos"}>
-  <header class="tabs om-panel">
+<main class="app" class:app--extra-row={activeTab === "destinos" || activeTab === "organizar"}>
+  <header class="tabs-bar om-panel">
     <nav class="tabs__nav">
       <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "ruta"} on:click={() => (activeTab = "ruta")}>Ruta</button>
       <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "destinos"} on:click={() => (activeTab = "destinos")}>Destinos</button>
-      <button type="button" class="om-btn om-btn--ghost" title="Abrir organizador en ventana flotante" on:click={() => (orgPanelOpen = true)}>Organizar…</button>
+      <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "organizar"} on:click={() => (activeTab = "organizar")}>Organizar</button>
     </nav>
+    <div class="grow"></div>
+    <button
+      type="button"
+      class="om-btn om-btn--ghost om-btn--icon"
+      title="Ajustes"
+      aria-label="Ajustes"
+      on:click={openSettingsModal}>⚙</button>
   </header>
 
   <section class="route om-panel">
@@ -506,6 +547,34 @@
       <button type="button" class="om-btn om-btn--ghost" on:click={invertSelection}>Invertir</button>
       <span class="pill">{state.selectedCount} seleccionadas</span>
     </section>
+    <section class="dest-panel om-panel" aria-label="Carpetas destino">
+      <span class="field-label dest-panel__title">Carpetas destino</span>
+      <div class="dest-grid-wrap dest-grid-wrap--embedded">
+        {#each destinations as d}
+          <div
+            class="dest-card"
+            role="group"
+            aria-label="Destino {d.label}"
+            on:dragover|preventDefault
+            on:drop|preventDefault={() => moveToDest(d.path)}
+          >
+            <div class="dest-card__head">
+              <span class="dest-card__title">{d.label}</span>
+              <span class="dest-card__path">{d.path}</span>
+            </div>
+            <div class="dest-card__actions">
+              <button type="button" class="om-btn om-btn--primary" on:click={() => moveToDest(d.path)}>Mover aquí</button>
+              <button type="button" class="om-btn om-btn--ghost" on:click={() => openDestPreview(d.path)}>Ver carpeta</button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {:else if activeTab === "organizar"}
+    <section class="om-panel org-tab-bar">
+      <p class="org-tab-bar__text">Organización por lotes (comics, duplicados, etc.) en una ventana aparte.</p>
+      <button type="button" class="om-btn om-btn--primary" on:click={() => (orgPanelOpen = true)}>Abrir panel de organización…</button>
+    </section>
   {/if}
 
   <section
@@ -552,33 +621,24 @@
     </aside>
   </section>
 
-  <section class="dest-grid-wrap om-panel" hidden={activeTab !== "destinos"}>
-    {#each destinations as d}
-      <div
-        class="dest-card"
-        role="group"
-        aria-label="Destino {d.label}"
-        on:dragover|preventDefault
-        on:drop|preventDefault={() => moveToDest(d.path)}
-      >
-        <div class="dest-card__head">
-          <span class="dest-card__title">{d.label}</span>
-          <span class="dest-card__path">{d.path}</span>
-        </div>
-        <div class="dest-card__actions">
-          <button type="button" class="om-btn om-btn--primary" on:click={() => moveToDest(d.path)}>Mover aquí</button>
-          <button type="button" class="om-btn om-btn--ghost" on:click={() => openDestPreview(d.path)}>Ver carpeta</button>
-        </div>
-      </div>
-    {/each}
-  </section>
-
   <footer class="pager om-panel">
     <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(1)}>|«</button>
     <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(Math.max(1, state.page - 1))}>‹</button>
-    <span class="pager__info">Página {state.page} / {state.totalPages} · {state.total} imágenes</span>
+    <span class="pager__info">{state.total} imágenes · página</span>
+    <label class="pager__jump">
+      <input
+        class="om-input pager__jump-input"
+        type="number"
+        min="1"
+        max={state.totalPages}
+        bind:value={pageJumpDraft}
+        on:keydown={(e) => e.key === "Enter" && jumpToPageDraft()}
+      />
+      <span class="pager__jump-total">/ {state.totalPages}</span>
+    </label>
     <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(Math.min(state.totalPages, state.page + 1))}>›</button>
     <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(state.totalPages)}>»|</button>
+    <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
     <div class="grow"></div>
     <span class="status-line">{status}</span>
   </footer>
@@ -691,6 +751,41 @@
     </div>
   {/if}
 
+  {#if settingsOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim" role="presentation" on:click|self={cancelSettingsModal}>
+      <div
+        class="modal modal--settings om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        tabindex="-1"
+        on:click|stopPropagation={() => undefined}
+      >
+        <header class="modal__head">
+          <strong id="settings-title">Ajustes</strong>
+          <button type="button" class="om-btn om-btn--ghost" on:click={cancelSettingsModal}>Cerrar</button>
+        </header>
+        <section class="settings-body">
+          <label class="field-label" for="set-thumbs-page">Imágenes por página</label>
+          <input
+            id="set-thumbs-page"
+            class="om-input"
+            type="number"
+            min="12"
+            max="120"
+            bind:value={thumbsPerPage}
+          />
+          <p class="settings-hint">Valores más bajos (p. ej. 24–48) aceleran el cambio de página; el máximo es 120.</p>
+        </section>
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--ghost" on:click={cancelSettingsModal}>Cancelar</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={saveSettingsModal}>Guardar</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if uiLoading}
     <div class="load-overlay" aria-busy="true" aria-live="polite">
       <div class="load-overlay__spinner"></div>
@@ -707,8 +802,8 @@
     height: 100%;
     display: grid;
     gap: var(--om-space-4);
-    /* Ruta: tabs · ruta · galería (crece) · destinos · paginador */
-    grid-template-rows: auto auto 1fr auto auto;
+    /* tabs · ruta · [opcional] · galería · paginador */
+    grid-template-rows: auto auto 1fr auto;
     padding: var(--om-space-4) var(--om-space-5);
     font-family: var(--om-font-sans);
     color: var(--om-text-primary);
@@ -716,9 +811,16 @@
     box-sizing: border-box;
   }
 
-  .app.app--with-actions {
-    /* Destinos: fila extra para seleccionar página / invertir / etc. */
-    grid-template-rows: auto auto auto 1fr auto auto;
+  .app.app--extra-row {
+    /* Barra bajo ruta: acciones Destinos o panel Organizar */
+    grid-template-rows: auto auto auto 1fr auto;
+  }
+
+  .tabs-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--om-space-3);
+    flex-wrap: wrap;
   }
 
   .tabs__nav {
@@ -935,10 +1037,35 @@
     white-space: nowrap;
   }
 
+  .dest-panel__title {
+    display: block;
+    margin-bottom: var(--om-space-3);
+  }
+
+  .org-tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--om-space-4);
+    justify-content: space-between;
+  }
+
+  .org-tab-bar__text {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--om-text-secondary);
+    max-width: min(520px, 100%);
+    line-height: 1.45;
+  }
+
   .dest-grid-wrap {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: var(--om-space-4);
+  }
+
+  .dest-grid-wrap--embedded {
+    margin: 0;
   }
 
   .dest-card {
@@ -986,6 +1113,31 @@
     align-items: center;
     gap: var(--om-space-2);
     flex-wrap: wrap;
+  }
+
+  .pager__jump {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--om-space-1);
+    font-size: 0.8125rem;
+    color: var(--om-text-secondary);
+  }
+
+  .pager__jump-input {
+    width: 4.25rem;
+    min-height: 2rem;
+    padding: var(--om-space-1) var(--om-space-2);
+    text-align: center;
+  }
+
+  .pager__jump-total {
+    font-weight: 600;
+    color: var(--om-text-primary);
+  }
+
+  .om-btn--compact {
+    padding: var(--om-space-1) var(--om-space-3);
+    font-size: 0.8125rem;
   }
 
   .pager__info,
@@ -1111,6 +1263,41 @@
     z-index: 40;
   }
 
+  .overlay--dim {
+    background: rgb(4 6 14 / 0.72);
+    z-index: 45;
+  }
+
+  .modal--settings {
+    width: min(420px, 92vw);
+    max-height: min(90vh, 560px);
+    display: flex;
+    flex-direction: column;
+    gap: var(--om-space-4);
+    padding: var(--om-space-5);
+    box-sizing: border-box;
+  }
+
+  .settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--om-space-2);
+  }
+
+  .settings-hint {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--om-text-muted);
+    line-height: 1.4;
+  }
+
+  .settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--om-space-2);
+    flex-wrap: wrap;
+  }
+
   .modal {
     display: flex;
     flex-direction: column;
@@ -1175,9 +1362,12 @@
 
   .pv-tile img {
     width: 100%;
-    aspect-ratio: 1;
-    object-fit: cover;
+    height: auto;
+    max-height: 240px;
+    object-fit: contain;
+    object-position: center;
     border-radius: 6px;
+    background: rgb(0 0 0 / 0.2);
   }
 
   .pv-tile__name {
