@@ -56,13 +56,6 @@
   let dragWinMove: ((ev: DragEvent) => void) | null = null;
   let dragWinEnd: (() => void) | null = null;
 
-  /** Último segmento de ruta para chips compactos. */
-  function pathBasename(p: string): string {
-    const s = p.replace(/\\/g, "/").replace(/\/+$/, "");
-    const i = s.lastIndexOf("/");
-    return i >= 0 ? s.slice(i + 1) || s : s;
-  }
-
   let splitDrag = false;
   /** Contador para overlay de carga (carpetas, API, etc.). */
   let loadCount = 0;
@@ -468,6 +461,8 @@
 
   /** Tras dragend/drop, el navegador suele disparar un click espurio en la miniatura. */
   let suppressNextGalleryClick = false;
+  /** Ignorar clics justo tras soltar en un destino (evita abrir vista previa por el click fantasma). */
+  let ignoreDestCardClickUntil = 0;
 
   function clearGhostListeners() {
     if (dragWinMove) {
@@ -528,8 +523,16 @@
   function onDestDrop(e: DragEvent, destPath: string) {
     e.preventDefault();
     e.stopPropagation();
+    ignoreDestCardClickUntil = Date.now() + 450;
     endDragSessionAfterGesture();
     moveToDest(destPath);
+  }
+
+  /** Clic en la tarjeta (sin botón): vista previa de carpeta; el drop sigue moviendo archivos. */
+  function onDestCardClick(e: MouseEvent, path: string) {
+    if (Date.now() < ignoreDestCardClickUntil) return;
+    if ((e.target as HTMLElement).closest("button")) return;
+    openDestPreview(path);
   }
 
   /** Celdas de ancho fijo (sin 1fr) para que cada paso del slider se note al cambiar columnas. */
@@ -737,22 +740,25 @@
         <span class="field-label dest-panel__title">Carpetas destino</span>
         <div class="dest-grid-wrap dest-grid-wrap--embedded dest-grid-wrap--scroll">
           {#each destinations as d}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <div
               class="dest-card"
               role="group"
               aria-label="Destino {d.label}"
+              title={d.path}
+              on:click={(e) => onDestCardClick(e, d.path)}
               on:dragenter={(e) => e.preventDefault()}
               on:dragover={(e) => e.preventDefault()}
               on:drop={(e) => onDestDrop(e, d.path)}
             >
-              <span class="dest-card__chip-line" title={`${d.label}\n${d.path}`}>{pathBasename(d.path)}</span>
               <div class="dest-card__head">
                 <span class="dest-card__title">{d.label}</span>
                 <span class="dest-card__path">{d.path}</span>
               </div>
               <div class="dest-card__actions">
-                <button type="button" class="om-btn om-btn--primary" on:click={() => moveToDest(d.path)}>Mover aquí</button>
-                <button type="button" class="om-btn om-btn--ghost" on:click={() => openDestPreview(d.path)}>Ver carpeta</button>
+                <button type="button" class="om-btn om-btn--primary" on:click|stopPropagation={() => moveToDest(d.path)}>Mover aquí</button>
+                <button type="button" class="om-btn om-btn--ghost" on:click|stopPropagation={() => openDestPreview(d.path)}>Ver carpeta</button>
               </div>
             </div>
           {/each}
@@ -1142,52 +1148,30 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: visible;
+    container-type: size;
+    container-name: dest-panel;
+  }
+
+  /* Sobrescribe el padding de .om-panel (16px) para ganar área útil a las chips. */
+  .dest-panel.dest-panel--bottom.om-panel {
+    padding: var(--om-space-2) var(--om-space-3);
+  }
+
+  @container dest-panel (max-height: 200px) {
+    .dest-panel__title {
+      margin-bottom: var(--om-space-2);
+      font-size: 0.65rem;
+    }
   }
 
   .dest-grid-wrap--scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
+    overflow-x: auto;
     container-type: size;
     container-name: dest-chips;
-  }
-
-  /* Una línea: solo nombre de carpeta (último segmento de ruta); título + botones ocultos. */
-  .dest-card__chip-line {
-    display: none;
-    width: 100%;
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--om-text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.35;
-  }
-
-  /* Altura baja del área con scroll = vista chip (nombre de carpeta = último segmento). */
-  @container dest-chips (max-height: 132px) {
-    .dest-grid-wrap--scroll {
-      grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-      gap: var(--om-space-2);
-    }
-
-    .dest-card {
-      padding: var(--om-space-2) var(--om-space-3);
-      gap: 0;
-      box-shadow: var(--om-shadow-sm);
-      border-radius: var(--om-radius-md);
-    }
-
-    .dest-card__chip-line {
-      display: block;
-    }
-
-    .dest-card__head,
-    .dest-card__actions {
-      display: none;
-    }
   }
 
   .gallery--with-float {
@@ -1401,6 +1385,10 @@
     margin-bottom: var(--om-space-3);
   }
 
+  .dest-panel--bottom .dest-panel__title {
+    margin-bottom: var(--om-space-2);
+  }
+
   .org-tab-bar {
     display: flex;
     flex-wrap: wrap;
@@ -1437,6 +1425,7 @@
     gap: var(--om-space-4);
     box-shadow: var(--om-shadow-md);
     transition: box-shadow var(--om-transition), border-color var(--om-transition);
+    cursor: pointer;
   }
 
   .dest-card:hover {
@@ -1465,6 +1454,59 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--om-space-2);
+  }
+
+  /* Vista chip: solo título; más compacta que la tarjeta normal (reglas base van antes y no deben pisar esto). */
+  @container dest-chips (max-height: 120px) {
+    .dest-grid-wrap--scroll {
+      display: flex;
+      flex-wrap: wrap;
+      align-content: flex-start;
+      align-items: flex-start;
+      gap: 8px;
+      row-gap: 8px;
+    }
+
+    /* Ancho al texto (hasta un máximo); sin flex-grow que deja hueco vacío. */
+    .dest-grid-wrap--scroll > .dest-card {
+      flex: 0 0 auto;
+      align-self: flex-start;
+      width: fit-content;
+      max-width: min(22rem, 100%);
+      min-width: 0;
+      box-sizing: border-box;
+      padding: 6px 12px;
+      gap: 0;
+      box-shadow: var(--om-shadow-sm);
+      border-radius: var(--om-radius-sm);
+      cursor: pointer;
+    }
+
+    .dest-card__head {
+      gap: 0;
+      min-width: 0;
+      flex: 0 0 auto;
+      width: fit-content;
+      max-width: 100%;
+    }
+
+    .dest-card__path {
+      display: none;
+    }
+
+    .dest-card__actions {
+      display: none;
+    }
+
+    .dest-card__title {
+      font-size: 0.875rem;
+      font-weight: 600;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
   }
 
   .pager {
