@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "organizador-multimedia"
+version = "0.1.0"
+description = "Galería AYN — galería y organización multimedia (interfaz web embebida, PyWebView)"
+requires-python = ">=3.10"
+dependencies = [
+    "Pillow",
+    "pywebview",
+]
+
+[project.optional-dependencies]
+qt = [
+    "PyQt6",
+    "PyQt6-WebEngine",
+    "qtpy",
+]
+
+[project.scripts]
+organizador = "org_multimedia.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["org_multimedia*"]

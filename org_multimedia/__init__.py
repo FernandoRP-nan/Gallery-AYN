@@ -1,4 +1,4 @@
-"""Organizador multimedia: submodulos por responsabilidad (motor, UI, ajustes)."""
+"""Galería AYN — submódulos por responsabilidad (motor, UI, ajustes)."""
 
 from .app import main
 from .media_organizer import MediaOrganizer, OrganizeStats

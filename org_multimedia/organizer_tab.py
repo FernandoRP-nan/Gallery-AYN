@@ -19,7 +19,7 @@ class OrganizerApp:
     def __init__(self, parent: ttk.Frame) -> None:
         self.parent = parent
         self.root = parent.winfo_toplevel()
-        self.root.title("Organizador Multimedia")
+        self.root.title("Galería AYN")
         self.root.geometry("900x620")
         self.root.minsize(800, 560)
         self.root.resizable(True, True)

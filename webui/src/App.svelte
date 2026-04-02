@@ -1977,7 +1977,7 @@
       return;
     }
     orgRunning = true;
-    status = "Organizador iniciado";
+    status = "Galería AYN iniciada";
   };
 
   const cancelOrganizer = async () => {

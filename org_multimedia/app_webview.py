@@ -36,7 +36,7 @@ def main() -> None:
     settings = load_app_settings()
     api = WebApi()
     window = webview.create_window(
-        "Organizador Multimedia",
+        "Galería AYN",
         _resolve_frontend_url(),
         js_api=api,
         width=1280,

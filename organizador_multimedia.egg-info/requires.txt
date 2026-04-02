@@ -1,0 +1,7 @@
+Pillow
+pywebview
+
+[qt]
+PyQt6
+PyQt6-WebEngine
+qtpy

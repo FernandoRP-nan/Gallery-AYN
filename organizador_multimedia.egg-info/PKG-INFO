@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: organizador-multimedia
+Version: 0.1.0
+Summary: Organizador de multimedia con interfaz web embebida (PyWebView)
+Requires-Python: >=3.10
+Requires-Dist: Pillow
+Requires-Dist: pywebview
+Provides-Extra: qt
+Requires-Dist: PyQt6; extra == "qt"
+Requires-Dist: PyQt6-WebEngine; extra == "qt"
+Requires-Dist: qtpy; extra == "qt"

@@ -1,0 +1,2 @@
+[console_scripts]
+organizador = org_multimedia.cli:main
