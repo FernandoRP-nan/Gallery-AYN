@@ -7,6 +7,8 @@ from pathlib import Path
 
 from .linux_gui_env import prepare_linux_gui_env
 
+from .pywebview_bridge_return import patch_js_bridge_return_value
+from .pywebview_qt_json import patch_qt_qjson_bridge
 from .settings import load_app_settings
 from .web_api import WebApi
 
@@ -27,6 +29,9 @@ def _resolve_frontend_url() -> str:
 def main() -> None:
     prepare_linux_gui_env()
     import webview  # type: ignore
+
+    patch_js_bridge_return_value()
+    patch_qt_qjson_bridge()
 
     settings = load_app_settings()
     api = WebApi()

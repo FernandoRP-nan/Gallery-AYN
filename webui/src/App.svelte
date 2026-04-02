@@ -8,9 +8,10 @@
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
   let folder = "";
-  let state: any = { page: 1, totalPages: 1, total: 0, selectedCount: 0 };
+  let galleryState: any = { page: 1, totalPages: 1, total: 0, selectedCount: 0 };
   let items: GalleryItem[] = [];
-  let destinations: Array<{ label: string; path: string }> = [];
+  /** Carpetas destino (mismo patrón reactivo que `items`: `let` + asignación tras el API). */
+  let destRows: Array<{ label: string; path: string }> = [];
   let selectedPreview: { path: string; name: string; dataUrl: string | null } | null = null;
   let status = "Listo";
   let thumbScale = 1;
@@ -104,9 +105,45 @@
     });
   }
 
+  /** Destinos: la API puede devolverlos en la raíz, dentro de settings, o el payload puede ser el array. */
+  function normalizeDestinationsFromPayload(data: any): Array<{ label: string; path: string }> {
+    const raw = Array.isArray(data)
+      ? data
+      : (data?.destinations ?? data?.settings?.destinations);
+    if (!Array.isArray(raw)) return [];
+    const out: Array<{ label: string; path: string }> = [];
+    for (const x of raw) {
+      if (!x || typeof x !== "object") continue;
+      const o = x as { path?: string; label?: string; folder?: string; dir?: string };
+      const path = String(o.path ?? o.folder ?? o.dir ?? "").trim();
+      if (!path) continue;
+      const label = String(o.label ?? "").trim() || path;
+      out.push({ label, path });
+    }
+    return out;
+  }
+
+  /** Prioriza destinations_get (payload pequeño); get_initial_state a veces falla el parse en Qt. */
+  async function syncDestinationsFromApi() {
+    try {
+      const d = await bridge.destinationsGet();
+      destRows = normalizeDestinationsFromPayload(d);
+    } catch {
+      try {
+        const data = await bridge.getInitialState();
+        destRows = normalizeDestinationsFromPayload(data);
+      } catch {
+        destRows = [];
+      }
+    }
+  }
+
+  async function refreshDestinationsFromServer() {
+    await syncDestinationsFromApi();
+  }
+
   const loadInitial = async () => {
     const data = await trackLoad(bridge.getInitialState());
-    destinations = data.destinations ?? [];
     thumbScale = Number(data.settings?.gallery_thumb_scale ?? 1);
     previewScale = Number(data.settings?.dest_preview_thumb_scale ?? 1);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
@@ -114,17 +151,18 @@
     const last = (data.settings?.gallery_last_folder ?? "").trim();
     folder = (data.gallery?.folder ?? last) || "";
     orgPath = folder || orgPath;
-    state = data.gallery ?? state;
+    galleryState = data.gallery ?? galleryState;
     recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
       ? (data.settings.gallery_recent_folders as string[])
       : [];
     thumbsPerPage = Math.min(120, Math.max(12, Number(data.settings?.gallery_thumbs_per_page ?? 48)));
     pageJumpDraft = Number(data.gallery?.page ?? 1);
+    await syncDestinationsFromApi();
   };
 
   const loadFolder = async () => {
     const out = await trackLoad(bridge.galleryLoadFolder(folder));
-    state = out.state;
+    galleryState = out.state;
     items = out.items;
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
     pageJumpDraft = out.state.page;
@@ -164,19 +202,19 @@
   const reload = async (opts?: { silent?: boolean }) => {
     const p = bridge.galleryReload();
     const out = opts?.silent ? await p : await trackLoad(p);
-    state = out.state;
+    galleryState = out.state;
     items = out.items;
   };
 
   const goPage = async (page: number) => {
     const out = await trackLoad(bridge.galleryGoPage(page));
-    state = out.state;
+    galleryState = out.state;
     items = out.items;
     pageJumpDraft = out.state.page;
   };
 
   const jumpToPageDraft = async () => {
-    const n = Math.min(state.totalPages, Math.max(1, Math.round(Number(pageJumpDraft)) || 1));
+    const n = Math.min(galleryState.totalPages, Math.max(1, Math.round(Number(pageJumpDraft)) || 1));
     pageJumpDraft = n;
     await goPage(n);
   };
@@ -209,16 +247,16 @@
     try {
       if (it.kind === "folder" || it.kind === "folder_up") {
         const out = await trackLoad(bridge.galleryOpenFolderTile(it.path));
-        state = out.state;
+        galleryState = out.state;
         items = out.items;
-        folder = state.folder;
+        folder = galleryState.folder;
         if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
         pageJumpDraft = out.state.page;
         return;
       }
       if (activeTab === "destinos") {
         const out = await bridge.galleryToggleSelect(it.path);
-        state = out.state;
+        galleryState = out.state;
         items = out.items;
         const row = out.items?.find((x: GalleryItem) => x.path === it.path);
         selectedPreview = {
@@ -258,23 +296,23 @@
 
   const selectPage = async () => {
     const out = await bridge.gallerySelectPage();
-    state = out.state;
+    galleryState = out.state;
     items = out.items;
   };
   const clearSelection = async () => {
     const out = await bridge.galleryClearSelection();
-    state = out.state;
+    galleryState = out.state;
     items = out.items;
   };
   const invertSelection = async () => {
     const out = await bridge.galleryInvertSelection();
-    state = out.state;
+    galleryState = out.state;
     items = out.items;
   };
 
   const moveToDest = async (path: string) => {
     const out = await trackLoad(bridge.destinationMoveSelected(path));
-    state = out.state;
+    galleryState = out.state;
     items = out.items;
     status = `Movidas ${out.moveResult?.moved ?? 0} · errores ${out.moveResult?.errors ?? 0}`;
   };
@@ -340,7 +378,7 @@
     return out;
   }
 
-  $: pageLinks = googlePageItems(Number(state.page) || 1, Number(state.totalPages) || 1);
+  $: pageLinks = googlePageItems(Number(galleryState.page) || 1, Number(galleryState.totalPages) || 1);
 
   function updateSplitFromClientX(clientX: number) {
     const el = document.querySelector(".content");
@@ -464,6 +502,16 @@
   /** Ignorar clics justo tras soltar en un destino (evita abrir vista previa por el click fantasma). */
   let ignoreDestCardClickUntil = 0;
 
+  /** Formulario agregar/editar destino (modal). */
+  let destFormOpen = false;
+  let destFormMode: "add" | "edit" = "add";
+  let destFormIdx: number | null = null;
+  let destFormLabel = "";
+  let destFormPath = "";
+
+  /** Menú contextual (clic derecho) en un chip de destino. */
+  let destCtxMenu: { x: number; y: number; idx: number } | null = null;
+
   function clearGhostListeners() {
     if (dragWinMove) {
       document.removeEventListener("dragover", dragWinMove, dragOpts);
@@ -499,7 +547,7 @@
       im.src = BLANK_DRAG_IMG;
       dt.setDragImage(im, 0, 0);
     }
-    ghostCount = Math.max(1, Number(state.selectedCount) || 1);
+    ghostCount = Math.max(1, Number(galleryState.selectedCount) || 1);
     ghostThumb = it.thumbDataUrl ?? null;
     ghostCaption = ghostCount > 1 ? `${ghostCount} seleccionadas` : it.name;
     ghostVisible = true;
@@ -530,13 +578,116 @@
 
   /** Clic en la tarjeta (sin botón): vista previa de carpeta; el drop sigue moviendo archivos. */
   function onDestCardClick(e: MouseEvent, path: string) {
+    if (e.button !== 0) return;
     if (Date.now() < ignoreDestCardClickUntil) return;
     if ((e.target as HTMLElement).closest("button")) return;
     openDestPreview(path);
   }
 
+  function closeDestCtxMenu() {
+    destCtxMenu = null;
+  }
+
+  function onDestContextMenu(e: MouseEvent, idx: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    const pad = 8;
+    const mw = 200;
+    const mh = 88;
+    let x = e.clientX;
+    let y = e.clientY;
+    x = Math.min(x, window.innerWidth - mw - pad);
+    y = Math.min(y, window.innerHeight - mh - pad);
+    x = Math.max(pad, x);
+    y = Math.max(pad, y);
+    destCtxMenu = { x, y, idx };
+  }
+
+  function openAddDestForm() {
+    closeDestCtxMenu();
+    destFormMode = "add";
+    destFormIdx = null;
+    destFormLabel = "";
+    destFormPath = "";
+    destFormOpen = true;
+  }
+
+  function closeDestForm() {
+    destFormOpen = false;
+  }
+
+  async function pickDestFormFolder() {
+    try {
+      const out = await bridge.dialogPickFolder(destFormPath);
+      if (out.hint) status = String(out.hint);
+      if (out.cancelled || !out.path) return;
+      destFormPath = out.path;
+      if (!destFormLabel.trim()) {
+        const s = out.path.replace(/\\/g, "/").replace(/\/+$/, "");
+        const j = s.lastIndexOf("/");
+        destFormLabel = j >= 0 ? s.slice(j + 1) || s : s;
+      }
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo abrir el selector de carpeta";
+    }
+  }
+
+  async function saveDestForm() {
+    const label = destFormLabel.trim();
+    const path = destFormPath.trim();
+    if (!path) {
+      status = "Indica una ruta de carpeta";
+      return;
+    }
+    try {
+      if (destFormMode === "add") {
+        await trackLoad(bridge.destinationsAdd(label, path));
+        await syncDestinationsFromApi();
+        status = "Carpeta destino añadida";
+      } else if (destFormIdx !== null) {
+        await trackLoad(bridge.destinationsEdit(destFormIdx, label, path));
+        await syncDestinationsFromApi();
+        status = "Destino actualizado";
+      }
+      destFormOpen = false;
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo guardar el destino";
+    }
+  }
+
+  function openEditFromCtx() {
+    if (destCtxMenu === null) return;
+    const i = destCtxMenu.idx;
+    const d = destRows[i];
+    closeDestCtxMenu();
+    if (!d) return;
+    destFormMode = "edit";
+    destFormIdx = i;
+    destFormLabel = d.label;
+    destFormPath = d.path;
+    destFormOpen = true;
+  }
+
+  async function removeDestFromCtx() {
+    if (destCtxMenu === null) return;
+    const i = destCtxMenu.idx;
+    closeDestCtxMenu();
+    try {
+      await trackLoad(bridge.destinationsRemove(i));
+      await syncDestinationsFromApi();
+      status = "Destino eliminado";
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo eliminar";
+    }
+  }
+
   /** Celdas de ancho fijo (sin 1fr) para que cada paso del slider se note al cambiar columnas. */
   $: gridCellPx = galleryGridCellPx(thumbScale);
+
+  $: if (activeTab !== "destinos") {
+    destCtxMenu = null;
+    if (destFormOpen) destFormOpen = false;
+  }
 
   onMount(async () => {
     try {
@@ -572,7 +723,9 @@
 <svelte:window
   on:keydown={(e) => {
     if (e.key !== "Escape") return;
-    if (settingsOpen) settingsOpen = false;
+    if (destCtxMenu) closeDestCtxMenu();
+    else if (destFormOpen) closeDestForm();
+    else if (settingsOpen) settingsOpen = false;
     else if (previewOpen) previewOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
   }}
@@ -678,7 +831,7 @@
               <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
               <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
               <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
-              <span class="selection-float__count" title="Seleccionadas">{state.selectedCount}</span>
+              <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
             </div>
             <div class="grid" style={`--cell:${gridCellPx}px`}>
               {#each items as it (it.path)}
@@ -738,8 +891,17 @@
 
       <section class="dest-panel om-panel dest-panel--bottom" aria-label="Carpetas destino">
         <span class="field-label dest-panel__title">Carpetas destino</span>
-        <div class="dest-grid-wrap dest-grid-wrap--embedded dest-grid-wrap--scroll">
-          {#each destinations as d}
+        <div class="dest-panel__main">
+          <div class="dest-panel__toolbar">
+            <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={openAddDestForm}>
+              + Agregar carpeta
+            </button>
+          </div>
+          <div class="dest-grid-wrap dest-grid-wrap--embedded dest-grid-wrap--scroll">
+          {#if destRows.length === 0}
+            <p class="dest-empty-hint">No hay carpetas destino. Pulsa «+ Agregar carpeta» o revisa que la ruta tenga permisos.</p>
+          {/if}
+          {#each destRows as d, i (d.path + "\0" + i)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <div
@@ -748,6 +910,7 @@
               aria-label="Destino {d.label}"
               title={d.path}
               on:click={(e) => onDestCardClick(e, d.path)}
+              on:contextmenu={(e) => onDestContextMenu(e, i)}
               on:dragenter={(e) => e.preventDefault()}
               on:dragover={(e) => e.preventDefault()}
               on:drop={(e) => onDestDrop(e, d.path)}
@@ -762,6 +925,7 @@
               </div>
             </div>
           {/each}
+          </div>
         </div>
       </section>
     </div>
@@ -813,7 +977,7 @@
 
   <footer class="pager om-panel pager--bar" aria-label="Paginación y estado">
     <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Primera página" on:click={() => goPage(1)}>|«</button>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Anterior" on:click={() => goPage(Math.max(1, state.page - 1))}>‹</button>
+    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Anterior" on:click={() => goPage(Math.max(1, galleryState.page - 1))}>‹</button>
     {#each pageLinks as item}
       {#if item === "gap"}
         <span class="pager__gap" aria-hidden="true">…</span>
@@ -821,24 +985,24 @@
         <button
           type="button"
           class="om-btn om-btn--ghost pager__num"
-          class:om-btn--primary={item === state.page}
+          class:om-btn--primary={item === galleryState.page}
           title="Ir a la página {item}"
           on:click={() => goPage(item)}>{item}</button>
       {/if}
     {/each}
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Siguiente" on:click={() => goPage(Math.min(state.totalPages, state.page + 1))}>›</button>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Última página" on:click={() => goPage(state.totalPages)}>»|</button>
-    <span class="pager__google-line">{state.total} imágenes · página {state.page} de {state.totalPages}</span>
+    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Siguiente" on:click={() => goPage(Math.min(galleryState.totalPages, galleryState.page + 1))}>›</button>
+    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Última página" on:click={() => goPage(galleryState.totalPages)}>»|</button>
+    <span class="pager__google-line">{galleryState.total} imágenes · página {galleryState.page} de {galleryState.totalPages}</span>
     <label class="pager__jump">
       <input
         class="om-input pager__jump-input"
         type="number"
         min="1"
-        max={state.totalPages}
+        max={galleryState.totalPages}
         bind:value={pageJumpDraft}
         on:keydown={(e) => e.key === "Enter" && jumpToPageDraft()}
       />
-      <span class="pager__jump-total">/ {state.totalPages}</span>
+      <span class="pager__jump-total">/ {galleryState.totalPages}</span>
     </label>
     <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
     <div class="grow"></div>
@@ -948,6 +1112,56 @@
           <button type="button" class="om-btn om-btn--ghost" on:click={cancelOrganizer} disabled={!orgRunning}>Cancelar</button>
           <span class="org-status">{orgDetail}</span>
           <span class="org-progress">{orgProgress}</span>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if destCtxMenu}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="ctx-menu-backdrop" role="presentation" on:click={closeDestCtxMenu}></div>
+    <!-- svelte-ignore a11y-interactive-supports-focus -->
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div
+      class="dest-ctx-menu om-panel om-panel--lift"
+      role="menu"
+      tabindex="-1"
+      aria-label="Acciones del destino"
+      style={`left:${destCtxMenu.x}px;top:${destCtxMenu.y}px`}
+      on:click|stopPropagation
+    >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditFromCtx}>Editar…</button>
+      <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={removeDestFromCtx}>Eliminar</button>
+    </div>
+  {/if}
+
+  {#if destFormOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim" role="presentation" on:click|self={closeDestForm}>
+      <div
+        class="modal modal--dest-form om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dest-form-title"
+        tabindex="-1"
+        on:click|stopPropagation={() => undefined}
+      >
+        <header class="modal__head">
+          <strong id="dest-form-title">{destFormMode === "add" ? "Agregar carpeta destino" : "Editar destino"}</strong>
+          <button type="button" class="om-btn om-btn--ghost" on:click={closeDestForm}>Cerrar</button>
+        </header>
+        <section class="dest-form-body">
+          <label class="field-label" for="dest-form-label">Nombre</label>
+          <input id="dest-form-label" class="om-input" type="text" bind:value={destFormLabel} placeholder="Etiqueta en la lista" />
+          <label class="field-label" for="dest-form-path">Ruta</label>
+          <div class="dest-form-path-row">
+            <input id="dest-form-path" class="om-input" type="text" bind:value={destFormPath} placeholder="Ruta de la carpeta" />
+            <button type="button" class="om-btn om-btn--primary" on:click={pickDestFormFolder}>Examinar…</button>
+          </div>
+        </section>
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--ghost" on:click={closeDestForm}>Cancelar</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={saveDestForm}>Guardar</button>
         </div>
       </div>
     </div>
@@ -1148,9 +1362,21 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+    flex: 1;
+    gap: var(--om-space-2);
     overflow: visible;
     container-type: size;
     container-name: dest-panel;
+  }
+
+  /* Botón en la misma fila que las tarjetas; grid evita colapso de altura del flex + min-height:0. */
+  .dest-panel__main {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: var(--om-space-3);
+    min-height: 0;
+    flex: 1;
   }
 
   /* Sobrescribe el padding de .om-panel (16px) para ganar área útil a las chips. */
@@ -1160,18 +1386,16 @@
 
   @container dest-panel (max-height: 200px) {
     .dest-panel__title {
-      margin-bottom: var(--om-space-2);
       font-size: 0.65rem;
     }
   }
 
+  /* Sin container-type aquí: con size + flex/grid anidado la caja puede quedar a altura 0 (tarjetas invisibles). */
   .dest-grid-wrap--scroll {
-    flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow: auto;
     overflow-x: auto;
-    container-type: size;
-    container-name: dest-chips;
   }
 
   .gallery--with-float {
@@ -1382,11 +1606,21 @@
 
   .dest-panel__title {
     display: block;
-    margin-bottom: var(--om-space-3);
+    flex-shrink: 0;
+    margin-bottom: 0;
   }
 
   .dest-panel--bottom .dest-panel__title {
-    margin-bottom: var(--om-space-2);
+    margin-bottom: 0;
+  }
+
+  .dest-panel__toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    margin-bottom: 0;
+    /* Alinea el botón con el borde superior de las tarjetas (padding de .dest-card). */
+    padding-top: var(--om-space-1);
   }
 
   .org-tab-bar {
@@ -1413,6 +1647,15 @@
 
   .dest-grid-wrap--embedded {
     margin: 0;
+  }
+
+  .dest-empty-hint {
+    margin: 0;
+    grid-column: 1 / -1;
+    padding: var(--om-space-2);
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--om-text-muted);
   }
 
   .dest-card {
@@ -1456,8 +1699,8 @@
     gap: var(--om-space-2);
   }
 
-  /* Vista chip: solo título; más compacta que la tarjeta normal (reglas base van antes y no deben pisar esto). */
-  @container dest-chips (max-height: 120px) {
+  /* Vista chip: panel bajo bajo — usa dest-panel (altura real), no el scroll (antes rompía con container-type:size). */
+  @container dest-panel (max-height: 140px) {
     .dest-grid-wrap--scroll {
       display: flex;
       flex-wrap: wrap;
@@ -1696,6 +1939,78 @@
     gap: var(--om-space-4);
     padding: var(--om-space-5);
     box-sizing: border-box;
+  }
+
+  .modal--dest-form {
+    width: min(480px, 92vw);
+    max-height: min(90vh, 440px);
+    display: flex;
+    flex-direction: column;
+    gap: var(--om-space-4);
+    padding: var(--om-space-5);
+    box-sizing: border-box;
+  }
+
+  .dest-form-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--om-space-3);
+  }
+
+  .dest-form-path-row {
+    display: flex;
+    gap: var(--om-space-2);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .dest-form-path-row .om-input {
+    flex: 1;
+    min-width: min(220px, 100%);
+  }
+
+  .ctx-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: transparent;
+  }
+
+  .dest-ctx-menu {
+    position: fixed;
+    z-index: 91;
+    min-width: 11rem;
+    padding: var(--om-space-2);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-sizing: border-box;
+  }
+
+  .dest-ctx-menu__item {
+    font-family: var(--om-font-sans);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    text-align: left;
+    width: 100%;
+    padding: var(--om-space-2) var(--om-space-3);
+    border: none;
+    border-radius: var(--om-radius-sm);
+    cursor: pointer;
+    color: var(--om-text-primary);
+    background: rgb(255 255 255 / 0.06);
+  }
+
+  .dest-ctx-menu__item:hover {
+    background: rgb(124 140 255 / 0.18);
+  }
+
+  .dest-ctx-menu__item--danger {
+    color: #f87171;
+  }
+
+  .dest-ctx-menu__item--danger:hover {
+    background: rgb(248 113 113 / 0.12);
   }
 
   .settings-body {

@@ -40,7 +40,7 @@ def load_app_settings() -> dict:
     try:
         with path.open(encoding="utf-8") as f:
             data = json.load(f)
-        if "destinations" not in data:
+        if "destinations" not in data or not isinstance(data.get("destinations"), list):
             data["destinations"] = []
         if "gallery_last_folder" not in data:
             data["gallery_last_folder"] = ""

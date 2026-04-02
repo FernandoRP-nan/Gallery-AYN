@@ -164,7 +164,7 @@ class WebApi:
         return {
             "settings": self.settings,
             "gallery": self._gallery_state(),
-            "destinations": self.settings.get("destinations", []),
+            "destinations": list(self._destinations_list()),
         }
 
     def _thumbs_per_page(self) -> int:
@@ -351,20 +351,51 @@ class WebApi:
             )
         return {"items": items, "cols": cols}
 
+    def _destinations_list(self) -> list:
+        """Si en JSON quedó null o tipo inválido, setdefault no crea lista y falla el append."""
+        d = self.settings.get("destinations")
+        if not isinstance(d, list):
+            d = []
+            self.settings["destinations"] = d
+        return d
+
     def destinations_get(self) -> dict:
-        return {"destinations": self.settings.get("destinations", [])}
+        # Solo dicts planos serializables (evita sorpresas en el bridge Qt).
+        out: list[dict[str, str]] = []
+        for x in self._destinations_list():
+            if isinstance(x, dict):
+                out.append(
+                    {
+                        "label": str(x.get("label", "")),
+                        "path": str(x.get("path", "")),
+                    }
+                )
+        return {"destinations": out}
 
     def destinations_add(self, label: str, path: str) -> dict:
         p = str(Path(path).expanduser().resolve())
         label = label.strip() or Path(p).name
-        self.settings.setdefault("destinations", []).append({"label": label, "path": p})
+        dests = self._destinations_list()
+        for x in dests:
+            if isinstance(x, dict) and str(x.get("path", "")) == p:
+                return self.destinations_get()
+        dests.append({"label": label, "path": p})
         save_app_settings(self.settings)
         return self.destinations_get()
 
     def destinations_remove(self, idx: int) -> dict:
-        dests = self.settings.get("destinations", [])
+        dests = self._destinations_list()
         if 0 <= idx < len(dests):
             dests.pop(idx)
+            save_app_settings(self.settings)
+        return self.destinations_get()
+
+    def destinations_edit(self, idx: int, label: str, path: str) -> dict:
+        dests = self._destinations_list()
+        if 0 <= idx < len(dests):
+            p = str(Path(path).expanduser().resolve())
+            label = label.strip() or Path(p).name
+            dests[idx] = {"label": label, "path": p}
             save_app_settings(self.settings)
         return self.destinations_get()
 
