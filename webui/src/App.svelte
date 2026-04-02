@@ -325,7 +325,8 @@
     pinnedFolders = Array.isArray(data.settings?.gallery_pinned_folders)
       ? (data.settings.gallery_pinned_folders as string[])
       : [];
-    const perPageRaw = Math.round(Number(data.settings?.gallery_thumbs_per_page ?? 48)) || 48;
+    const initialPerPage = Number(data.settings?.gallery_thumbs_per_page ?? 48);
+    const perPageRaw = Number.isFinite(initialPerPage) ? Math.round(initialPerPage) : 48;
     thumbsPerPage = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     pageJumpDraft = Number(data.gallery?.page ?? 1);
     await syncDestinationsFromApi();
@@ -494,7 +495,8 @@
   };
 
   const saveSettingsModal = async () => {
-    const perPageRaw = Math.round(Number(thumbsPerPage)) || 48;
+    const parsedPerPage = Number(thumbsPerPage);
+    const perPageRaw = Number.isFinite(parsedPerPage) ? Math.round(parsedPerPage) : 48;
     const n = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     thumbsPerPage = n;
     const ts = Math.max(0.45, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
@@ -1799,35 +1801,37 @@
   {/if}
 
   <footer class="pager om-panel pager--bar" aria-label="Paginación y estado">
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Primera página" on:click={() => goPage(1)}>|«</button>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Anterior" on:click={() => goPage(Math.max(1, galleryState.page - 1))}>‹</button>
-    {#each pageLinks as item}
-      {#if item === "gap"}
-        <span class="pager__gap" aria-hidden="true">…</span>
-      {:else}
-        <button
-          type="button"
-          class="om-btn om-btn--ghost pager__num"
-          class:om-btn--primary={item === galleryState.page}
-          title="Ir a la página {item}"
-          on:click={() => goPage(item)}>{item}</button>
-      {/if}
-    {/each}
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Siguiente" on:click={() => goPage(Math.min(galleryState.totalPages, galleryState.page + 1))}>›</button>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Última página" on:click={() => goPage(galleryState.totalPages)}>»|</button>
-    <span class="pager__google-line">{galleryState.total} imágenes · página {galleryState.page} de {galleryState.totalPages}</span>
-    <label class="pager__jump">
-      <input
-        class="om-input pager__jump-input"
-        type="number"
-        min="1"
-        max={galleryState.totalPages}
-        bind:value={pageJumpDraft}
-        on:keydown={(e) => e.key === "Enter" && jumpToPageDraft()}
-      />
-      <span class="pager__jump-total">/ {galleryState.totalPages}</span>
-    </label>
-    <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
+    {#if thumbsPerPage !== 0}
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Primera página" on:click={() => goPage(1)}>|«</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Anterior" on:click={() => goPage(Math.max(1, galleryState.page - 1))}>‹</button>
+      {#each pageLinks as item}
+        {#if item === "gap"}
+          <span class="pager__gap" aria-hidden="true">…</span>
+        {:else}
+          <button
+            type="button"
+            class="om-btn om-btn--ghost pager__num"
+            class:om-btn--primary={item === galleryState.page}
+            title="Ir a la página {item}"
+            on:click={() => goPage(item)}>{item}</button>
+        {/if}
+      {/each}
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Siguiente" on:click={() => goPage(Math.min(galleryState.totalPages, galleryState.page + 1))}>›</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Última página" on:click={() => goPage(galleryState.totalPages)}>»|</button>
+      <span class="pager__google-line">{galleryState.total} imágenes · página {galleryState.page} de {galleryState.totalPages}</span>
+      <label class="pager__jump">
+        <input
+          class="om-input pager__jump-input"
+          type="number"
+          min="1"
+          max={galleryState.totalPages}
+          bind:value={pageJumpDraft}
+          on:keydown={(e) => e.key === "Enter" && jumpToPageDraft()}
+        />
+        <span class="pager__jump-total">/ {galleryState.totalPages}</span>
+      </label>
+      <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
+    {/if}
     <div class="grow"></div>
     <span class="status-line">{status}</span>
     <button
