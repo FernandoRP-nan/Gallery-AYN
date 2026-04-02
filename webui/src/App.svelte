@@ -31,8 +31,18 @@
   let previewPanX = 0;
   let previewPanY = 0;
   let previewPanDrag = false;
+  let previewPanMoved = false;
   let previewPanStartX = 0;
   let previewPanStartY = 0;
+  let previewZoomCarouselVisible = true;
+  let zoomHudVisible = false;
+  let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
+  let zoomStageEl: HTMLDivElement | null = null;
+  let zoomImgEl: HTMLImageElement | null = null;
+  let previewZoomNaturalW = 1;
+  let previewZoomNaturalH = 1;
+  let zoomMiniEl: HTMLDivElement | null = null;
+  let zoomNavItems: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
   let galleryThumbHydrationToken = 0;
   let previewThumbHydrationToken = 0;
   let previewScale = 1;
@@ -643,19 +653,29 @@
     }
   }
 
-  function openPreviewZoom(it: { path: string; name: string; thumbDataUrl?: string | null }) {
+  function openPreviewZoom(
+    it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" },
+    opts?: { preserveCarousel?: boolean; navItems?: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> }
+  ) {
+    if (opts?.navItems) zoomNavItems = opts.navItems;
     previewZoomPath = it.path;
     previewZoomName = it.name;
-    previewZoomDataUrl = it.thumbDataUrl ?? null;
+    // Importante: no mostrar el thumbnail "cuadrado" (recortado) como si fuera la imagen completa.
+    // La vista principal debe venir de `galleryPreview` (contain) para garantizar que en "Completa" se vea 100% sin recortes.
+    previewZoomDataUrl = null;
     previewZoomScale = 1;
     previewPanX = 0;
     previewPanY = 0;
     previewZoomMode = "fit";
+    previewZoomNaturalW = 1;
+    previewZoomNaturalH = 1;
+    previewZoomCarouselVisible = opts?.preserveCarousel ? previewZoomCarouselVisible : true;
+    zoomHudVisible = false;
     previewZoomOpen = true;
     bridge
       .galleryPreview(it.path, 2200, 1600)
       .then((pr) => {
-        if (previewZoomOpen && previewZoomPath === it.path) previewZoomDataUrl = pr.dataUrl ?? previewZoomDataUrl;
+        if (previewZoomOpen && previewZoomPath === it.path) previewZoomDataUrl = pr.dataUrl ?? null;
       })
       .catch(() => undefined);
   }
@@ -686,17 +706,59 @@
       togglePreviewPick(it.path);
       return;
     }
-    openPreviewZoom(it);
+    openPreviewZoom(it, { navItems: previewItems });
   }
 
   function zoomStep(delta: number) {
-    previewZoomScale = Math.min(4, Math.max(1, Number((previewZoomScale + delta).toFixed(2))));
+    // Permite alejar más allá de 100% para que, si el stage efectivo es menor
+    // (por carrusel/cabecera), siempre puedas ver la imagen completa.
+    previewZoomScale = Math.min(4, Math.max(0.5, Number((previewZoomScale + delta).toFixed(2))));
+    touchZoomHud();
   }
 
-  $: if (previewZoomScale <= 1 && (previewPanX !== 0 || previewPanY !== 0)) {
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function getPanLimits() {
+    if (!zoomStageEl || !zoomImgEl) return { x: 0, y: 0 };
+    const sr = zoomStageEl.getBoundingClientRect();
+    const ir = zoomImgEl.getBoundingClientRect();
+    const stageW = Math.max(1, sr.width);
+    const stageH = Math.max(1, sr.height);
+    const overflowX = (ir.width - stageW) / 2;
+    const overflowY = (ir.height - stageH) / 2;
+    if (previewZoomMode === "fillWidth") {
+      return { x: 0, y: Math.max(0, overflowY) };
+    }
+    return { x: Math.max(0, overflowX), y: Math.max(0, overflowY) };
+  }
+
+  function clampPanToStage() {
+    const limits = getPanLimits();
+    const nextX = previewZoomMode === "fillWidth" ? 0 : clamp(previewPanX, -limits.x, limits.x);
+    const nextY = clamp(previewPanY, -limits.y, limits.y);
+    if (nextX !== previewPanX) previewPanX = nextX;
+    if (nextY !== previewPanY) previewPanY = nextY;
+  }
+
+  // Snap a "100%" usando el mismo redondeo que muestra la UI.
+  // Así garantizamos que al ver "100%" el `pan` no quede desfasado y no haya recorte.
+  $: if (previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100) {
+    previewZoomScale = 1;
     previewPanX = 0;
     previewPanY = 0;
   }
+
+  // Siempre mantenemos pan dentro de los límites reales del DOM (overflow vs stage).
+  $: if (previewZoomOpen && zoomStageEl && zoomImgEl) {
+    clampPanToStage();
+  }
+
+  $: zoomImgTransform =
+    previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100
+      ? "translate(-50%, -50%)"
+      : `translate(-50%, -50%) translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
 
   function zoomWithWheel(e: WheelEvent) {
     e.preventDefault();
@@ -704,33 +766,125 @@
   }
 
   function moveZoomBy(step: number) {
-    if (!previewItems.length) return;
-    const i = previewItems.findIndex((x) => x.path === previewZoomPath);
+    if (!zoomNavItems.length) return;
+    const i = zoomNavItems.findIndex((x) => x.path === previewZoomPath);
     const base = i >= 0 ? i : 0;
-    const next = (base + step + previewItems.length) % previewItems.length;
-    const it = previewItems[next];
+    const next = (base + step + zoomNavItems.length) % zoomNavItems.length;
+    const it = zoomNavItems[next];
     if (!it) return;
-    openPreviewZoom(it);
+    openPreviewZoom(it, { preserveCarousel: true, navItems: zoomNavItems });
   }
 
   function beginPan(e: PointerEvent) {
-    if (previewZoomScale <= 1) return;
+    // Si la imagen no desborda el stage, no hay nada que “panear”.
+    const limits = getPanLimits();
+    if (limits.x <= 0.5 && limits.y <= 0.5) return;
     previewPanDrag = true;
-    previewPanStartX = e.clientX - previewPanX;
-    previewPanStartY = e.clientY - previewPanY;
+    previewPanMoved = false;
+    if (previewZoomMode === "fillWidth") {
+      previewPanX = 0;
+      previewPanStartY = e.clientY - previewPanY;
+    } else {
+      previewPanStartX = e.clientX - previewPanX;
+      previewPanStartY = e.clientY - previewPanY;
+    }
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    touchZoomHud();
   }
 
   function movePan(e: PointerEvent) {
     if (!previewPanDrag) return;
-    previewPanX = e.clientX - previewPanStartX;
-    previewPanY = e.clientY - previewPanStartY;
+    if (previewZoomMode === "fillWidth") {
+      const ny = e.clientY - previewPanStartY;
+      if (Math.abs(ny - previewPanY) > 2) previewPanMoved = true;
+      previewPanX = 0;
+      previewPanY = ny;
+    } else {
+      const nx = e.clientX - previewPanStartX;
+      const ny = e.clientY - previewPanStartY;
+      if (Math.abs(nx - previewPanX) > 2 || Math.abs(ny - previewPanY) > 2) previewPanMoved = true;
+      previewPanX = nx;
+      previewPanY = ny;
+    }
+    clampPanToStage();
+    touchZoomHud();
   }
 
   function endPan(e: PointerEvent) {
     previewPanDrag = false;
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
   }
+
+  function toggleZoomCarousel() {
+    previewZoomCarouselVisible = !previewZoomCarouselVisible;
+  }
+
+  function onZoomStageClick(e: MouseEvent) {
+    if (previewPanMoved) {
+      previewPanMoved = false;
+      return;
+    }
+    previewPanX = 0;
+    previewPanY = 0;
+    toggleZoomCarousel();
+  }
+
+  function onZoomImageLoad() {
+    if (!zoomImgEl) return;
+    previewZoomNaturalW = Math.max(1, zoomImgEl.naturalWidth || 1);
+    previewZoomNaturalH = Math.max(1, zoomImgEl.naturalHeight || 1);
+    clampPanToStage();
+  }
+
+  function openZoomFromGallery(it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }) {
+    const nav = items
+      .filter((x) => x.kind === "image")
+      .map((x) => ({ path: x.path, name: x.name, thumbDataUrl: x.thumbDataUrl, thumbQuality: x.thumbQuality }));
+    openPreviewZoom(it, { navItems: nav });
+  }
+
+  function touchZoomHud() {
+    zoomHudVisible = true;
+    if (zoomHudTimer) clearTimeout(zoomHudTimer);
+    zoomHudTimer = setTimeout(() => {
+      zoomHudVisible = false;
+    }, 1200);
+  }
+
+  $: zoomMiniRect = (() => {
+    // dependencias reactivas explícitas
+    const _deps = [previewZoomScale, previewPanX, previewPanY, previewZoomMode, previewZoomPath];
+    void _deps;
+    if (!zoomStageEl || !zoomImgEl || !zoomMiniEl) return "display:none;";
+    const sr = zoomStageEl.getBoundingClientRect();
+    const cr = zoomMiniEl.getBoundingClientRect();
+    const cw = Math.max(1, cr.width);
+    const ch = Math.max(1, cr.height);
+    const nW = Math.max(1, previewZoomNaturalW);
+    const nH = Math.max(1, previewZoomNaturalH);
+
+    // La miniatura usa object-fit: contain dentro del contenedor.
+    const miniScale = Math.min(cw / nW, ch / nH);
+    const imgW = nW * miniScale;
+    const imgH = nH * miniScale;
+    const ox = (cw - imgW) / 2;
+    const oy = (ch - imgH) / 2;
+
+    // Fallback general (funciona bien cuando ya hay zoom o pan).
+    const ir = zoomImgEl.getBoundingClientRect();
+    const iw = Math.max(1, ir.width);
+    const ih = Math.max(1, ir.height);
+    const x0 = Math.max(0, Math.min(1, (sr.left - ir.left) / iw));
+    const y0 = Math.max(0, Math.min(1, (sr.top - ir.top) / ih));
+    const x1 = Math.max(0, Math.min(1, (sr.right - ir.left) / iw));
+    const y1 = Math.max(0, Math.min(1, (sr.bottom - ir.top) / ih));
+
+    const left = ox + x0 * imgW;
+    const top = oy + y0 * imgH;
+    const width = Math.max(3, (x1 - x0) * imgW);
+    const height = Math.max(3, (y1 - y0) * imgH);
+    return `left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
+  })();
 
   /** Ancho mínimo de pista en el modal destino: auto-fill sin columna cortada ni scroll horizontal. */
   $: destModalGridMinPx = destPreviewGridMinPx(previewScale);
@@ -1004,6 +1158,7 @@
     endDragSession();
     if (thumbScaleDebounce) clearTimeout(thumbScaleDebounce);
     if (destScaleDebounce) clearTimeout(destScaleDebounce);
+    if (zoomHudTimer) clearTimeout(zoomHudTimer);
     if (pollTimer !== null) {
       window.clearInterval(pollTimer);
       pollTimer = null;
@@ -1014,12 +1169,13 @@
 <svelte:window
   on:keydown={(e) => {
     if (previewZoomOpen) {
-      if (["ArrowLeft", "ArrowUp", "KeyA", "KeyW"].includes(e.code)) {
+      const key = e.key.toLowerCase();
+      if (["arrowleft", "arrowup", "a", "w"].includes(key)) {
         e.preventDefault();
         moveZoomBy(-1);
         return;
       }
-      if (["ArrowRight", "ArrowDown", "KeyD", "KeyS"].includes(e.code)) {
+      if (["arrowright", "arrowdown", "d", "s"].includes(key)) {
         e.preventDefault();
         moveZoomBy(1);
         return;
@@ -1173,6 +1329,9 @@
                   draggable={it.kind === "image"}
                   on:dragstart={(e) => onTileDragStart(e, it)}
                   on:click={() => clickItem(it)}
+                  on:dblclick={() => {
+                    if (it.kind === "image") openZoomFromGallery(it);
+                  }}
                   on:keydown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
@@ -1290,6 +1449,9 @@
               draggable={activeTab === "destinos" && it.kind === "image"}
               on:dragstart={(e) => onTileDragStart(e, it)}
               on:click={() => clickItem(it)}
+              on:dblclick={() => {
+                if (it.kind === "image") openZoomFromGallery(it);
+              }}
             >
               {#if it.thumbDataUrl}
                 <img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} loading="lazy" decoding="async" />
@@ -1459,6 +1621,7 @@
   {/if}
 
   {#if previewZoomOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="overlay overlay--zoom"
       role="button"
@@ -1472,13 +1635,14 @@
         }
       }}
     >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="zoom-modal"
+        class:zoom-modal--carousel-hidden={!previewZoomCarouselVisible}
         role="dialog"
         aria-modal="true"
         tabindex="-1"
         on:click|stopPropagation
-        on:keydown={(e) => e.stopPropagation()}
       >
         <header class="zoom-modal__head">
           <strong>{previewZoomName}</strong>
@@ -1493,48 +1657,72 @@
                 previewZoomMode = previewZoomMode === "fit" ? "fillWidth" : "fit";
                 previewPanX = 0;
                 previewPanY = 0;
+                clampPanToStage();
               }}
             >
               {previewZoomMode === "fit" ? "Completa" : "Rellenar ancho"}
             </button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Alejar" on:click={() => zoomStep(-0.2)}>−</button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Restablecer zoom" on:click={() => (previewZoomScale = 1)}>{Math.round(previewZoomScale * 100)}%</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact"
+              title="Restablecer zoom"
+              on:click={() => {
+                previewZoomScale = 1;
+                if (previewZoomMode === "fit") {
+                  previewPanX = 0;
+                  previewPanY = 0;
+                }
+              }}
+            >{Math.round(previewZoomScale * 100)}%</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Acercar" on:click={() => zoomStep(0.2)}>＋</button>
             <button type="button" class="om-btn om-btn--ghost" on:click={() => (previewZoomOpen = false)}>Cerrar</button>
           </div>
         </header>
         <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
           {#if previewZoomDataUrl}
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
               class="zoom-modal__stage"
               role="application"
               aria-label="Área de zoom y arrastre"
+              bind:this={zoomStageEl}
               on:pointerdown={beginPan}
               on:pointermove={movePan}
               on:pointerup={endPan}
               on:pointercancel={endPan}
+              on:click={onZoomStageClick}
             >
               <img
                 class="zoom-modal__img"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
-                class:zoom-modal__img--pannable={previewZoomScale > 1}
+                class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                bind:this={zoomImgEl}
                 src={previewZoomDataUrl}
                 alt={previewZoomName}
-                style={`transform: translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale});`}
+                style={`transform: ${zoomImgTransform};`}
+                on:load={onZoomImageLoad}
               />
+              {#if zoomHudVisible}
+                <div class="zoom-mini" bind:this={zoomMiniEl}>
+                  <img src={previewZoomDataUrl} alt="" />
+                  <div class="zoom-mini__rect" style={zoomMiniRect}></div>
+                </div>
+              {/if}
             </div>
           {:else}
             <div class="preview__empty">Cargando imagen…</div>
           {/if}
         </div>
-        <div class="zoom-modal__carousel" aria-label="Carrusel de miniaturas">
-          {#each previewItems as it}
+        <div class="zoom-modal__carousel" class:zoom-modal__carousel--hidden={!previewZoomCarouselVisible} aria-label="Carrusel de miniaturas">
+          {#each zoomNavItems as it}
             <button
               type="button"
               class="zoom-carousel__item"
               class:zoom-carousel__item--active={it.path === previewZoomPath}
               title={it.name}
-              on:click={() => openPreviewZoom(it)}
+              on:click={() => openPreviewZoom(it, { preserveCarousel: true, navItems: zoomNavItems })}
             >
               {#if it.thumbDataUrl}
                 <img src={it.thumbDataUrl} alt={it.name} class:thumb--lq={it.thumbQuality === "lq"} />
@@ -1773,16 +1961,19 @@
   .recent-folders__chip {
     max-width: 100%;
     text-align: left;
-    font-size: 0.75rem;
-    line-height: 1.3;
+    font-size: 0.7rem;
+    line-height: 1.2;
     white-space: normal;
     word-break: break-all;
+    padding: 0.2rem 0.55rem;
+    min-height: 1.65rem;
   }
 
   .recent-folders__pin {
-    min-width: 2rem;
-    min-height: 2rem;
-    padding: 0.2rem 0.45rem;
+    min-width: 1.55rem;
+    min-height: 1.55rem;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.78rem;
     line-height: 1;
     color: var(--om-accent-2);
   }
@@ -2783,9 +2974,20 @@
   .zoom-modal {
     width: min(96vw, 1320px);
     height: min(94vh, 980px);
-    display: flex;
-    flex-direction: column;
+    height: min(94dvh, 980px);
+    max-height: 94vh;
+    max-height: 94dvh;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: var(--om-space-3);
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .zoom-modal--carousel-hidden {
+    gap: var(--om-space-2);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .zoom-modal__head {
@@ -2805,7 +3007,11 @@
   }
 
   .zoom-modal__body {
-    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
     min-height: 0;
     display: grid;
     place-items: center;
@@ -2823,9 +3029,15 @@
     place-items: center;
     overflow: hidden;
     cursor: default;
+    position: relative;
   }
 
   .zoom-modal__img {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: auto;
+    height: auto;
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
@@ -2839,10 +3051,10 @@
   }
 
   .zoom-modal__img--fill-width {
-    width: 100%;
-    max-width: none;
-    height: auto;
+    width: auto;
+    height: 100%;
     max-height: none;
+    max-width: none;
   }
 
   .zoom-modal__img--pannable {
@@ -2861,6 +3073,33 @@
     padding: var(--om-space-1) var(--om-space-2);
     border-radius: var(--om-radius-md);
     background: rgb(255 255 255 / 0.04);
+    scrollbar-width: thin;
+    scrollbar-color: rgb(124 140 255 / 0.38) transparent;
+    flex: 0 0 auto;
+    position: relative;
+    z-index: 5;
+  }
+
+  .zoom-modal__body {
+    position: relative;
+    z-index: 1;
+  }
+
+  .zoom-modal__carousel::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .zoom-modal__carousel::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .zoom-modal__carousel::-webkit-scrollbar-thumb {
+    background: linear-gradient(90deg, rgb(124 140 255 / 0.42), rgb(94 228 212 / 0.28));
+    border-radius: 999px;
+  }
+
+  .zoom-modal__carousel--hidden {
+    display: none;
   }
 
   .zoom-carousel__item {
@@ -2885,6 +3124,38 @@
   .zoom-carousel__item--active {
     border-color: rgb(124 140 255 / 0.85);
     box-shadow: 0 0 0 1px rgb(94 228 212 / 0.35), 0 0 14px rgb(124 140 255 / 0.3);
+  }
+
+  .zoom-mini {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    width: 130px;
+    height: 88px;
+    border-radius: var(--om-radius-sm);
+    overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 0.28);
+    background: rgb(7 8 15 / 0.72);
+    box-shadow: 0 10px 22px rgb(0 0 0 / 0.45);
+    pointer-events: none;
+  }
+
+  .zoom-mini img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    filter: saturate(0.92);
+    background: rgb(0 0 0 / 0.28);
+  }
+
+  .zoom-mini__rect {
+    position: absolute;
+    border: 2px solid rgb(94 228 212 / 0.95);
+    box-shadow: 0 0 0 1px rgb(124 140 255 / 0.75), inset 0 0 0 1px rgb(0 0 0 / 0.35);
+    border-radius: 4px;
+    background: rgb(124 140 255 / 0.12);
+    box-sizing: border-box;
   }
 
   /* Ghost de arrastre */
