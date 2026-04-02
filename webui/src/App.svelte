@@ -827,13 +827,8 @@
           style={`grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`}
         >
           <article class="gallery om-panel om-panel--lift gallery--with-float">
-            <div class="selection-float" role="toolbar" aria-label="Selección">
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
-              <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
-            </div>
-            <div class="grid" style={`--cell:${gridCellPx}px`}>
+            <div class="gallery__scroll">
+              <div class="grid" style={`--cell:${gridCellPx}px`}>
               {#each items as it (it.path)}
                 <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
                 <div
@@ -859,6 +854,13 @@
                   <span class="tile__name">{it.name}</span>
                 </div>
               {/each}
+              </div>
+              <div class="selection-float" role="toolbar" aria-label="Selección">
+                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
+                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
+                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
+                <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
+              </div>
             </div>
           </article>
 
@@ -1398,15 +1400,40 @@
     overflow-x: auto;
   }
 
+  /* Scroll interno: la barra de selección va con position:sticky y sigue visible al bajar. */
   .gallery--with-float {
-    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  .gallery--with-float .gallery__scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+  }
+
+  .gallery--with-float .gallery__scroll > .grid {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .gallery--with-float .gallery__scroll > .selection-float {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    justify-self: end;
+    position: sticky;
+    top: var(--om-space-2);
+    margin: var(--om-space-2);
+    z-index: 5;
   }
 
   .selection-float {
-    position: absolute;
-    top: var(--om-space-2);
-    right: var(--om-space-2);
-    z-index: 5;
     display: inline-flex;
     align-items: center;
     gap: var(--om-space-1);
@@ -1471,9 +1498,12 @@
   }
 
   .gallery {
-    overflow: auto;
     min-height: 0;
     min-width: 0;
+  }
+
+  .gallery:not(.gallery--with-float) {
+    overflow: auto;
   }
 
   .grid {
