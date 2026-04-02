@@ -54,6 +54,7 @@
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   let zoomStageEl: HTMLDivElement | null = null;
+  let zoomCarouselEl: HTMLDivElement | null = null;
   let zoomImgEl: HTMLImageElement | null = null;
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
@@ -66,6 +67,7 @@
   let galleryGridWidth = 0;
   const GALLERY_GRID_EDGE_PAD_PX = 8;
   let zoomNavItems: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
+  let deferredZoomMoveRefresh: { state: any; items: GalleryItem[] } | null = null;
   let galleryThumbHydrationToken = 0;
   let galleryLoadingMore = false;
   let galleryHasMore = false;
@@ -991,6 +993,13 @@
       .catch(() => undefined);
   }
 
+  function applyGalleryRefreshFromMove(state: any, nextItems: GalleryItem[]) {
+    galleryState = state;
+    items = nextItems;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+  }
+
   function startPreviewLongPress(path: string) {
     if (previewLongPressTimer) clearTimeout(previewLongPressTimer);
     previewLongPressPath = path;
@@ -1319,10 +1328,12 @@
         zoomMoveQueue = rest;
         try {
           const out = await bridge.galleryMovePath(job.srcPath, job.destPath);
-          galleryState = out.state;
-          items = out.items;
-          galleryThumbHydrationToken++;
-          void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+          if (previewZoomOpen) {
+            // Evita refrescar la grilla detrás del fullscreen en cada movimiento.
+            deferredZoomMoveRefresh = { state: out.state, items: out.items };
+          } else {
+            applyGalleryRefreshFromMove(out.state, out.items);
+          }
           const moved = Number(out.moveResult?.moved ?? 0);
           const errors = Number(out.moveResult?.errors ?? 0);
           previewZoomCanUndoMove = moved > 0;
@@ -1684,6 +1695,18 @@
     if (destFormOpen) destFormOpen = false;
   }
 
+  $: if (!previewZoomOpen && deferredZoomMoveRefresh) {
+    applyGalleryRefreshFromMove(deferredZoomMoveRefresh.state, deferredZoomMoveRefresh.items);
+    deferredZoomMoveRefresh = null;
+  }
+
+  $: if (previewZoomOpen && previewZoomCarouselVisible && zoomCarouselEl && previewZoomPath) {
+    const active = zoomCarouselEl.querySelector<HTMLElement>(".zoom-carousel__item--active");
+    if (active) {
+      active.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+    }
+  }
+
   onMount(async () => {
     try {
       await waitForPywebviewApi();
@@ -1733,6 +1756,16 @@
   }}
   on:keydown={(e) => {
     if (previewZoomOpen) {
+      const activeEl = (document.activeElement as HTMLElement | null) ?? null;
+      const isTypingEl = Boolean(
+        activeEl &&
+          (activeEl.isContentEditable ||
+            activeEl.tagName === "INPUT" ||
+            activeEl.tagName === "TEXTAREA" ||
+            activeEl.closest('[contenteditable="true"]'))
+      );
+      const typingInDestForm = Boolean(activeEl?.closest(".modal--dest-form"));
+      if (destFormOpen && isTypingEl && typingInDestForm) return;
       const key = e.key.toLowerCase();
       if (["arrowleft", "arrowup", "a", "w"].includes(key)) {
         e.preventDefault();
@@ -2411,7 +2444,12 @@
             <div class="preview__empty">Cargando imagen…</div>
           {/if}
         </div>
-        <div class="zoom-modal__carousel" class:zoom-modal__carousel--hidden={!previewZoomCarouselVisible} aria-label="Carrusel de miniaturas">
+        <div
+          class="zoom-modal__carousel"
+          class:zoom-modal__carousel--hidden={!previewZoomCarouselVisible}
+          aria-label="Carrusel de miniaturas"
+          bind:this={zoomCarouselEl}
+        >
           {#each zoomNavItems as it}
             <button
               type="button"
@@ -4173,8 +4211,11 @@
   }
 
   .zoom-carousel__item--active {
-    border-color: rgb(124 140 255 / 0.85);
-    box-shadow: 0 0 0 1px rgb(94 228 212 / 0.35), 0 0 14px rgb(124 140 255 / 0.3);
+    border-color: color-mix(in oklab, var(--om-accent) 82%, #ffffff);
+    background: color-mix(in oklab, var(--om-accent) 30%, var(--om-surface-2));
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--om-accent) 70%, #ffffff),
+      0 0 14px rgb(124 140 255 / 0.3);
   }
 
   .zoom-mini {
