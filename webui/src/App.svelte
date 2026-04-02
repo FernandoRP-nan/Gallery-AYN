@@ -855,16 +855,33 @@
     return galleryCursorPath;
   }
 
-  function getGalleryEstimatedColumns(): number {
-    const tileNodes = Array.from(document.querySelectorAll<HTMLElement>(".tile[data-item-path]"))
-      .filter((el) => {
-        const p = String(el.dataset?.itemPath ?? "");
-        return items.some((x) => x.kind === "image" && x.path === p);
-      });
-    if (tileNodes.length <= 1) return 1;
-    const firstTop = Math.round(tileNodes[0].getBoundingClientRect().top);
-    const cols = tileNodes.filter((n) => Math.abs(Math.round(n.getBoundingClientRect().top) - firstTop) <= 3).length;
-    return Math.max(1, cols);
+  function getGalleryLayoutRows(): Array<Array<{ path: string; cx: number; top: number }>> {
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>(".tile[data-item-path]"))
+      .map((el) => {
+        const path = String(el.dataset?.itemPath ?? "");
+        if (!path) return null;
+        const it = items.find((x) => x.path === path);
+        if (!it || it.kind !== "image") return null;
+        const r = el.getBoundingClientRect();
+        return { path, cx: r.left + r.width / 2, top: Math.round(r.top) };
+      })
+      .filter((x): x is { path: string; cx: number; top: number } => Boolean(x));
+    if (nodes.length === 0) return [];
+    const sorted = [...nodes].sort((a, b) => (a.top - b.top) || (a.cx - b.cx));
+    const rows: Array<Array<{ path: string; cx: number; top: number }>> = [];
+    const rowThreshold = 8;
+    for (const n of sorted) {
+      const last = rows[rows.length - 1];
+      if (!last) {
+        rows.push([n]);
+        continue;
+      }
+      const rowTop = last[0]?.top ?? n.top;
+      if (Math.abs(n.top - rowTop) <= rowThreshold) last.push(n);
+      else rows.push([n]);
+    }
+    for (const r of rows) r.sort((a, b) => a.cx - b.cx);
+    return rows;
   }
 
   function moveGalleryCursorByKey(keyLower: string): string | null {
@@ -875,10 +892,42 @@
     const idx = Math.max(0, paths.indexOf(cur));
     if (keyLower === "arrowright" || keyLower === "d") return paths[Math.min(paths.length - 1, idx + 1)];
     if (keyLower === "arrowleft" || keyLower === "a") return paths[Math.max(0, idx - 1)];
-    const cols = getGalleryEstimatedColumns();
-    if (keyLower === "arrowdown" || keyLower === "s") return paths[Math.min(paths.length - 1, idx + cols)];
-    if (keyLower === "arrowup" || keyLower === "w") return paths[Math.max(0, idx - cols)];
+    const rows = getGalleryLayoutRows();
+    if (rows.length === 0) return cur;
+    let rIdx = -1;
+    let cX = 0;
+    for (let r = 0; r < rows.length; r++) {
+      const found = rows[r].find((x) => x.path === cur);
+      if (found) {
+        rIdx = r;
+        cX = found.cx;
+        break;
+      }
+    }
+    if (rIdx < 0) return cur;
+    if (keyLower === "arrowdown" || keyLower === "s") {
+      const nextRow = rows[Math.min(rows.length - 1, rIdx + 1)];
+      const pick = nextRow.reduce((best, x) =>
+        Math.abs(x.cx - cX) < Math.abs(best.cx - cX) ? x : best
+      , nextRow[0]);
+      return pick?.path ?? cur;
+    }
+    if (keyLower === "arrowup" || keyLower === "w") {
+      const prevRow = rows[Math.max(0, rIdx - 1)];
+      const pick = prevRow.reduce((best, x) =>
+        Math.abs(x.cx - cX) < Math.abs(best.cx - cX) ? x : best
+      , prevRow[0]);
+      return pick?.path ?? cur;
+    }
     return cur;
+  }
+
+  function scrollGalleryCursorIntoView(path: string) {
+    requestAnimationFrame(() => {
+      const tiles = Array.from(document.querySelectorAll<HTMLElement>(".tile[data-item-path]"));
+      const tile = tiles.find((el) => String(el.dataset?.itemPath ?? "") === path);
+      tile?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    });
   }
 
   async function toggleGalleryCursorSelection(path: string) {
@@ -1133,6 +1182,24 @@
       if (!routePathEl) return;
       routePathEl.scrollLeft = routePathEl.scrollWidth;
     });
+  }
+
+  async function toggleDestinationsModePreserveScroll() {
+    const fromDest = destinationsMode;
+    const currentScrollTop = fromDest
+      ? Number(galleryScrollEl?.scrollTop ?? 0)
+      : Number(galleryPlainEl?.scrollTop ?? 0);
+    destinationsMode = !fromDest;
+    await tick();
+    const apply = () => {
+      if (!fromDest) {
+        if (galleryScrollEl) galleryScrollEl.scrollTop = currentScrollTop;
+      } else {
+        if (galleryPlainEl) galleryPlainEl.scrollTop = currentScrollTop;
+      }
+    };
+    apply();
+    requestAnimationFrame(apply);
   }
 
   const openDestPreview = async (path: string) => {
@@ -2242,10 +2309,11 @@
       }
     }
     const activeEl = (document.activeElement as HTMLElement | null) ?? null;
+    const activeInputType = (activeEl as HTMLInputElement | null)?.type?.toLowerCase?.() ?? "";
     const isTypingEl = Boolean(
       activeEl &&
         (activeEl.isContentEditable ||
-          activeEl.tagName === "INPUT" ||
+          (activeEl.tagName === "INPUT" && activeInputType !== "range") ||
           activeEl.tagName === "TEXTAREA" ||
           activeEl.closest('[contenteditable="true"]'))
     );
@@ -2266,8 +2334,9 @@
         if (!previewSelectionMode) previewSelectedPaths = [];
         status = previewSelectionMode ? "Selección activada (vista previa)" : "Selección desactivada (vista previa)";
       } else {
-        destinationsMode = !destinationsMode;
-        status = destinationsMode ? "Modo Destinos activado" : "Modo Destinos desactivado";
+        const nextMode = !destinationsMode;
+        void toggleDestinationsModePreserveScroll();
+        status = nextMode ? "Modo Destinos activado" : "Modo Destinos desactivado";
       }
       return;
     }
@@ -2304,6 +2373,7 @@
         galleryCursorPath = next;
         galleryKeyboardNavHintActive = true;
         setSelectedPreviewFromPath(next);
+        scrollGalleryCursorIntoView(next);
         if (e.ctrlKey) {
           const anchor = galleryKeyboardRangeAnchorPath ?? current ?? next;
           galleryKeyboardRangeAnchorPath = anchor;
@@ -2403,7 +2473,7 @@
         type="button"
         class="om-btn om-btn--tab"
         class:om-btn--active={destinationsMode}
-        on:click={() => (destinationsMode = !destinationsMode)}
+        on:click={() => void toggleDestinationsModePreserveScroll()}
         title="Activa/desactiva modo selección y panel de destinos"
       >Destinos</button>
       <button
