@@ -632,9 +632,24 @@
     settingsOpen = false;
   };
 
-  function openConfirmDelete(title: string, detail: string, action: () => Promise<void>) {
+  function openConfirmDelete(
+    title: string,
+    detail: string,
+    action: () => Promise<void>,
+    opts?: {
+      confirmLabel?: string;
+      bypassEnabled?: boolean;
+      bypassLabel?: string;
+      bypassSetter?: (enabled: boolean) => void;
+    }
+  ) {
     confirmDeleteTitle = title;
     confirmDeleteDetail = detail;
+    confirmDeleteConfirmLabel = opts?.confirmLabel ?? "Eliminar";
+    confirmDeleteBypassEnabled = Boolean(opts?.bypassEnabled);
+    confirmDeleteBypassLabel = opts?.bypassLabel ?? "No volver a preguntar por ahora";
+    confirmDeleteBypassChecked = false;
+    confirmDeleteBypassSetter = opts?.bypassSetter ?? null;
     confirmDeleteAction = action;
     confirmDeleteOpen = true;
   }
@@ -642,10 +657,16 @@
   function closeConfirmDelete() {
     confirmDeleteOpen = false;
     confirmDeleteAction = null;
+    confirmDeleteBypassEnabled = false;
+    confirmDeleteBypassChecked = false;
+    confirmDeleteBypassSetter = null;
   }
 
   async function runConfirmDelete() {
     if (!confirmDeleteAction) return;
+    if (confirmDeleteBypassEnabled && confirmDeleteBypassChecked && confirmDeleteBypassSetter) {
+      confirmDeleteBypassSetter(true);
+    }
     const fn = confirmDeleteAction;
     closeConfirmDelete();
     await fn();
@@ -781,10 +802,28 @@
     }
   }
 
+  function getSelectedGalleryPaths(): string[] {
+    return items.filter((x) => x.kind === "image" && x.selected).map((x) => x.path);
+  }
+
+  function askConfirmMoveSelected(destPath: string) {
+    const selectedPaths = getSelectedGalleryPaths();
+    if (selectedPaths.length === 0) {
+      status = "No hay imágenes seleccionadas para mover";
+      return;
+    }
+    openConfirmDelete(
+      "Mover selección",
+      `¿Mover ${selectedPaths.length} imágenes al destino seleccionado?`,
+      async () => {
+        await moveToDest(destPath);
+      },
+      { confirmLabel: "Mover" }
+    );
+  }
+
   const moveToDest = async (path: string) => {
-    const selectedPaths = items
-      .filter((x) => x.kind === "image" && x.selected)
-      .map((x) => x.path);
+    const selectedPaths = getSelectedGalleryPaths();
     if (selectedPaths.length === 0) {
       status = "No hay imágenes seleccionadas para mover";
       return;
@@ -1180,8 +1219,8 @@
 
   function onGalleryTilePointerDown(e: PointerEvent, it: GalleryItem) {
     if (!destinationsMode || it.kind !== "image") return;
-    // Solo activa selección por rango con Ctrl para no interferir con DnD normal.
-    if (!e.ctrlKey) return;
+    // Por defecto: selección por rango. Con Ctrl: modo arrastre.
+    if (e.ctrlKey) return;
     e.preventDefault();
     const baseSelected = items
       .filter((x) => x.kind === "image" && x.selected)
@@ -1409,6 +1448,29 @@
     }
   }
 
+  function requestMoveCurrentZoomToDestination(destPath: string) {
+    if (!previewZoomPath) return;
+    if (previewZoomSkipMoveConfirm) {
+      void moveCurrentZoomToDestination(destPath);
+      return;
+    }
+    openConfirmDelete(
+      "Mover imagen",
+      "¿Mover la imagen actual al destino seleccionado?",
+      async () => {
+        await moveCurrentZoomToDestination(destPath);
+      },
+      {
+        confirmLabel: "Mover",
+        bypassEnabled: true,
+        bypassLabel: "No volver a preguntar en esta sesión de fullscreen",
+        bypassSetter: (enabled: boolean) => {
+          previewZoomSkipMoveConfirm = enabled;
+        },
+      }
+    );
+  }
+
   async function processZoomMoveQueue() {
     if (zoomMoveWorkerRunning) return;
     zoomMoveWorkerRunning = true;
@@ -1579,11 +1641,17 @@
   let confirmDeleteOpen = false;
   let confirmDeleteTitle = "Confirmar eliminación";
   let confirmDeleteDetail = "";
+  let confirmDeleteConfirmLabel = "Eliminar";
+  let confirmDeleteBypassEnabled = false;
+  let confirmDeleteBypassChecked = false;
+  let confirmDeleteBypassLabel = "No volver a preguntar por ahora";
+  let confirmDeleteBypassSetter: ((enabled: boolean) => void) | null = null;
   let confirmDeleteAction: (() => Promise<void>) | null = null;
 
   /** Menú contextual (clic derecho) en un chip de destino. */
-  let destCtxMenu: { x: number; y: number; idx: number } | null = null;
+  let destCtxMenu: { x: number; y: number; idx: number; source: "gallery" | "fullscreen" } | null = null;
   let draggedDestIdx: number | null = null;
+  let previewZoomSkipMoveConfirm = false;
 
   function clearGhostListeners() {
     if (dragWinMove) {
@@ -1611,9 +1679,8 @@
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
     if (!destinationsMode || it.kind !== "image") return;
-    // Si estamos en selección por rango (Ctrl sostenido), no iniciar DnD nativo:
-    // en WebEngine bloquea los eventos de puntero y no se ve el resaltado en vivo.
-    if (galleryRangeSelecting || (e as DragEvent).ctrlKey) {
+    // Interacción: solo permitir arrastre cuando Ctrl está presionado.
+    if (galleryRangeSelecting || !(e as DragEvent).ctrlKey) {
       e.preventDefault();
       return;
     }
@@ -1663,7 +1730,7 @@
     }
     ignoreDestCardClickUntil = Date.now() + 450;
     endDragSessionAfterGesture();
-    moveToDest(destPath);
+    askConfirmMoveSelected(destPath);
   }
 
   function onDestChipDragStart(e: DragEvent, idx: number) {
@@ -1700,6 +1767,11 @@
     if (e.button !== 0) return;
     if (Date.now() < ignoreDestCardClickUntil) return;
     if ((e.target as HTMLElement).closest("button")) return;
+    const selectedCount = getSelectedGalleryPaths().length;
+    if (selectedCount > 0) {
+      askConfirmMoveSelected(path);
+      return;
+    }
     openDestPreview(path);
   }
 
@@ -1707,7 +1779,7 @@
     destCtxMenu = null;
   }
 
-  function onDestContextMenu(e: MouseEvent, idx: number) {
+  function onDestContextMenu(e: MouseEvent, idx: number, source: "gallery" | "fullscreen" = "gallery") {
     e.preventDefault();
     e.stopPropagation();
     const pad = 8;
@@ -1719,7 +1791,7 @@
     y = Math.min(y, window.innerHeight - mh - pad);
     x = Math.max(pad, x);
     y = Math.max(pad, y);
-    destCtxMenu = { x, y, idx };
+    destCtxMenu = { x, y, idx, source };
   }
 
   function openAddDestForm() {
@@ -1787,6 +1859,15 @@
     destFormOpen = true;
   }
 
+  function openPreviewFromCtx() {
+    if (destCtxMenu === null) return;
+    const i = destCtxMenu.idx;
+    const d = destRows[i];
+    closeDestCtxMenu();
+    if (!d) return;
+    openDestPreview(d.path);
+  }
+
   async function removeDestFromCtx() {
     if (destCtxMenu === null) return;
     const i = destCtxMenu.idx;
@@ -1831,6 +1912,10 @@
   $: if (!previewZoomOpen && deferredZoomMoveRefresh) {
     applyGalleryRefreshFromMove(deferredZoomMoveRefresh.state, deferredZoomMoveRefresh.items);
     deferredZoomMoveRefresh = null;
+  }
+
+  $: if (!previewZoomOpen) {
+    previewZoomSkipMoveConfirm = false;
   }
 
   $: if (previewZoomOpen && previewZoomCarouselVisible && zoomCarouselEl && previewZoomPath) {
@@ -2166,7 +2251,7 @@
                         onDestCardClick(e as unknown as MouseEvent, d.path);
                       }
                     }}
-                    on:contextmenu={(e) => onDestContextMenu(e, i)}
+                    on:contextmenu={(e) => onDestContextMenu(e, i, "gallery")}
                     on:dragstart={(e) => onDestChipDragStart(e, i)}
                     on:dragend={onDestChipDragEnd}
                     on:dragenter|preventDefault
@@ -2580,8 +2665,8 @@
                       data-dest-path={d.path}
                       title={d.path}
                       draggable={true}
-                      on:click={() => moveCurrentZoomToDestination(d.path)}
-                      on:contextmenu={(e) => onDestContextMenu(e, i)}
+                      on:click={() => requestMoveCurrentZoomToDestination(d.path)}
+                      on:contextmenu={(e) => onDestContextMenu(e, i, "fullscreen")}
                       on:dragstart={(e) => onDestChipDragStart(e, i)}
                       on:dragend={onDestChipDragEnd}
                       on:dragenter|preventDefault
@@ -2687,6 +2772,9 @@
       style={`left:${destCtxMenu.x}px;top:${destCtxMenu.y}px`}
       on:click|stopPropagation
     >
+      {#if destCtxMenu.source === "gallery"}
+        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openPreviewFromCtx}>Ver carpeta</button>
+      {/if}
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditFromCtx}>Editar…</button>
       <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={removeDestFromCtx}>Eliminar</button>
     </div>
@@ -2903,9 +2991,15 @@
           <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={closeConfirmDelete}>✕</button>
         </header>
         <p class="settings-hint">{confirmDeleteDetail}</p>
+        {#if confirmDeleteBypassEnabled}
+          <label class="check">
+            <input type="checkbox" bind:checked={confirmDeleteBypassChecked} />
+            {confirmDeleteBypassLabel}
+          </label>
+        {/if}
         <div class="settings-actions">
           <button type="button" class="om-btn om-btn--ghost" on:click={closeConfirmDelete}>Cancelar</button>
-          <button type="button" class="om-btn om-btn--primary" on:click={runConfirmDelete}>Eliminar</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={runConfirmDelete}>{confirmDeleteConfirmLabel}</button>
         </div>
       </div>
     </div>
