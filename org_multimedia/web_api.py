@@ -288,11 +288,6 @@ class WebApi:
         s, e = self._slice()
         items: list[dict] = []
         if self.gallery_page == 0 and self.gallery_folder is not None:
-            parent = self.gallery_folder.parent
-            if parent != self.gallery_folder and parent.is_dir():
-                items.append(
-                    {"kind": "folder_up", "name": ".. Carpeta superior", "path": str(parent), "thumbDataUrl": None}
-                )
             for sub in self.subfolders:
                 items.append({"kind": "folder", "name": sub.name, "path": str(sub), "thumbDataUrl": None})
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))

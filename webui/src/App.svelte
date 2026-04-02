@@ -1271,7 +1271,15 @@
       previewPanMoved = false;
       return;
     }
-    if (e.target === e.currentTarget) return;
+    // Click en fondo del stage (blur): cerrar fullscreen.
+    if (e.target === e.currentTarget) {
+      if (previewZoomMode === "fillWidth") {
+        toggleZoomCarousel();
+        return;
+      }
+      previewZoomOpen = false;
+      return;
+    }
     previewPanX = 0;
     previewPanY = 0;
     toggleZoomCarousel();
@@ -1908,7 +1916,7 @@
                       {/if}
                     </div>
                   {/if}
-                  {#if showThumbLabels || it.kind !== "image"}<span class="tile__name">{it.name}</span>{/if}
+                  {#if showThumbLabels || it.kind !== "image"}<span class="tile__name" class:tile__name--folder={it.kind !== "image"}>{it.name}</span>{/if}
                 </div>
               {/each}
               <div class="grid-end-spacer" aria-hidden="true"></div>
@@ -2026,7 +2034,7 @@
                   {/if}
                 </div>
               {/if}
-              {#if showThumbLabels || it.kind !== "image"}<span class="tile__name">{it.name}</span>{/if}
+              {#if showThumbLabels || it.kind !== "image"}<span class="tile__name" class:tile__name--folder={it.kind !== "image"}>{it.name}</span>{/if}
             </button>
           {/each}
         </div>
@@ -2285,7 +2293,7 @@
             >Destinos</button>
             <button
               type="button"
-              class="om-btn om-btn--ghost om-btn--compact"
+              class="om-btn om-btn--ghost om-btn--compact zoom-trash-btn"
               title="Eliminar imagen actual"
               on:click={() =>
                 openConfirmDelete(
@@ -2294,8 +2302,12 @@
                   deleteCurrentZoomImage
                 )}
             >
-              <svg class="trash-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v8h-2V9zm4 0h2v8h-2V9zM7 9h2v8H7V9z" />
+              <svg class="trash-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M6 6l1 14h10l1-14" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
               </svg>
             </button>
             <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewZoomOpen = false)}>✕</button>
@@ -2325,7 +2337,6 @@
                 alt={previewZoomName}
                 style={`transform: ${zoomImgTransform};`}
                 on:load={onZoomImageLoad}
-                on:click|stopPropagation={() => undefined}
               />
               {#if zoomHudVisible}
                 <div class="zoom-mini" bind:this={zoomMiniEl}>
@@ -3054,6 +3065,7 @@
     justify-content: center;
     min-width: 2.5rem;
     min-height: 2.5rem;
+    border-radius: var(--thumb-tile-radius, var(--om-radius-md));
   }
 
   .settings-gear {
@@ -3260,6 +3272,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .tile__name--folder {
+    background: rgb(7 8 14 / 0.58);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .preview {
@@ -3525,6 +3543,7 @@
     padding: var(--om-space-4);
     box-sizing: border-box;
     overflow: hidden;
+    border-radius: var(--thumb-tile-radius, var(--om-radius-md));
   }
 
   .modal--dest-form {
@@ -3880,6 +3899,7 @@
     gap: var(--om-space-3);
     padding: 0 var(--om-space-2);
     color: var(--om-text-primary);
+    overflow: visible;
   }
 
   .zoom-modal__tools {
@@ -3891,20 +3911,31 @@
     border-radius: 999px;
     border: 1px solid rgb(255 255 255 / 0.12);
     background: rgb(255 255 255 / 0.05);
+    overflow: visible;
   }
 
   .zoom-modal__tools .om-btn--compact {
-    min-height: 1.8rem;
+    min-height: 2rem;
     padding: 0 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    line-height: 1;
   }
 
   .zoom-modal__tools .om-btn {
     border-color: transparent;
     background: transparent;
     box-shadow: none;
+    line-height: 1.2;
+    overflow: visible;
+  }
+
+  .zoom-trash-btn {
+    width: 2.1rem;
+    min-width: 2.1rem;
+    max-width: 2.1rem;
+    padding: 0;
   }
 
   .zoom-modal__tools .om-btn:hover {
@@ -3913,10 +3944,12 @@
   }
 
   .trash-ico {
-    width: 1.05rem;
-    height: 1.05rem;
+    width: 1.2rem;
+    height: 1.2rem;
     display: block;
     color: currentColor;
+    overflow: visible;
+    flex-shrink: 0;
   }
 
   .zoom-modal__body {
