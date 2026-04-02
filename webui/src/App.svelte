@@ -22,6 +22,17 @@
   let previewLongPressTimer: ReturnType<typeof setTimeout> | null = null;
   let previewLongPressPath: string | null = null;
   let previewLongPressTriggered = false;
+  let previewRangeSelecting = false;
+  let previewRangeAnchorPath: string | null = null;
+  let previewRangeMode: "select" | "deselect" = "select";
+  let previewRangeBaseSelectedPaths: string[] = [];
+  let previewSuppressClick = false;
+  let galleryRangeSelecting = false;
+  let galleryRangeAnchorPath: string | null = null;
+  let galleryRangeMode: "select" | "deselect" = "select";
+  let galleryRangeBaseSelectedPaths: string[] = [];
+  let galleryRangeDraftSelectedPaths: string[] | null = null;
+  let galleryRangeSuppressClick = false;
   let previewZoomOpen = false;
   let previewZoomPath = "";
   let previewZoomName = "";
@@ -608,6 +619,22 @@
       : [...previewSelectedPaths, path];
   }
 
+  function applyPreviewRangeSelection(fromPath: string, toPath: string, mode: "select" | "deselect") {
+    const a = previewItems.findIndex((x) => x.path === fromPath);
+    const b = previewItems.findIndex((x) => x.path === toPath);
+    if (a < 0 || b < 0) return;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const draft = new Set(previewRangeBaseSelectedPaths);
+    for (let i = lo; i <= hi; i++) {
+      const p = previewItems[i]?.path;
+      if (!p) continue;
+      if (mode === "select") draft.add(p);
+      else draft.delete(p);
+    }
+    previewSelectedPaths = [...draft];
+  }
+
   function selectAllPreviewItems() {
     previewSelectedPaths = previewItems.map((x) => x.path);
   }
@@ -696,7 +723,51 @@
     previewLongPressPath = null;
   }
 
+  function endPreviewRangeSelection() {
+    if (!previewRangeSelecting) return;
+    previewRangeSelecting = false;
+    previewRangeAnchorPath = null;
+    previewRangeBaseSelectedPaths = [];
+    // Evita el click "fantasma" al soltar tras arrastre de selección.
+    previewSuppressClick = true;
+    setTimeout(() => {
+      previewSuppressClick = false;
+    }, 0);
+  }
+
+  function onPreviewTilePointerDown(
+    e: PointerEvent,
+    it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }
+  ) {
+    if (!previewSelectionMode) {
+      startPreviewLongPress(it.path);
+      return;
+    }
+    e.preventDefault();
+    cancelPreviewLongPress();
+    previewRangeSelecting = true;
+    previewRangeAnchorPath = it.path;
+    previewRangeBaseSelectedPaths = [...previewSelectedPaths];
+    previewRangeMode = previewSelectedPaths.includes(it.path) ? "deselect" : "select";
+    applyPreviewRangeSelection(it.path, it.path, previewRangeMode);
+  }
+
+  function onPreviewTilePointerEnter(path: string) {
+    if (!previewSelectionMode || !previewRangeSelecting || !previewRangeAnchorPath) return;
+    applyPreviewRangeSelection(previewRangeAnchorPath, path, previewRangeMode);
+  }
+
+  function onPreviewRangePointerMove(e: PointerEvent) {
+    if (!previewSelectionMode || !previewRangeSelecting || !previewRangeAnchorPath) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const tile = el?.closest?.(".pv-tile[data-preview-path]") as HTMLElement | null;
+    const path = tile?.dataset?.previewPath;
+    if (!path) return;
+    applyPreviewRangeSelection(previewRangeAnchorPath, path, previewRangeMode);
+  }
+
   function onPreviewTileClick(it: { path: string; name: string; thumbDataUrl?: string | null }) {
+    if (previewSuppressClick) return;
     if (previewLongPressTriggered && previewLongPressPath === it.path) {
       previewLongPressTriggered = false;
       previewLongPressPath = null;
@@ -708,6 +779,88 @@
     }
     openPreviewZoom(it, { navItems: previewItems });
   }
+
+  function getVisibleGalleryImagePaths(): string[] {
+    return items.filter((x) => x.kind === "image").map((x) => x.path);
+  }
+
+  function isGalleryTileSelected(it: GalleryItem): boolean {
+    if (activeTab !== "destinos" || it.kind !== "image") return false;
+    if (galleryRangeDraftSelectedPaths) return galleryRangeDraftSelectedPaths.includes(it.path);
+    return Boolean(it.selected);
+  }
+
+  function applyGalleryRangeSelection(fromPath: string, toPath: string, mode: "select" | "deselect") {
+    const imagePaths = getVisibleGalleryImagePaths();
+    const a = imagePaths.indexOf(fromPath);
+    const b = imagePaths.indexOf(toPath);
+    if (a < 0 || b < 0) return;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const draft = new Set(galleryRangeBaseSelectedPaths);
+    for (let i = lo; i <= hi; i++) {
+      const p = imagePaths[i];
+      if (!p) continue;
+      if (mode === "select") draft.add(p);
+      else draft.delete(p);
+    }
+    galleryRangeDraftSelectedPaths = [...draft];
+  }
+
+  function onGalleryTilePointerDown(e: PointerEvent, it: GalleryItem) {
+    if (activeTab !== "destinos" || it.kind !== "image") return;
+    // Solo activa selección por rango con Ctrl para no interferir con DnD normal.
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const baseSelected = items
+      .filter((x) => x.kind === "image" && x.selected)
+      .map((x) => x.path);
+    galleryRangeBaseSelectedPaths = baseSelected;
+    galleryRangeAnchorPath = it.path;
+    galleryRangeMode = baseSelected.includes(it.path) ? "deselect" : "select";
+    galleryRangeSelecting = true;
+    applyGalleryRangeSelection(it.path, it.path, galleryRangeMode);
+  }
+
+  function onGalleryRangePointerMove(e: PointerEvent) {
+    if (!galleryRangeSelecting || !galleryRangeAnchorPath) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const tile = el?.closest?.(".tile[data-item-path]") as HTMLElement | null;
+    const path = tile?.dataset?.itemPath;
+    if (!path) return;
+    applyGalleryRangeSelection(galleryRangeAnchorPath, path, galleryRangeMode);
+  }
+
+  async function endGalleryRangeSelection() {
+    if (!galleryRangeSelecting) return;
+    const draft = new Set(galleryRangeDraftSelectedPaths ?? galleryRangeBaseSelectedPaths);
+    const base = new Set(galleryRangeBaseSelectedPaths);
+    const addPaths = [...draft].filter((p) => !base.has(p));
+    const removePaths = [...base].filter((p) => !draft.has(p));
+    galleryRangeSelecting = false;
+    galleryRangeAnchorPath = null;
+    galleryRangeBaseSelectedPaths = [];
+    galleryRangeDraftSelectedPaths = null;
+    galleryRangeSuppressClick = true;
+    setTimeout(() => {
+      galleryRangeSuppressClick = false;
+    }, 0);
+    if (addPaths.length === 0 && removePaths.length === 0) return;
+    try {
+      const out = await bridge.galleryApplySelectionDelta(addPaths, removePaths);
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    } catch {
+      const out = await bridge.galleryRefreshItems();
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    }
+  }
+
 
   function zoomStep(delta: number) {
     // Permite alejar más allá de 100% para que, si el stage efectivo es menor
@@ -1167,6 +1320,18 @@
 </script>
 
 <svelte:window
+  on:pointermove={(e) => {
+    onPreviewRangePointerMove(e);
+    onGalleryRangePointerMove(e);
+  }}
+  on:pointerup={() => {
+    endPreviewRangeSelection();
+    void endGalleryRangeSelection();
+  }}
+  on:pointercancel={() => {
+    endPreviewRangeSelection();
+    void endGalleryRangeSelection();
+  }}
   on:keydown={(e) => {
     if (previewZoomOpen) {
       const key = e.key.toLowerCase();
@@ -1325,10 +1490,14 @@
                   tabindex="0"
                   class="tile"
                   data-item-path={it.path}
-                  class:selected={it.selected && activeTab === "destinos"}
+                  class:selected={isGalleryTileSelected(it)}
                   draggable={it.kind === "image"}
+                  on:pointerdown={(e) => onGalleryTilePointerDown(e, it)}
                   on:dragstart={(e) => onTileDragStart(e, it)}
-                  on:click={() => clickItem(it)}
+                  on:click={() => {
+                    if (galleryRangeSuppressClick) return;
+                    clickItem(it);
+                  }}
                   on:dblclick={() => {
                     if (it.kind === "image") openZoomFromGallery(it);
                   }}
@@ -1587,7 +1756,8 @@
                 class:pv-tile--selected={previewSelectedPaths.includes(it.path)}
                 role="button"
                 tabindex="0"
-                on:pointerdown={() => startPreviewLongPress(it.path)}
+                on:pointerdown={(e) => onPreviewTilePointerDown(e, it)}
+                on:pointerenter={() => onPreviewTilePointerEnter(it.path)}
                 on:pointerup={cancelPreviewLongPress}
                 on:pointerleave={cancelPreviewLongPress}
                 on:pointercancel={cancelPreviewLongPress}

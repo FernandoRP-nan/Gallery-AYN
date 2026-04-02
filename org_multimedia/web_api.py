@@ -322,6 +322,21 @@ class WebApi:
                 self.selected.add(p)
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
 
+    def gallery_apply_selection_delta(self, add_paths: list[str], remove_paths: list[str]) -> dict:
+        """Aplica altas/bajas de selección en lote para gestos de rango (A->B)."""
+        with self.lock:
+            for raw in add_paths or []:
+                s = str(raw).strip()
+                if not s:
+                    continue
+                self.selected.add(Path(s))
+            for raw in remove_paths or []:
+                s = str(raw).strip()
+                if not s:
+                    continue
+                self.selected.discard(Path(s))
+            return {"state": self._gallery_state(), "items": self._build_gallery_items()}
+
     def gallery_select_page(self) -> dict:
         with self.lock:
             s, e = self._slice()

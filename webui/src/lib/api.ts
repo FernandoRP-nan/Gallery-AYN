@@ -59,6 +59,7 @@ const devMockApi: WebApi = {
   gallery_go_page: async () => mockGalleryPayload(),
   gallery_open_folder_tile: async () => ({ ...mockGalleryPayload(), recentFolders: [] as string[] }),
   gallery_toggle_select: async () => mockGalleryPayload(),
+  gallery_apply_selection_delta: async () => mockGalleryPayload(),
   gallery_refresh_items: async () => mockGalleryPayload(),
   gallery_select_page: async () => mockGalleryPayload(),
   gallery_clear_selection: async () => mockGalleryPayload(),
@@ -117,6 +118,8 @@ export const bridge = {
   galleryGoPage: (page: number) => call<any>("gallery_go_page", page),
   galleryOpenFolderTile: (path: string) => call<any>("gallery_open_folder_tile", path),
   galleryToggleSelect: (path: string) => call<any>("gallery_toggle_select", path),
+  galleryApplySelectionDelta: (addPaths: string[], removePaths: string[]) =>
+    call<any>("gallery_apply_selection_delta", addPaths, removePaths),
   galleryRefreshItems: () => call<any>("gallery_refresh_items"),
   gallerySelectPage: () => call<any>("gallery_select_page"),
   galleryClearSelection: () => call<any>("gallery_clear_selection"),
