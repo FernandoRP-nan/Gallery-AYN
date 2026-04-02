@@ -14,3 +14,19 @@ export function galleryThumbPx(scale: number): number {
 export function galleryGridCellPx(scale: number): number {
   return galleryThumbPx(scale) + 36;
 }
+
+/** Coincide con org_multimedia.web_api._thumb_px_from_dest_scale */
+const D_LO = 0.7;
+const D_HI = 2.1;
+const D_PX_MIN = 72;
+const D_PX_MAX = 320;
+
+export function destPreviewThumbPx(scale: number): number {
+  const s = Math.min(D_HI, Math.max(D_LO, scale));
+  return Math.round(D_PX_MIN + ((s - D_LO) / (D_HI - D_LO)) * (D_PX_MAX - D_PX_MIN));
+}
+
+/** Mínimo de pista en la rejilla del modal destino (auto-fill, sin scroll horizontal). */
+export function destPreviewGridMinPx(scale: number): number {
+  return destPreviewThumbPx(scale) + 28;
+}

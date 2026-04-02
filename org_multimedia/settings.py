@@ -22,6 +22,7 @@ def load_app_settings() -> dict:
         return {
             "destinations": [],
             "gallery_last_folder": "",
+            "gallery_recent_folders": [],
             "gallery_thumb_scale": 1.0,
             "gallery_show_thumb_filename": True,
             "gallery_thumbs_per_page": 48,
@@ -42,6 +43,18 @@ def load_app_settings() -> dict:
             data["destinations"] = []
         if "gallery_last_folder" not in data:
             data["gallery_last_folder"] = ""
+        if "gallery_recent_folders" not in data:
+            data["gallery_recent_folders"] = []
+        elif not isinstance(data["gallery_recent_folders"], list):
+            data["gallery_recent_folders"] = []
+        # Primera migración: si no hay historial pero sí última carpeta, mostrar al menos esa
+        if (
+            isinstance(data.get("gallery_recent_folders"), list)
+            and len(data["gallery_recent_folders"]) == 0
+        ):
+            gl = (data.get("gallery_last_folder") or "").strip()
+            if gl:
+                data["gallery_recent_folders"] = [gl]
         if "gallery_thumb_scale" not in data:
             data["gallery_thumb_scale"] = 1.0
         else:
@@ -83,6 +96,7 @@ def load_app_settings() -> dict:
         return {
             "destinations": [],
             "gallery_last_folder": "",
+            "gallery_recent_folders": [],
             "gallery_thumb_scale": 1.0,
             "gallery_show_thumb_filename": True,
             "gallery_thumbs_per_page": 48,

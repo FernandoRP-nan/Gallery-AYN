@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   let pollTimer: number | null = null;
   import { bridge, type GalleryItem } from "./lib/api";
-  import { galleryGridCellPx } from "./lib/thumbScale";
+  import { galleryGridCellPx, destPreviewGridMinPx } from "./lib/thumbScale";
 
   const BLANK_DRAG_IMG =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -16,15 +16,14 @@
   let thumbScale = 1;
   let previewOpen = false;
   let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null }> = [];
-  let previewCols = 4;
   let previewScale = 1;
   let previewDestPath = "";
   let activeTab: "ruta" | "destinos" = "ruta";
   /** Panel organizador en ventana flotante (la galería sigue visible detrás). */
   let orgPanelOpen = false;
   let previewRatio = 0.4;
-  let modalW = 0.9;
-  let modalH = 0.8;
+  /** Modal “ver carpeta destino”: ~80 % del viewport (sin sliders). */
+  const DEST_MODAL_FRAC = 0.8;
   let orgPath = "";
   let orgRunning = false;
   let orgDetail = "Sin tarea";
@@ -37,18 +36,31 @@
     groupSimilarImages: false
   };
 
+  /** Rutas recientes (persistidas en settings) para acceso rápido si el campo está vacío. */
+  let recentFolders: string[] = [];
+
   let ghostVisible = false;
   let ghostX = 0;
   let ghostY = 0;
   let ghostThumb: string | null = null;
   let ghostCount = 1;
   let ghostCaption = "";
-  let dragOverHandler: ((ev: DragEvent) => void) | null = null;
-  let ghostRaf = 0;
-  let ghostPendingX = 0;
-  let ghostPendingY = 0;
+  /** Listeners en window (captura): Qt WebEngine a veces no dispara dragover en document). */
+  let dragWinMove: ((ev: DragEvent) => void) | null = null;
+  let dragWinEnd: (() => void) | null = null;
 
   let splitDrag = false;
+  /** Contador para overlay de carga (carpetas, API, etc.). */
+  let loadCount = 0;
+  $: uiLoading = loadCount > 0;
+
+  function trackLoad<T>(promise: Promise<T>): Promise<T> {
+    loadCount++;
+    return promise.finally(() => {
+      loadCount--;
+    });
+  }
+
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
   let galleryActionBusy = false;
   let thumbScaleDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -86,24 +98,31 @@
   }
 
   const loadInitial = async () => {
-    const data = await bridge.getInitialState();
+    const data = await trackLoad(bridge.getInitialState());
     destinations = data.destinations ?? [];
     thumbScale = Number(data.settings?.gallery_thumb_scale ?? 1);
     previewScale = Number(data.settings?.dest_preview_thumb_scale ?? 1);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
-    modalW = Number(data.settings?.dest_preview_modal_w ?? 0.9);
-    modalH = Number(data.settings?.dest_preview_modal_h ?? 0.8);
     const last = (data.settings?.gallery_last_folder ?? "").trim();
     folder = (data.gallery?.folder ?? last) || "";
     orgPath = folder || orgPath;
     state = data.gallery ?? state;
+    recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
+      ? (data.settings.gallery_recent_folders as string[])
+      : [];
   };
 
   const loadFolder = async () => {
-    const out = await bridge.galleryLoadFolder(folder);
+    const out = await trackLoad(bridge.galleryLoadFolder(folder));
     state = out.state;
     items = out.items;
+    if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
     status = `Cargada carpeta: ${folder}`;
+  };
+
+  const pickRecentFolder = async (path: string) => {
+    folder = path;
+    await loadFolder();
   };
 
   const pickGalleryFolder = async () => {
@@ -130,14 +149,16 @@
     }
   };
 
-  const reload = async () => {
-    const out = await bridge.galleryReload();
+  /** Recarga ítems de la galería. `silent`: no muestra overlay (p. ej. tras mover el slider de miniaturas). */
+  const reload = async (opts?: { silent?: boolean }) => {
+    const p = bridge.galleryReload();
+    const out = opts?.silent ? await p : await trackLoad(p);
     state = out.state;
     items = out.items;
   };
 
   const goPage = async (page: number) => {
-    const out = await bridge.galleryGoPage(page);
+    const out = await trackLoad(bridge.galleryGoPage(page));
     state = out.state;
     items = out.items;
   };
@@ -147,10 +168,11 @@
     galleryActionBusy = true;
     try {
       if (it.kind === "folder" || it.kind === "folder_up") {
-        const out = await bridge.galleryOpenFolderTile(it.path);
+        const out = await trackLoad(bridge.galleryOpenFolderTile(it.path));
         state = out.state;
         items = out.items;
         folder = state.folder;
+        if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
         return;
       }
       if (activeTab === "destinos") {
@@ -210,7 +232,7 @@
   };
 
   const moveToDest = async (path: string) => {
-    const out = await bridge.destinationMoveSelected(path);
+    const out = await trackLoad(bridge.destinationMoveSelected(path));
     state = out.state;
     items = out.items;
     status = `Movidas ${out.moveResult?.moved ?? 0} · errores ${out.moveResult?.errors ?? 0}`;
@@ -261,7 +283,7 @@
   async function applyThumbScaleNow() {
     try {
       await bridge.settingsPatch({ gallery_thumb_scale: Number(thumbScale.toFixed(3)) });
-      await reload();
+      await reload({ silent: true });
     } catch {
       status = "No se pudo aplicar el tamaño de miniaturas";
     }
@@ -282,15 +304,17 @@
   };
 
   const refreshDestPreview = async () => {
-    const w = Math.max(320, Math.round(window.innerWidth * Math.min(0.98, modalW)));
+    const w = Math.max(320, Math.round(window.innerWidth * DEST_MODAL_FRAC));
     const out = await bridge.destinationPreview(previewDestPath, previewScale, w);
     previewItems = out.items;
-    previewCols = out.cols;
   };
+
+  /** Ancho mínimo de pista en el modal destino: auto-fill sin columna cortada ni scroll horizontal. */
+  $: destModalGridMinPx = destPreviewGridMinPx(previewScale);
 
   const saveThumbScale = async () => {
     await bridge.settingsPatch({ gallery_thumb_scale: Number(thumbScale.toFixed(3)) });
-    await reload();
+    await reload({ silent: true });
   };
 
   const saveDestScale = async () => {
@@ -305,14 +329,6 @@
       saveDestScale().catch(() => undefined);
     }, 280);
   }
-
-  const saveModalSize = async () => {
-    await bridge.settingsPatch({
-      dest_preview_modal_w: Number(modalW.toFixed(3)),
-      dest_preview_modal_h: Number(modalH.toFixed(3))
-    });
-    if (previewOpen) await refreshDestPreview();
-  };
 
   const startOrganizer = async () => {
     const out = await bridge.organizerStart(orgPath, orgOptions);
@@ -342,18 +358,19 @@
   };
 
   function clearGhostListeners() {
-    if (ghostRaf) {
-      cancelAnimationFrame(ghostRaf);
-      ghostRaf = 0;
+    if (dragWinMove) {
+      window.removeEventListener("dragover", dragWinMove, true);
+      dragWinMove = null;
     }
-    if (dragOverHandler) {
-      document.removeEventListener("dragover", dragOverHandler);
-      dragOverHandler = null;
+    if (dragWinEnd) {
+      window.removeEventListener("dragend", dragWinEnd, true);
+      dragWinEnd = null;
     }
   }
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
     if (activeTab !== "destinos" || it.kind !== "image") return;
+    clearGhostListeners();
     const dt = e.dataTransfer;
     if (dt) {
       dt.setData("text/plain", it.path);
@@ -369,24 +386,18 @@
     ghostX = e.clientX;
     ghostY = e.clientY;
 
-    dragOverHandler = (ev: DragEvent) => {
+    dragWinMove = (ev: DragEvent) => {
       ev.preventDefault();
-      ghostPendingX = ev.clientX;
-      ghostPendingY = ev.clientY;
-      if (ghostRaf) return;
-      ghostRaf = requestAnimationFrame(() => {
-        ghostRaf = 0;
-        ghostX = ghostPendingX;
-        ghostY = ghostPendingY;
-      });
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+      ghostX = ev.clientX;
+      ghostY = ev.clientY;
     };
-    const onDragEnd = () => {
+    dragWinEnd = () => {
       ghostVisible = false;
       clearGhostListeners();
-      document.removeEventListener("dragend", onDragEnd);
     };
-    document.addEventListener("dragover", dragOverHandler);
-    document.addEventListener("dragend", onDragEnd);
+    window.addEventListener("dragover", dragWinMove, true);
+    window.addEventListener("dragend", dragWinEnd, true);
   }
 
   /** Celdas de ancho fijo (sin 1fr) para que cada paso del slider se note al cambiar columnas. */
@@ -431,7 +442,7 @@
   }}
 />
 
-<main class="app">
+<main class="app" class:app--with-actions={activeTab === "destinos"}>
   <header class="tabs om-panel">
     <nav class="tabs__nav">
       <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "ruta"} on:click={() => (activeTab = "ruta")}>Ruta</button>
@@ -441,42 +452,61 @@
   </header>
 
   <section class="route om-panel">
-    <input
-      id="gallery-folder-input"
-      class="om-input route__path"
-      type="text"
-      bind:value={folder}
-      placeholder="Ruta de carpeta…"
-      title="Pega la ruta o pulsa Examinar (app de escritorio)"
-    />
-    <button type="button" class="om-btn om-btn--primary" title="Explorador del sistema" on:click={pickGalleryFolder}>Examinar…</button>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Recargar galería" on:click={reload}>↻</button>
-    <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Cargar</button>
-    <div class="grow"></div>
-    <span
-      class="field-label"
-      title="Arrastra la barra entre galería y vista previa para el ancho del panel"
-      >Panel derecho ~{Math.round(previewRatio * 100)}%</span>
-    <label class="field-label" for="route-thumb-scale">Miniaturas {Math.round(thumbScale * 100)}%</label>
-    <input
-      id="route-thumb-scale"
-      class="om-range"
-      type="range"
-      min="0.75"
-      max="2.25"
-      step="0.01"
-      bind:value={thumbScale}
-      on:input={scheduleThumbScaleReload}
-      on:change={flushThumbScaleOnRelease}
-    />
+    <div class="route__row">
+      <input
+        id="gallery-folder-input"
+        class="om-input route__path"
+        type="text"
+        bind:value={folder}
+        placeholder="Ruta de carpeta…"
+        title="Pega la ruta o pulsa Examinar (app de escritorio)"
+      />
+      <button type="button" class="om-btn om-btn--primary" title="Explorador del sistema" on:click={pickGalleryFolder}>Examinar…</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Recargar galería" on:click={reload}>↻</button>
+      <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Cargar</button>
+      <div class="grow"></div>
+      <span
+        class="field-label"
+        title="Arrastra la barra entre galería y vista previa para el ancho del panel"
+        >Panel derecho ~{Math.round(previewRatio * 100)}%</span>
+      <label class="field-label" for="route-thumb-scale">Miniaturas {Math.round(thumbScale * 100)}%</label>
+      <input
+        id="route-thumb-scale"
+        class="om-range"
+        type="range"
+        min="0.75"
+        max="2.25"
+        step="0.01"
+        bind:value={thumbScale}
+        on:input={scheduleThumbScaleReload}
+        on:change={flushThumbScaleOnRelease}
+      />
+    </div>
+    {#if !folder.trim() && recentFolders.length > 0}
+      <div class="recent-folders" aria-label="Rutas recientes">
+        <div class="recent-folders__head">
+          <span class="field-label">Rutas recientes</span>
+          <span class="recent-folders__hint">Pulsa para cargar</span>
+        </div>
+        <div class="recent-folders__list">
+          {#each recentFolders as p}
+            <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
+              {p.length > 56 ? `${p.slice(0, 53)}…` : p}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </section>
 
-  <section class="om-panel actions" hidden={activeTab !== "destinos"}>
-    <button type="button" class="om-btn om-btn--ghost" on:click={selectPage}>Seleccionar página</button>
-    <button type="button" class="om-btn om-btn--ghost" on:click={clearSelection}>Quitar selección</button>
-    <button type="button" class="om-btn om-btn--ghost" on:click={invertSelection}>Invertir</button>
-    <span class="pill">{state.selectedCount} seleccionadas</span>
-  </section>
+  {#if activeTab === "destinos"}
+    <section class="om-panel actions">
+      <button type="button" class="om-btn om-btn--ghost" on:click={selectPage}>Seleccionar página</button>
+      <button type="button" class="om-btn om-btn--ghost" on:click={clearSelection}>Quitar selección</button>
+      <button type="button" class="om-btn om-btn--ghost" on:click={invertSelection}>Invertir</button>
+      <span class="pill">{state.selectedCount} seleccionadas</span>
+    </section>
+  {/if}
 
   <section
     class="content"
@@ -568,12 +598,11 @@
       }}
     >
       <div
-        class="modal om-panel om-panel--lift"
+        class="modal modal--dest om-panel om-panel--lift"
         role="dialog"
         tabindex="-1"
         aria-modal="true"
         aria-labelledby="dest-preview-title"
-        style={`width:min(${Math.round(modalW * 100)}vw, min(1100px, 96vw));max-height:min(${Math.round(modalH * 100)}vh, 92vh)`}
         on:click|stopPropagation
         on:keydown={(e) => e.stopPropagation()}
       >
@@ -582,7 +611,7 @@
           <button type="button" class="om-btn om-btn--ghost" on:click={() => (previewOpen = false)}>Cerrar</button>
         </header>
         <section class="modal__ctrl">
-          <label class="field-label" for="dest-preview-scale">Tamaño {Math.round(previewScale * 100)}%</label>
+          <label class="field-label" for="dest-preview-scale">Miniaturas en vista previa {Math.round(previewScale * 100)}%</label>
           <input
             id="dest-preview-scale"
             class="om-range"
@@ -593,13 +622,9 @@
             bind:value={previewScale}
             on:input={scheduleDestScaleSave}
           />
-          <label class="field-label" for="dest-modal-w">Ancho ventana</label>
-          <input id="dest-modal-w" class="om-range" type="range" min="0.55" max="0.96" step="0.01" bind:value={modalW} on:change={saveModalSize} />
-          <label class="field-label" for="dest-modal-h">Alto ventana</label>
-          <input id="dest-modal-h" class="om-range" type="range" min="0.35" max="0.92" step="0.01" bind:value={modalH} on:change={saveModalSize} />
         </section>
         <div class="modal__scroll">
-          <section class="dest-grid" style={`--cols:${previewCols}`}>
+          <section class="dest-grid" style={`--pv-min:${destModalGridMinPx}px`}>
             {#each previewItems as it}
               <div class="pv-tile">
                 {#if it.thumbDataUrl}<img src={it.thumbDataUrl} alt="" />{/if}
@@ -665,6 +690,13 @@
       </div>
     </div>
   {/if}
+
+  {#if uiLoading}
+    <div class="load-overlay" aria-busy="true" aria-live="polite">
+      <div class="load-overlay__spinner"></div>
+      <span class="load-overlay__text">Cargando…</span>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -675,12 +707,18 @@
     height: 100%;
     display: grid;
     gap: var(--om-space-4);
-    grid-template-rows: auto auto auto 1fr auto;
+    /* Ruta: tabs · ruta · galería (crece) · destinos · paginador */
+    grid-template-rows: auto auto 1fr auto auto;
     padding: var(--om-space-4) var(--om-space-5);
     font-family: var(--om-font-sans);
     color: var(--om-text-primary);
     background: radial-gradient(120% 80% at 50% -20%, rgb(124 140 255 / 0.12), transparent 50%), var(--om-bg-base);
     box-sizing: border-box;
+  }
+
+  .app.app--with-actions {
+    /* Destinos: fila extra para seleccionar página / invertir / etc. */
+    grid-template-rows: auto auto auto 1fr auto auto;
   }
 
   .tabs__nav {
@@ -692,9 +730,44 @@
 
   .route {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--om-space-3);
+  }
+
+  .route__row {
+    display: flex;
     align-items: center;
     gap: var(--om-space-3);
     flex-wrap: wrap;
+  }
+
+  .recent-folders__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--om-space-3);
+    flex-wrap: wrap;
+  }
+
+  .recent-folders__hint {
+    font-size: 0.7rem;
+    color: var(--om-text-muted);
+  }
+
+  .recent-folders__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--om-space-2);
+  }
+
+  .recent-folders__chip {
+    max-width: 100%;
+    text-align: left;
+    font-size: 0.75rem;
+    line-height: 1.3;
+    white-space: normal;
+    word-break: break-all;
   }
 
   .route__path {
@@ -995,6 +1068,40 @@
     flex: 1;
   }
 
+  .load-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 150;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--om-space-3);
+    background: rgb(4 6 14 / 0.42);
+    pointer-events: all;
+  }
+
+  .load-overlay__spinner {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 3px solid rgb(255 255 255 / 0.18);
+    border-top-color: var(--om-accent);
+    animation: om-spin 0.7s linear infinite;
+  }
+
+  .load-overlay__text {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--om-text-secondary);
+  }
+
+  @keyframes om-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   .overlay {
     position: fixed;
     inset: 0;
@@ -1015,6 +1122,13 @@
     box-sizing: border-box;
   }
 
+  /* Altura explícita: si solo hay max-height, el cuerpo flex no ocupa espacio y casi no se ve la rejilla. */
+  .modal--dest {
+    width: min(80vw, min(1100px, 96vw));
+    height: clamp(480px, 82vh, 920px);
+    max-height: min(94vh, 920px);
+  }
+
   .modal__head {
     display: flex;
     justify-content: space-between;
@@ -1031,9 +1145,10 @@
   }
 
   .modal__scroll {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-height: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: hidden;
     display: flex;
     flex-direction: column;
   }
@@ -1041,9 +1156,12 @@
   .dest-grid {
     flex: 1 1 auto;
     min-height: 0;
-    overflow: auto;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(var(--cols), minmax(120px, 1fr));
+    /* auto-fill: solo columnas que caben; min() evita una pista más estrecha que el contenedor. */
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--pv-min, 120px), 100%), 1fr));
     gap: var(--om-space-3);
     align-content: start;
   }

@@ -88,6 +88,21 @@ class WebApi:
         self._thumb_cache[key] = (mtime, data)
         return data
 
+    def _merge_recent_folder(self, path_str: str) -> None:
+        """Mantiene hasta 20 rutas únicas (más reciente primero) para acceso rápido en la UI."""
+        try:
+            p = str(Path(path_str).resolve())
+        except (OSError, ValueError):
+            return
+        if not p:
+            return
+        prev = self.settings.get("gallery_recent_folders")
+        if not isinstance(prev, list):
+            prev = []
+        unique = [str(x) for x in prev if str(x) != p]
+        unique.insert(0, p)
+        self.settings["gallery_recent_folders"] = unique[:20]
+
     def get_initial_state(self) -> dict:
         return {
             "settings": self.settings,
@@ -164,12 +179,17 @@ class WebApi:
             self._clear_thumb_cache()
             self.gallery_folder = folder
             self.settings["gallery_last_folder"] = str(folder)
+            self._merge_recent_folder(str(folder))
             save_app_settings(self.settings)
             self.subfolders = list_subdirs(folder)
             self.ordered_paths = scan_images_flat(folder)
             self.selected.clear()
             self.gallery_page = 0
-            return {"state": self._gallery_state(), "items": self._build_gallery_items()}
+            return {
+                "state": self._gallery_state(),
+                "items": self._build_gallery_items(),
+                "recentFolders": list(self.settings.get("gallery_recent_folders", [])),
+            }
 
     def gallery_reload(self) -> dict:
         """Reindexa archivos en la carpeta actual sin perder página ni selección (p. ej. tras mover archivos)."""
