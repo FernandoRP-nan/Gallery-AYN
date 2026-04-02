@@ -54,6 +54,7 @@
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
   let galleryGridEl: HTMLDivElement | null = null;
+  let galleryScrollEl: HTMLDivElement | null = null;
   let galleryGridObservedEl: HTMLDivElement | null = null;
   let galleryGridResizeObserver: ResizeObserver | null = null;
   let galleryGridWidth = 0;
@@ -1397,15 +1398,21 @@
   })();
   $: settingsPreviewCellPx = galleryGridCellPx(settingsThumbScaleDraft);
 
-  $: if (galleryGridEl && galleryGridEl !== galleryGridObservedEl) {
+  $: if (galleryScrollEl && galleryScrollEl !== galleryGridObservedEl) {
     galleryGridResizeObserver?.disconnect();
-    galleryGridObservedEl = galleryGridEl;
+    galleryGridObservedEl = galleryScrollEl;
     galleryGridResizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
-      galleryGridWidth = Math.max(0, Math.round(entry.contentRect.width));
+      // Usar ancho de borde evita saltos por cambios de scroll interno.
+      const borderInline =
+        Array.isArray((entry as any).borderBoxSize) && (entry as any).borderBoxSize.length > 0
+          ? Number((entry as any).borderBoxSize[0]?.inlineSize ?? 0)
+          : 0;
+      const fallback = Math.max(0, Math.round(galleryScrollEl?.getBoundingClientRect().width ?? entry.contentRect.width));
+      galleryGridWidth = Math.max(0, Math.round(borderInline || fallback));
     });
-    galleryGridResizeObserver.observe(galleryGridEl);
+    galleryGridResizeObserver.observe(galleryScrollEl);
   }
 
   $: if (!destinationsMode) {
@@ -1606,7 +1613,7 @@
             : "grid-template-columns:minmax(0,1fr)"}
         >
           <article class="gallery om-panel om-panel--lift gallery--with-float">
-            <div class="gallery__scroll">
+            <div class="gallery__scroll" bind:this={galleryScrollEl}>
               <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
               {#each items as it (it.path)}
                 <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
@@ -2486,6 +2493,7 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable both-edges;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-content: start;
@@ -2529,7 +2537,7 @@
     bottom: var(--om-space-2);
     z-index: 7;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: var(--om-space-1);
     padding: var(--om-space-1) var(--om-space-2);
@@ -2538,6 +2546,14 @@
     border: 1px solid rgb(255 255 255 / 0.1);
     box-shadow: var(--om-shadow-md);
     backdrop-filter: blur(8px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    box-sizing: border-box;
+    scrollbar-width: none;
+  }
+
+  .dest-float-chips::-webkit-scrollbar {
+    height: 0;
   }
 
   .dest-float-add {
@@ -2564,6 +2580,7 @@
   .dest-float-chip {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto;
     min-height: 1.95rem;
     padding: 4px 12px;
     border-radius: 999px;
