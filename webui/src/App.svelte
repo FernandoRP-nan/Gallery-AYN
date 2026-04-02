@@ -61,6 +61,8 @@
   const GALLERY_GRID_EDGE_PAD_PX = 8;
   let zoomNavItems: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
   let galleryThumbHydrationToken = 0;
+  let galleryLoadingMore = false;
+  let galleryHasMore = false;
   let previewThumbHydrationToken = 0;
   let previewScale = 1;
   let previewVisible = true;
@@ -131,6 +133,9 @@
   /** Contador para overlay de carga (carpetas, API, etc.). */
   let loadCount = 0;
   $: uiLoading = loadCount > 0;
+  $: galleryHasMore =
+    thumbsPerPage === 0 &&
+    Number(galleryState?.endIndex ?? 0) < Number(galleryState?.total ?? 0);
 
   function trackLoad<T>(promise: Promise<T>): Promise<T> {
     loadCount++;
@@ -456,6 +461,27 @@
     void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
     pageJumpDraft = out.state.page;
   };
+
+  async function onGalleryScroll(e: Event) {
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMore) return;
+    const el = e.currentTarget as HTMLElement | null;
+    if (!el) return;
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
+    if (!nearBottom) return;
+    galleryLoadingMore = true;
+    try {
+      const out = await bridge.galleryLoadMore();
+      if (out?.state) galleryState = out.state;
+      const extra = Array.isArray(out?.items) ? out.items : [];
+      if (extra.length > 0) {
+        items = [...items, ...extra];
+        galleryThumbHydrationToken++;
+        void hydrateGalleryThumbsHq(extra, thumbScale, galleryThumbHydrationToken);
+      }
+    } finally {
+      galleryLoadingMore = false;
+    }
+  }
 
   const jumpToPageDraft = async () => {
     const n = Math.min(galleryState.totalPages, Math.max(1, Math.round(Number(pageJumpDraft)) || 1));
@@ -1614,7 +1640,7 @@
             : "grid-template-columns:minmax(0,1fr)"}
         >
           <article class="gallery om-panel om-panel--lift gallery--with-float">
-            <div class="gallery__scroll" bind:this={galleryScrollEl}>
+            <div class="gallery__scroll" bind:this={galleryScrollEl} on:scroll={onGalleryScroll}>
               <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
               {#each items as it (it.path)}
                 <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
@@ -1667,7 +1693,7 @@
                       {/if}
                     </div>
                   {/if}
-                  {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
+                  {#if showThumbLabels || it.kind !== "image"}<span class="tile__name">{it.name}</span>{/if}
                 </div>
               {/each}
               </div>
@@ -1739,7 +1765,7 @@
         ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
         : "grid-template-columns:minmax(0,1fr)"}
     >
-      <article class="gallery om-panel om-panel--lift">
+      <article class="gallery om-panel om-panel--lift" on:scroll={onGalleryScroll}>
         <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
           {#each items as it (it.path)}
             <button
@@ -1773,7 +1799,7 @@
                   {/if}
                 </div>
               {/if}
-              {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
+              {#if showThumbLabels || it.kind !== "image"}<span class="tile__name">{it.name}</span>{/if}
             </button>
           {/each}
         </div>

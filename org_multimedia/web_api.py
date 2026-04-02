@@ -120,12 +120,19 @@ class WebApi:
         self.subfolders: list[Path] = []
         self.selected: set[Path] = set()
         self.gallery_page = 0
+        self.gallery_unlimited_loaded = 0
         self.lock = threading.RLock()
         # Candado solo para la caché de miniaturas (los workers no deben tomar `self.lock` mientras el hilo principal construye la página).
         self._thumb_cache_lock = threading.Lock()
         self._organizer_job: dict | None = None
         # Caché (ruta, tamaño, perfil) -> (mtime, data_url)
         self._thumb_cache: dict[tuple[str, int, str], tuple[float, str | None]] = {}
+
+    def _is_unlimited_mode(self) -> bool:
+        return int(self.settings.get("gallery_thumbs_per_page", 48)) <= 0
+
+    def _unlimited_batch_size(self) -> int:
+        return 48
 
     def _clear_thumb_cache(self) -> None:
         self._thumb_cache.clear()
@@ -198,13 +205,15 @@ class WebApi:
     def _thumbs_per_page(self) -> int:
         n = int(self.settings.get("gallery_thumbs_per_page", 48))
         if n <= 0:
-            # 0 = sin límite (cargar toda la galería en una sola página).
-            return max(1, len(self.ordered_paths))
+            # En modo sin límite, se usa carga progresiva por tandas.
+            return self._unlimited_batch_size()
         return max(12, n)
 
     def _total_pages(self) -> int:
         total = len(self.ordered_paths)
         if total == 0:
+            return 1
+        if self._is_unlimited_mode():
             return 1
         ps = self._thumbs_per_page()
         return max(1, (total + ps - 1) // ps)
@@ -214,10 +223,37 @@ class WebApi:
         self.gallery_page = max(0, min(self.gallery_page, tp - 1))
 
     def _slice(self) -> tuple[int, int]:
+        if self._is_unlimited_mode():
+            total = len(self.ordered_paths)
+            if total <= 0:
+                return 0, 0
+            loaded = self.gallery_unlimited_loaded
+            if loaded <= 0:
+                loaded = min(total, self._unlimited_batch_size())
+            loaded = max(0, min(total, loaded))
+            self.gallery_unlimited_loaded = loaded
+            return 0, loaded
         ps = self._thumbs_per_page()
         s = self.gallery_page * ps
         e = min(len(self.ordered_paths), s + ps)
         return s, e
+
+    def _build_image_items(self, slice_paths: list[Path], thumb_px: int, selected_frozenset: frozenset[Path]) -> list[dict]:
+        def _one_image_item(p: Path) -> dict:
+            return {
+                "kind": "image",
+                "name": p.name,
+                "path": str(p),
+                "selected": p in selected_frozenset,
+                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
+                "thumbQuality": "lq",
+            }
+
+        if not slice_paths:
+            return []
+        max_workers = min(8, max(1, len(slice_paths)))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            return list(pool.map(_one_image_item, slice_paths))
 
     def _gallery_state(self) -> dict:
         total = len(self.ordered_paths)
@@ -249,23 +285,7 @@ class WebApi:
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         slice_paths = self.ordered_paths[s:e]
         selected_frozenset = frozenset(self.selected)
-
-        def _one_image_item(p: Path) -> dict:
-            return {
-                "kind": "image",
-                "name": p.name,
-                "path": str(p),
-                "selected": p in selected_frozenset,
-                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
-                "thumbQuality": "lq",
-            }
-
-        if not slice_paths:
-            return items
-        max_workers = min(8, max(1, len(slice_paths)))
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            image_items = list(pool.map(_one_image_item, slice_paths))
-        items.extend(image_items)
+        items.extend(self._build_image_items(slice_paths, thumb_px, selected_frozenset))
         return items
 
     def gallery_load_folder(self, raw_path: str) -> dict:
@@ -282,6 +302,9 @@ class WebApi:
             self.ordered_paths = scan_images_flat(folder)
             self.selected.clear()
             self.gallery_page = 0
+            self.gallery_unlimited_loaded = (
+                min(len(self.ordered_paths), self._unlimited_batch_size()) if self._is_unlimited_mode() else 0
+            )
             return {
                 "state": self._gallery_state(),
                 "items": self._build_gallery_items(),
@@ -298,6 +321,8 @@ class WebApi:
             self.subfolders = list_subdirs(folder)
             self.ordered_paths = scan_images_flat(folder)
             self._clamp_page()
+            if self._is_unlimited_mode():
+                self.gallery_unlimited_loaded = min(len(self.ordered_paths), self._unlimited_batch_size())
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
 
     def gallery_refresh_items(self) -> dict:
@@ -309,9 +334,35 @@ class WebApi:
 
     def gallery_go_page(self, page_1: int) -> dict:
         with self.lock:
+            if self._is_unlimited_mode():
+                # En modo sin límite no hay páginas; la carga es por tandas.
+                return {"state": self._gallery_state(), "items": self._build_gallery_items()}
             self.gallery_page = max(0, int(page_1) - 1)
             self._clamp_page()
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
+
+    def gallery_load_more(self) -> dict:
+        with self.lock:
+            if not self.gallery_folder:
+                return {"state": self._gallery_state(), "items": [], "hasMore": False}
+            if not self._is_unlimited_mode():
+                return {"state": self._gallery_state(), "items": [], "hasMore": False}
+            total = len(self.ordered_paths)
+            if total <= 0:
+                return {"state": self._gallery_state(), "items": [], "hasMore": False}
+
+            start = max(0, min(total, self.gallery_unlimited_loaded))
+            end = min(total, start + self._unlimited_batch_size())
+            if start >= end:
+                return {"state": self._gallery_state(), "items": [], "hasMore": False}
+
+            thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+            selected_frozenset = frozenset(self.selected)
+            image_items = self._build_image_items(self.ordered_paths[start:end], thumb_px, selected_frozenset)
+
+            self.gallery_unlimited_loaded = end
+            has_more = end < total
+            return {"state": self._gallery_state(), "items": image_items, "hasMore": has_more}
 
     def gallery_open_folder_tile(self, path: str) -> dict:
         return self.gallery_load_folder(path)
