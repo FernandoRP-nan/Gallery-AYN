@@ -52,9 +52,16 @@
   let ghostThumb: string | null = null;
   let ghostCount = 1;
   let ghostCaption = "";
-  /** Listeners en window (captura): Qt WebEngine a veces no dispara dragover en document). */
+  /** Listeners globales durante HTML5 DnD (Qt WebEngine: document + capture). */
   let dragWinMove: ((ev: DragEvent) => void) | null = null;
   let dragWinEnd: (() => void) | null = null;
+
+  /** Último segmento de ruta para chips compactos. */
+  function pathBasename(p: string): string {
+    const s = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    const i = s.lastIndexOf("/");
+    return i >= 0 ? s.slice(i + 1) || s : s;
+  }
 
   let splitDrag = false;
   /** Contador para overlay de carga (carpetas, API, etc.). */
@@ -200,6 +207,10 @@
   };
 
   const clickItem = async (it: GalleryItem) => {
+    if (suppressNextGalleryClick) {
+      suppressNextGalleryClick = false;
+      return;
+    }
     if (galleryActionBusy) return;
     galleryActionBusy = true;
     try {
@@ -453,20 +464,38 @@
     }
   };
 
+  const dragOpts: AddEventListenerOptions = { capture: true, passive: false };
+
+  /** Tras dragend/drop, el navegador suele disparar un click espurio en la miniatura. */
+  let suppressNextGalleryClick = false;
+
   function clearGhostListeners() {
     if (dragWinMove) {
-      window.removeEventListener("dragover", dragWinMove, true);
+      document.removeEventListener("dragover", dragWinMove, dragOpts);
       dragWinMove = null;
     }
     if (dragWinEnd) {
-      window.removeEventListener("dragend", dragWinEnd, true);
+      document.removeEventListener("dragend", dragWinEnd, dragOpts);
       dragWinEnd = null;
     }
   }
 
+  /** Cierra ghost, listeners y estado de arrastre (WebEngine a veces no emite dragend). */
+  function endDragSession() {
+    ghostVisible = false;
+    document.body.classList.remove("om-dragging");
+    clearGhostListeners();
+  }
+
+  function endDragSessionAfterGesture() {
+    suppressNextGalleryClick = true;
+    endDragSession();
+  }
+
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
     if (activeTab !== "destinos" || it.kind !== "image") return;
-    clearGhostListeners();
+    e.stopPropagation();
+    endDragSession();
     const dt = e.dataTransfer;
     if (dt) {
       dt.setData("text/plain", it.path);
@@ -481,6 +510,7 @@
     ghostVisible = true;
     ghostX = e.clientX;
     ghostY = e.clientY;
+    document.body.classList.add("om-dragging");
 
     dragWinMove = (ev: DragEvent) => {
       ev.preventDefault();
@@ -489,11 +519,17 @@
       ghostY = ev.clientY;
     };
     dragWinEnd = () => {
-      ghostVisible = false;
-      clearGhostListeners();
+      endDragSessionAfterGesture();
     };
-    window.addEventListener("dragover", dragWinMove, true);
-    window.addEventListener("dragend", dragWinEnd, true);
+    document.addEventListener("dragover", dragWinMove, dragOpts);
+    document.addEventListener("dragend", dragWinEnd, dragOpts);
+  }
+
+  function onDestDrop(e: DragEvent, destPath: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    endDragSessionAfterGesture();
+    moveToDest(destPath);
   }
 
   /** Celdas de ancho fijo (sin 1fr) para que cada paso del slider se note al cambiar columnas. */
@@ -520,7 +556,7 @@
   });
 
   onDestroy(() => {
-    clearGhostListeners();
+    endDragSession();
     if (thumbScaleDebounce) clearTimeout(thumbScaleDebounce);
     if (destScaleDebounce) clearTimeout(destScaleDebounce);
     if (pollTimer !== null) {
@@ -643,21 +679,29 @@
             </div>
             <div class="grid" style={`--cell:${gridCellPx}px`}>
               {#each items as it (it.path)}
-                <button
-                  type="button"
+                <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
+                <div
+                  role="button"
+                  tabindex="0"
                   class="tile"
                   class:selected={it.selected && activeTab === "destinos"}
-                  draggable={activeTab === "destinos" && it.kind === "image"}
+                  draggable={it.kind === "image"}
                   on:dragstart={(e) => onTileDragStart(e, it)}
                   on:click={() => clickItem(it)}
+                  on:keydown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      clickItem(it);
+                    }
+                  }}
                 >
                   {#if it.thumbDataUrl}
-                    <img src={it.thumbDataUrl} alt="" loading="lazy" decoding="async" />
+                    <img src={it.thumbDataUrl} alt="" draggable={false} loading="lazy" decoding="async" />
                   {:else}
                     <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
                   {/if}
                   <span class="tile__name">{it.name}</span>
-                </button>
+                </div>
               {/each}
             </div>
           </article>
@@ -697,9 +741,11 @@
               class="dest-card"
               role="group"
               aria-label="Destino {d.label}"
-              on:dragover|preventDefault
-              on:drop|preventDefault={() => moveToDest(d.path)}
+              on:dragenter={(e) => e.preventDefault()}
+              on:dragover={(e) => e.preventDefault()}
+              on:drop={(e) => onDestDrop(e, d.path)}
             >
+              <span class="dest-card__chip-line" title={`${d.label}\n${d.path}`}>{pathBasename(d.path)}</span>
               <div class="dest-card__head">
                 <span class="dest-card__title">{d.label}</span>
                 <span class="dest-card__path">{d.path}</span>
@@ -1103,6 +1149,45 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    container-type: size;
+    container-name: dest-chips;
+  }
+
+  /* Una línea: solo nombre de carpeta (último segmento de ruta); título + botones ocultos. */
+  .dest-card__chip-line {
+    display: none;
+    width: 100%;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--om-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.35;
+  }
+
+  /* Altura baja del área con scroll = vista chip (nombre de carpeta = último segmento). */
+  @container dest-chips (max-height: 132px) {
+    .dest-grid-wrap--scroll {
+      grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+      gap: var(--om-space-2);
+    }
+
+    .dest-card {
+      padding: var(--om-space-2) var(--om-space-3);
+      gap: 0;
+      box-shadow: var(--om-shadow-sm);
+      border-radius: var(--om-radius-md);
+    }
+
+    .dest-card__chip-line {
+      display: block;
+    }
+
+    .dest-card__head,
+    .dest-card__actions {
+      display: none;
+    }
   }
 
   .gallery--with-float {
@@ -1191,9 +1276,22 @@
     contain: layout style;
   }
 
+  /* Durante DnD, los botones de la tarjeta capturan eventos; el área de drop es la tarjeta. */
+  :global(body.om-dragging) .dest-card .om-btn {
+    pointer-events: none;
+  }
+
+  :global(body.om-dragging) .splitter,
+  :global(body.om-dragging) .splitter--h {
+    pointer-events: none;
+  }
+
   .tile {
     touch-action: manipulation;
     position: relative;
+    box-sizing: border-box;
+    -webkit-user-select: none;
+    user-select: none;
     background: linear-gradient(180deg, var(--om-surface-3) 0%, var(--om-surface-2) 100%);
     border: 1px solid var(--om-border-default);
     border-radius: var(--om-radius-md);
@@ -1211,6 +1309,15 @@
   .tile:hover {
     box-shadow: var(--om-shadow-md), 0 0 0 1px rgb(124 140 255 / 0.2);
     border-color: rgb(124 140 255 / 0.25);
+  }
+
+  .tile:focus {
+    outline: none;
+  }
+
+  .tile:focus-visible {
+    outline: 2px solid var(--om-accent);
+    outline-offset: 2px;
   }
 
   .tile.selected {
