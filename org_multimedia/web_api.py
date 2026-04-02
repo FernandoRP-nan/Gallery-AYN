@@ -25,8 +25,8 @@ except Exception:  # pragma: no cover
 
 
 def _thumb_px_from_gallery_scale(scale: float) -> int:
-    """Escala lineal 0.45–2.25 → ~80–340 px (más zoom-out para miniaturas)."""
-    lo, hi = 0.45, 2.25
+    """Escala lineal 0.01–2.25 → ~80–340 px (zoom-out máximo en miniaturas)."""
+    lo, hi = 0.01, 2.25
     px_min, px_max = 96, 400
     s = max(lo, min(hi, float(scale)))
     return int(round(px_min + (s - lo) / (hi - lo) * (px_max - px_min)))

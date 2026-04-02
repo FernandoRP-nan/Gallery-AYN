@@ -1,6 +1,6 @@
 /** Debe coincidir con org_multimedia.web_api._thumb_px_from_gallery_scale */
 
-const G_LO = 0.45;
+const G_LO = 0.01;
 const G_HI = 2.25;
 const G_PX_MIN = 80;
 const G_PX_MAX = 340;

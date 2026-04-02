@@ -329,6 +329,7 @@
     thumbImageRadiusPx = Math.max(0, Math.min(18, Number(data.settings?.web_thumb_image_radius_px ?? 6)));
     thumbTileRadiusPx = Math.max(0, Math.min(28, Number(data.settings?.web_thumb_tile_radius_px ?? 12)));
     previewScale = Number(data.settings?.dest_preview_thumb_scale ?? 1);
+    previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
     const last = (data.settings?.gallery_last_folder ?? "").trim();
@@ -587,7 +588,7 @@
     const perPageRaw = Number.isFinite(parsedPerPage) ? Math.round(parsedPerPage) : 48;
     const n = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     thumbsPerPage = n;
-    const ts = Math.max(0.45, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
+    const ts = Math.max(0.01, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
     thumbScale = ts;
     await bridge.settingsPatch({
       gallery_thumbs_per_page: n, // 0 = sin límite
@@ -851,6 +852,15 @@
       await reload({ silent: true });
     } catch {
       status = "No se pudo aplicar el tamaño de miniaturas";
+    }
+  }
+
+  async function togglePreviewVisible() {
+    previewVisible = !previewVisible;
+    try {
+      await bridge.settingsPatch({ web_preview_visible: Boolean(previewVisible) });
+    } catch {
+      // ignore persist error; estado local se mantiene
     }
   }
 
@@ -1154,7 +1164,7 @@
     const overflowX = (ir.width - stageW) / 2;
     const overflowY = (ir.height - stageH) / 2;
     if (previewZoomMode === "fillWidth") {
-      return { x: 0, y: Math.max(0, overflowY) };
+      return { x: 0, y: Math.max(0, ir.height - stageH) };
     }
     return { x: Math.max(0, overflowX), y: Math.max(0, overflowY) };
   }
@@ -1162,16 +1172,15 @@
   function clampPanToStage() {
     const limits = getPanLimits();
     const nextX = previewZoomMode === "fillWidth" ? 0 : clamp(previewPanX, -limits.x, limits.x);
-    const nextY = clamp(previewPanY, -limits.y, limits.y);
+    const nextY = previewZoomMode === "fillWidth" ? clamp(previewPanY, -limits.y, 0) : clamp(previewPanY, -limits.y, limits.y);
     if (nextX !== previewPanX) previewPanX = nextX;
     if (nextY !== previewPanY) previewPanY = nextY;
   }
 
   function alignFillWidthToTop() {
     if (previewZoomMode !== "fillWidth") return;
-    const limits = getPanLimits();
     previewPanX = 0;
-    previewPanY = -limits.y;
+    previewPanY = 0;
     previewFillWidthAlignPending = false;
   }
 
@@ -1194,6 +1203,8 @@
   $: zoomImgTransform =
     previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100
       ? "translate(-50%, -50%)"
+      : previewZoomMode === "fillWidth"
+        ? `translate(-50%, 0%) translate(0px, ${previewPanY}px) scale(${previewZoomScale})`
       : `translate(-50%, -50%) translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
 
   function zoomWithWheel(e: WheelEvent) {
@@ -1747,7 +1758,11 @@
           on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : pinFolder(folder))}
         >{pinnedFolders.includes(folder.trim()) ? "★" : "☆"}</button>
         <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Cargar ruta" on:click={loadFolder}>⏎</button>
-        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Explorar carpeta" on:click={pickGalleryFolder}>📁</button>
+        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Explorar carpeta" on:click={pickGalleryFolder}>
+          <svg class="route-folder-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z" />
+          </svg>
+        </button>
       </div>
       <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Recargar galería" on:click={reload}>↻</button>
     </div>
@@ -1783,7 +1798,11 @@
         <section class="route-picker__body">
           <div class="route-picker__input-row">
             <input class="om-input route-picker__input" bind:value={folder} placeholder="Ruta de carpeta…" />
-            <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Explorar carpeta" on:click={pickGalleryFolder}>📁</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Explorar carpeta" on:click={pickGalleryFolder}>
+              <svg class="route-folder-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z" />
+              </svg>
+            </button>
             <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Abrir</button>
           </div>
           {#if pinnedFolders.length > 0}
@@ -1821,48 +1840,7 @@
     </div>
   {/if}
 
-  {#if !destinationsMode}
-    {#if !folder.trim() && (pinnedFolders.length > 0 || recentFolders.length > 0)}
-  <section class="route om-panel">
-      <div class="recent-folders" aria-label="Rutas recientes">
-        {#if pinnedFolders.length > 0}
-          <div class="recent-folders__head">
-            <span class="field-label">Rutas ancladas</span>
-            <span class="recent-folders__hint">No se pierden del historial</span>
-          </div>
-          <div class="recent-folders__list">
-            {#each pinnedFolders as p}
-              <div class="recent-folders__chip-wrap">
-                <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
-                  {p.length > 56 ? `${p.slice(0, 53)}…` : p}
-                </button>
-                <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Quitar anclaje" on:click={() => unpinFolder(p)}>★</button>
-              </div>
-            {/each}
-          </div>
-        {/if}
-        {#if recentUnpinnedFolders.length > 0}
-          <div class="recent-folders__head">
-            <span class="field-label">Rutas recientes</span>
-            <span class="recent-folders__hint">Pulsa para cargar y usa ☆ para anclar</span>
-          </div>
-          <div class="recent-folders__list">
-            {#each recentUnpinnedFolders as p}
-              <div class="recent-folders__chip-wrap">
-                <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
-                  {p.length > 56 ? `${p.slice(0, 53)}…` : p}
-                </button>
-                <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Anclar ruta" on:click={() => pinFolder(p)}>☆</button>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-  </section>
-    {:else}
-      <section class="route route--placeholder" aria-hidden="true"></section>
-    {/if}
-  {/if}
+  
 
   {#if destinationsMode}
     <div
@@ -2118,7 +2096,7 @@
       type="button"
       class="om-btn om-btn--ghost om-btn--compact"
       title={previewVisible ? "Ocultar vista previa" : "Mostrar vista previa"}
-      on:click={() => (previewVisible = !previewVisible)}
+      on:click={togglePreviewVisible}
     >{previewVisible ? "👁 Vista previa" : "🙈 Sin preview"}</button>
     <span
       class="field-label pager__split-label"
@@ -2129,7 +2107,7 @@
       id="route-thumb-scale-footer"
       class="om-range pager__thumb-range"
       type="range"
-      min="0.45"
+      min="0.01"
       max="2.25"
       step="0.01"
       bind:value={thumbScale}
@@ -2570,7 +2548,7 @@
               id="set-thumb-scale"
               class="om-range"
               type="range"
-              min="0.45"
+              min="0.01"
               max="2.25"
               step="0.01"
               bind:value={settingsThumbScaleDraft}
@@ -2711,7 +2689,7 @@
 
   /* Barra extra bajo el header cuando no está en modo destinos. */
   .app.app--layout-ruta {
-    grid-template-rows: auto auto 1fr auto;
+    grid-template-rows: auto 1fr auto;
   }
 
   .tabs-bar {
@@ -2724,7 +2702,6 @@
   }
 
   .tabs-bar.om-panel,
-  .route.om-panel,
   .gallery.om-panel,
   .preview.om-panel,
   .pager.om-panel {
@@ -2736,21 +2713,6 @@
     flex-wrap: wrap;
     gap: var(--om-space-2);
     align-items: center;
-  }
-
-  .route {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--om-space-2);
-  }
-
-  .route--placeholder {
-    min-height: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
   }
 
   .route__row {
@@ -2771,11 +2733,6 @@
     justify-content: space-between;
     gap: var(--om-space-3);
     flex-wrap: wrap;
-  }
-
-  .recent-folders__hint {
-    font-size: 0.7rem;
-    color: var(--om-text-muted);
   }
 
   .recent-folders__list {
@@ -2839,6 +2796,13 @@
     min-width: 1.8rem;
     min-height: 1.8rem;
     padding: 0 6px;
+  }
+
+  .route-folder-ico {
+    width: 1rem;
+    height: 1rem;
+    display: block;
+    color: currentColor;
   }
 
   .field-label {
@@ -3924,11 +3888,23 @@
     align-items: center;
     gap: var(--om-space-2);
     flex-wrap: wrap;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.12);
+    background: rgb(255 255 255 / 0.05);
+  }
+
+  .zoom-modal__tools .om-btn--compact {
+    min-height: 2rem;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .trash-ico {
-    width: 1rem;
-    height: 1rem;
+    width: 1.05rem;
+    height: 1.05rem;
     display: block;
     color: currentColor;
   }
@@ -4022,6 +3998,7 @@
     height: auto;
     max-width: none;
     max-height: none;
+    top: 0;
   }
 
   .zoom-modal__img--pannable {

@@ -34,6 +34,7 @@ def load_app_settings() -> dict:
             "dest_preview_geometry": "",
             "web_preview_ratio": 0.4,
             "web_dest_panel_ratio": 0.26,
+            "web_preview_visible": True,
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
@@ -66,7 +67,7 @@ def load_app_settings() -> dict:
         else:
             # Migrar valores viejos (0.5) a rango usable
             gs = float(data["gallery_thumb_scale"])
-            data["gallery_thumb_scale"] = max(0.45, min(2.25, gs))
+            data["gallery_thumb_scale"] = max(0.01, min(2.25, gs))
         if "gallery_show_thumb_filename" not in data:
             data["gallery_show_thumb_filename"] = True
         if "gallery_thumbs_per_page" not in data:
@@ -98,6 +99,10 @@ def load_app_settings() -> dict:
         else:
             dr = float(data["web_dest_panel_ratio"])
             data["web_dest_panel_ratio"] = max(0.12, min(0.55, dr))
+        if "web_preview_visible" not in data:
+            data["web_preview_visible"] = True
+        else:
+            data["web_preview_visible"] = bool(data["web_preview_visible"])
         if "dest_preview_modal_w" not in data:
             data["dest_preview_modal_w"] = 0.9
         if "dest_preview_modal_h" not in data:
@@ -121,6 +126,7 @@ def load_app_settings() -> dict:
             "dest_preview_geometry": "",
             "web_preview_ratio": 0.4,
             "web_dest_panel_ratio": 0.26,
+            "web_preview_visible": True,
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
