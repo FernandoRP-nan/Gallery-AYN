@@ -18,6 +18,10 @@ qt = [
     "PyQt6-WebEngine",
     "qtpy",
 ]
+# Solo en la máquina Windows donde generes el .exe portable
+windows-build = [
+    "pyinstaller>=6",
+]
 
 [project.scripts]
 organizador = "org_multimedia.cli:main"

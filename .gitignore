@@ -1,0 +1,6 @@
+# Salida PyInstaller (solo carpeta en la raíz del repo)
+/dist/
+/build/
+*.egg-info/
+__pycache__/
+*.pyc

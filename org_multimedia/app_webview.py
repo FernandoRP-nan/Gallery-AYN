@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .bundle_paths import project_root
 from .linux_gui_env import prepare_linux_gui_env
 
 from .pywebview_bridge_return import patch_js_bridge_return_value
@@ -17,7 +18,7 @@ def _resolve_frontend_url() -> str:
     env_url = os.environ.get("ORGANIZADOR_WEBUI_URL", "").strip()
     if env_url:
         return env_url
-    base = Path(__file__).resolve().parent.parent
+    base = project_root()
     dist = base / "webui" / "dist" / "index.html"
     if dist.exists():
         # Ruta absoluta (no file://): con http_server=True pywebview sirve por http://127.0.0.1 — mejor GPU/WebKit
