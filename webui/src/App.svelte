@@ -59,6 +59,8 @@
   let zoomMoveWorkerRunning = false;
   let galleryMoveQueue: Array<{ srcPaths: string[]; destPath: string }> = [];
   let galleryMoveWorkerRunning = false;
+  let galleryDeleteQueue: Array<{ paths: string[] }> = [];
+  let galleryDeleteWorkerRunning = false;
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   let zoomStageEl: HTMLDivElement | null = null;
@@ -725,35 +727,38 @@
   }
 
   async function deleteSelectedGalleryItems() {
-    try {
-      const out = await trackLoad(bridge.galleryDeleteSelected());
-      galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-      const deleted = Number(out.deleteResult?.deleted ?? 0);
-      const errors = Number(out.deleteResult?.errors ?? 0);
-      status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""}`;
-    } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudieron eliminar las imágenes seleccionadas";
-    }
+    const selectedPaths = items
+      .filter((x) => x.kind === "image" && Boolean(x.selected))
+      .map((x) => x.path);
+    if (selectedPaths.length === 0) return;
+    const selectedSet = new Set(selectedPaths);
+    items = items.filter((x) => !(x.kind === "image" && selectedSet.has(x.path)));
+    galleryState = {
+      ...galleryState,
+      total: Math.max(0, Number(galleryState?.total ?? 0) - selectedPaths.length),
+      selectedCount: 0,
+      endIndex: Math.max(0, Number(galleryState?.endIndex ?? 0) - selectedPaths.length),
+    };
+    enqueueDeletePaths(selectedPaths);
+    status = `Eliminación en cola (${selectedPaths.length})`;
   }
 
   async function deleteCurrentZoomImage() {
     if (!previewZoomPath) return;
-    try {
-      const out = await trackLoad(bridge.galleryDeletePaths([previewZoomPath]));
-      galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-      const deleted = Number(out.deleteResult?.deleted ?? 0);
-      const errors = Number(out.deleteResult?.errors ?? 0);
-      status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""}`;
+    const curPath = previewZoomPath;
+    const curIdx = zoomNavItems.findIndex((x) => x.path === curPath);
+    const remainingNav = zoomNavItems.filter((x) => x.path !== curPath);
+    items = items.filter((x) => !(x.kind === "image" && x.path === curPath));
+    if (remainingNav.length > 0) {
+      const nextIdx = curIdx >= 0 ? Math.min(curIdx, remainingNav.length - 1) : 0;
+      const nextItem = remainingNav[nextIdx];
+      zoomNavItems = remainingNav;
+      if (nextItem) openPreviewZoom(nextItem, { preserveCarousel: true, preserveMode: true, navItems: remainingNav });
+    } else {
       previewZoomOpen = false;
-    } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo eliminar la imagen actual";
     }
+    enqueueDeletePaths([curPath]);
+    status = "Imagen en cola de eliminación";
   }
 
   const clickItem = async (it: GalleryItem) => {
@@ -812,11 +817,35 @@
     }
   };
 
+  function setSelectedPreviewFromPath(path: string | null | undefined) {
+    const p = String(path ?? "").trim();
+    if (!p) return;
+    const row = items.find((x) => x.kind === "image" && x.path === p) as GalleryItem | undefined;
+    if (!row) return;
+    selectedPreview = {
+      path: row.path,
+      name: row.name,
+      dataUrl: row.thumbDataUrl ?? null,
+    };
+    requestAnimationFrame(() => {
+      bridge
+        .galleryPreview(row.path, 1200, 900)
+        .then((pr) => {
+          selectedPreview = pr;
+        })
+        .catch(() => undefined);
+    });
+  }
+
   const selectPage = async () => {
     const prevItems = items;
     const out = await bridge.gallerySelectPage();
     galleryState = out.state;
     items = mergeItemsKeepingBestThumb(prevItems, out.items);
+    if (destinationsMode) {
+      const last = [...items].reverse().find((x) => x.kind === "image" && Boolean(x.selected));
+      setSelectedPreviewFromPath(last?.path);
+    }
   };
   const clearSelection = async () => {
     const prevItems = items;
@@ -829,6 +858,10 @@
     const out = await bridge.galleryInvertSelection();
     galleryState = out.state;
     items = mergeItemsKeepingBestThumb(prevItems, out.items);
+    if (destinationsMode) {
+      const last = [...items].reverse().find((x) => x.kind === "image" && Boolean(x.selected));
+      setSelectedPreviewFromPath(last?.path);
+    }
   };
 
   async function processGalleryMoveQueue() {
@@ -1133,19 +1166,48 @@
 
   async function deletePreviewSelectedItems() {
     if (previewSelectedPaths.length === 0) return;
+    const deleting = [...previewSelectedPaths];
+    const delSet = new Set(deleting);
+    previewItems = previewItems.filter((x) => !delSet.has(x.path));
+    previewSelectedPaths = [];
+    enqueueDeletePaths(deleting);
+    status = `Eliminación en cola (${deleting.length})`;
+  }
+
+  function enqueueDeletePaths(paths: string[]) {
+    const normalized = (paths || []).map((x) => String(x).trim()).filter((x) => x.length > 0);
+    if (normalized.length === 0) return;
+    galleryDeleteQueue = [...galleryDeleteQueue, { paths: normalized }];
+    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
+  }
+
+  async function processDeleteQueue() {
+    if (galleryDeleteWorkerRunning) return;
+    galleryDeleteWorkerRunning = true;
     try {
-      const out = await trackLoad(bridge.galleryDeletePaths(previewSelectedPaths));
-      galleryState = out.state ?? galleryState;
-      items = out.items ?? items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-      const deleted = Number(out.deleteResult?.deleted ?? 0);
-      const errors = Number(out.deleteResult?.errors ?? 0);
-      status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""}`;
-      previewSelectedPaths = [];
-      await refreshDestPreview();
-    } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudieron eliminar los elementos seleccionados";
+      while (galleryDeleteQueue.length > 0) {
+        const [job, ...rest] = galleryDeleteQueue;
+        galleryDeleteQueue = rest;
+        try {
+          const out = await bridge.galleryDeletePaths(job.paths);
+          galleryState = out.state ?? galleryState;
+          items = out.items ?? items;
+          galleryThumbHydrationToken++;
+          void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+          if (previewOpen) {
+            const valid = new Set((out.items ?? []).filter((x: GalleryItem) => x.kind === "image").map((x: GalleryItem) => x.path));
+            previewItems = previewItems.filter((x) => valid.has(x.path));
+            previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
+          }
+          const deleted = Number(out.deleteResult?.deleted ?? 0);
+          const errors = Number(out.deleteResult?.errors ?? 0);
+          status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""} · cola ${galleryDeleteQueue.length}`;
+        } catch (e: unknown) {
+          status = e instanceof Error ? e.message : "Error en cola de eliminación";
+        }
+      }
+    } finally {
+      galleryDeleteWorkerRunning = false;
     }
   }
 
@@ -1397,6 +1459,13 @@
       const out = await bridge.galleryApplySelectionDelta(addPaths, removePaths);
       galleryState = out.state;
       items = mergeItemsKeepingBestThumb(prevItems, out.items);
+      if (destinationsMode) {
+        const preferred = [...addPaths].reverse().find((p) =>
+          items.some((x) => x.kind === "image" && x.path === p && Boolean(x.selected))
+        );
+        const fallback = [...items].reverse().find((x) => x.kind === "image" && Boolean(x.selected))?.path;
+        setSelectedPreviewFromPath(preferred ?? fallback);
+      }
     } catch {
       const prevItems = items;
       const out = await bridge.galleryRefreshItems();
