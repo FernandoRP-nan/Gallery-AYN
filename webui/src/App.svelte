@@ -2,7 +2,7 @@
   import { onDestroy, onMount, tick } from "svelte";
   let pollTimer: number | null = null;
   import { bridge, type GalleryItem } from "./lib/api";
-  import { galleryGridCellPx, destPreviewGridMinPx } from "./lib/thumbScale";
+  import { galleryGridCellPx } from "./lib/thumbScale";
 
   const BLANK_DRAG_IMG =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -27,6 +27,7 @@
   let previewRangeMode: "select" | "deselect" = "select";
   let previewRangeBaseSelectedPaths: string[] = [];
   let previewSuppressClick = false;
+  let previewDragActive = false;
   let galleryRangeSelecting = false;
   let galleryRangeAnchorPath: string | null = null;
   let galleryRangeMode: "select" | "deselect" = "select";
@@ -80,7 +81,6 @@
   let galleryHasMore = false;
   let galleryAutoLoadRunId = 0;
   let previewThumbHydrationToken = 0;
-  let previewScale = 1;
   let previewVisible = true;
   let previewDestPath = "";
   let destinationsMode = false;
@@ -168,7 +168,6 @@
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
   let galleryActionBusy = false;
   let thumbScaleDebounce: ReturnType<typeof setTimeout> | null = null;
-  let destScaleDebounce: ReturnType<typeof setTimeout> | null = null;
 
   const isDevMock = () =>
     typeof import.meta !== "undefined" && Boolean((import.meta as any).env?.DEV) && !window.pywebview?.api;
@@ -356,7 +355,6 @@
     thumbFrameVisible = Boolean(data.settings?.web_thumb_frame_visible ?? true);
     thumbImageRadiusPx = Math.max(0, Math.min(18, Number(data.settings?.web_thumb_image_radius_px ?? 6)));
     thumbTileRadiusPx = Math.max(0, Math.min(28, Number(data.settings?.web_thumb_tile_radius_px ?? 12)));
-    previewScale = Number(data.settings?.dest_preview_thumb_scale ?? 1);
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
@@ -974,16 +972,17 @@
   const openDestPreview = async (path: string) => {
     previewDestPath = path;
     previewSelectedPaths = [];
+    previewSelectionMode = true;
     previewOpen = true;
     await refreshDestPreview();
   };
 
   const refreshDestPreview = async () => {
     const w = Math.max(320, Math.round(window.innerWidth * DEST_MODAL_FRAC));
-    const out = await bridge.destinationPreview(previewDestPath, previewScale, w);
+    const out = await bridge.destinationPreview(previewDestPath, thumbScale, w);
     previewItems = out.items;
     previewThumbHydrationToken++;
-    void hydratePreviewThumbsHq(previewItems, previewScale, previewThumbHydrationToken);
+    void hydratePreviewThumbsHq(previewItems, thumbScale, previewThumbHydrationToken);
     const valid = new Set(out.items.map((x: { path: string }) => x.path));
     previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
   };
@@ -1017,6 +1016,13 @@
 
   function clearPreviewSelection() {
     previewSelectedPaths = [];
+  }
+
+  function invertPreviewSelection() {
+    const cur = new Set(previewSelectedPaths);
+    previewSelectedPaths = previewItems
+      .map((x) => x.path)
+      .filter((p) => !cur.has(p));
   }
 
   function enterPreviewSelectionMode(path?: string) {
@@ -1053,6 +1059,24 @@
       await refreshDestPreview();
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : "No se pudieron mover los elementos seleccionados";
+    }
+  }
+
+  async function deletePreviewSelectedItems() {
+    if (previewSelectedPaths.length === 0) return;
+    try {
+      const out = await trackLoad(bridge.galleryDeletePaths(previewSelectedPaths));
+      galleryState = out.state ?? galleryState;
+      items = out.items ?? items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      const deleted = Number(out.deleteResult?.deleted ?? 0);
+      const errors = Number(out.deleteResult?.errors ?? 0);
+      status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""}`;
+      previewSelectedPaths = [];
+      await refreshDestPreview();
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudieron eliminar los elementos seleccionados";
     }
   }
 
@@ -1166,6 +1190,26 @@
       return;
     }
     openPreviewZoom(it, { navItems: previewItems });
+  }
+
+  function onPreviewTileDragStart(e: DragEvent, it: { path: string }) {
+    if (!previewSelectionMode) {
+      e.preventDefault();
+      return;
+    }
+    if (!previewSelectedPaths.includes(it.path)) {
+      previewSelectedPaths = [...previewSelectedPaths, it.path];
+    }
+    previewDragActive = true;
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    dt.effectAllowed = "move";
+    dt.setData("application/x-om-preview-paths", JSON.stringify(previewSelectedPaths));
+    dt.setData("text/plain", previewSelectedPaths[0] ?? it.path);
+  }
+
+  function onPreviewTileDragEnd() {
+    previewDragActive = false;
   }
 
   function getVisibleGalleryImagePaths(): string[] {
@@ -1574,26 +1618,10 @@
     return `left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
   })();
 
-  /** Ancho mínimo de pista en el modal destino: auto-fill sin columna cortada ni scroll horizontal. */
-  $: destModalGridMinPx = destPreviewGridMinPx(previewScale);
-
   const saveThumbScale = async () => {
     await bridge.settingsPatch({ gallery_thumb_scale: Number(thumbScale.toFixed(3)) });
     await reload({ silent: true });
   };
-
-  const saveDestScale = async () => {
-    await bridge.settingsPatch({ dest_preview_thumb_scale: Number(previewScale.toFixed(3)) });
-    await refreshDestPreview();
-  };
-
-  function scheduleDestScaleSave() {
-    if (destScaleDebounce) clearTimeout(destScaleDebounce);
-    destScaleDebounce = setTimeout(() => {
-      destScaleDebounce = null;
-      saveDestScale().catch(() => undefined);
-    }, 280);
-  }
 
   const startOrganizer = async () => {
     const out = await bridge.organizerStart(orgPath, orgOptions);
@@ -1950,7 +1978,6 @@
     galleryGridResizeObserver?.disconnect();
     galleryGridResizeObserver = null;
     if (thumbScaleDebounce) clearTimeout(thumbScaleDebounce);
-    if (destScaleDebounce) clearTimeout(destScaleDebounce);
     if (zoomHudTimer) clearTimeout(zoomHudTimer);
     if (pollTimer !== null) {
       window.clearInterval(pollTimer);
@@ -2422,6 +2449,12 @@
       role="button"
       tabindex="-1"
       aria-label="Cerrar vista previa del destino"
+      on:dragover|preventDefault
+      on:drop|self={() => {
+        if (!previewDragActive) return;
+        previewDragActive = false;
+        void movePreviewSelectionToCurrentRoute();
+      }}
       on:click={() => (previewOpen = false)}
       on:keydown={(e) => {
         if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
@@ -2443,54 +2476,40 @@
           <strong id="dest-preview-title">Destino: {previewDestPath}</strong>
           <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewOpen = false)}>✕</button>
         </header>
-        <section class="modal__ctrl">
-          <label class="field-label" for="dest-preview-scale">Miniaturas en vista previa {Math.round(previewScale * 100)}%</label>
-          <input
-            id="dest-preview-scale"
-            class="om-range"
-            type="range"
-            min="0.7"
-            max="2.1"
-            step="0.01"
-            bind:value={previewScale}
-            on:input={scheduleDestScaleSave}
-          />
-          <div class="modal__pick-tools" role="toolbar" aria-label="Selección del modal de destino">
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--compact"
-              on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
-              title={previewSelectionMode ? "Salir del modo selección" : "Entrar al modo selección"}
-            >
-              {previewSelectionMode ? "Salir selección" : "Modo selección"}
-            </button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={selectAllPreviewItems}>Seleccionar todo</button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={clearPreviewSelection}>Limpiar</button>
-            <button
-              type="button"
-              class="om-btn om-btn--primary om-btn--compact"
-              disabled={previewSelectedPaths.length === 0}
-              on:click={movePreviewSelectionToCurrentRoute}
-              title="Mueve los elementos seleccionados a la carpeta cargada en la pestaña Ruta"
-            >
-              Mover seleccionados a Ruta ({previewSelectedPaths.length})
-            </button>
-          </div>
-        </section>
         <div class="modal__scroll">
-          <section class="dest-grid" style={`--pv-min:${destModalGridMinPx}px`}>
+          <div class="selection-float preview-selection-float" role="toolbar" aria-label="Selección del modal de destino">
+            <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}>Todo</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}>Quitar</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--mini"
+              disabled={previewSelectedPaths.length === 0}
+              on:click={() =>
+                openConfirmDelete(
+                  "Eliminar selección",
+                  `¿Eliminar ${previewSelectedPaths.length} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+                  deletePreviewSelectedItems
+                )}
+            >Eliminar</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertPreviewSelection}>Invertir</button>
+            <span class="selection-float__count" title="Seleccionadas">{previewSelectedPaths.length}</span>
+          </div>
+          <section class="grid" style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
             {#each previewItems as it}
               <div
-                class="pv-tile"
+                class="tile"
                 data-preview-path={it.path}
-                class:pv-tile--selected={previewSelectedPaths.includes(it.path)}
+                class:selected={previewSelectedPaths.includes(it.path)}
                 role="button"
                 tabindex="0"
+                draggable={previewSelectionMode}
                 on:pointerdown={(e) => onPreviewTilePointerDown(e, it)}
                 on:pointerenter={() => onPreviewTilePointerEnter(it.path)}
                 on:pointerup={cancelPreviewLongPress}
                 on:pointerleave={cancelPreviewLongPress}
                 on:pointercancel={cancelPreviewLongPress}
+                on:dragstart={(e) => onPreviewTileDragStart(e, it)}
+                on:dragend={onPreviewTileDragEnd}
                 on:click={() => onPreviewTileClick(it)}
                 on:keydown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -2499,19 +2518,8 @@
                   }
                 }}
               >
-                {#if previewSelectionMode}
-                  <button
-                    type="button"
-                    class="pv-tile__pick"
-                    aria-label="Ver en pantalla completa"
-                    title="Ver en pantalla completa"
-                    on:click|stopPropagation={() => openPreviewZoom(it)}
-                  >
-                    ⛶
-                  </button>
-                {/if}
                 {#if it.thumbDataUrl}<img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} />{/if}
-                <span class="pv-tile__name">{it.name}</span>
+                {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
               </div>
             {/each}
           </section>
@@ -3155,7 +3163,7 @@
     white-space: nowrap;
   }
 
-  .om-range {
+  :where(.om-range, input[type="range"]) {
     -webkit-appearance: none;
     appearance: none;
     height: 6px;
@@ -3165,7 +3173,7 @@
     outline: none;
   }
 
-  .om-range::-webkit-slider-thumb {
+  :where(.om-range, input[type="range"])::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
     width: 14px;
@@ -3177,14 +3185,14 @@
     cursor: pointer;
   }
 
-  .om-range::-moz-range-track {
+  :where(.om-range, input[type="range"])::-moz-range-track {
     height: 6px;
     border-radius: 999px;
     background: linear-gradient(90deg, rgb(124 140 255 / 0.44), rgb(94 228 212 / 0.34));
     border: 1px solid rgb(255 255 255 / 0.18);
   }
 
-  .om-range::-moz-range-thumb {
+  :where(.om-range, input[type="range"])::-moz-range-thumb {
     width: 14px;
     height: 14px;
     border-radius: 999px;
@@ -3192,6 +3200,15 @@
     border: 1px solid rgb(255 255 255 / 0.76);
     box-shadow: 0 0 0 3px rgb(124 140 255 / 0.2);
     cursor: pointer;
+  }
+
+  /* Unificación visual para sliders verticales usando el mismo estilo base. */
+  :global(input[type="range"][orient="vertical"]),
+  :global(input[type="range"].om-range--vertical) {
+    writing-mode: vertical-lr;
+    inline-size: 6px;
+    block-size: 160px;
+    background: linear-gradient(180deg, rgb(124 140 255 / 0.44), rgb(94 228 212 / 0.34));
   }
 
   .content {
@@ -3574,7 +3591,7 @@
   .folder-ph--folder {
     gap: 4px;
     color: var(--om-text-secondary);
-    border: 1px dashed color-mix(in oklab, var(--om-accent) 42%, transparent);
+    border: none;
     background: linear-gradient(
       160deg,
       color-mix(in oklab, var(--om-accent) 14%, transparent),
@@ -4120,110 +4137,22 @@
     gap: var(--om-space-3);
   }
 
-  .modal__ctrl {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--om-space-3);
-    flex-shrink: 0;
-  }
-
-  .modal__pick-tools {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--om-space-2);
-    margin-left: auto;
-  }
-
   .modal__scroll {
     flex: 1 1 0;
     min-height: 0;
     overflow-x: hidden;
-    overflow-y: hidden;
+    overflow-y: auto;
+    position: relative;
     display: flex;
     flex-direction: column;
   }
 
-  .dest-grid {
-    flex: 1 1 auto;
-    min-height: 0;
-    min-width: 0;
-    overflow-x: hidden;
-    overflow-y: auto;
-    display: grid;
-    /* auto-fill: solo columnas que caben; min() evita una pista más estrecha que el contenedor. */
-    grid-template-columns: repeat(auto-fill, minmax(min(var(--pv-min, 120px), 100%), 1fr));
-    gap: var(--om-space-3);
-    align-content: start;
-  }
-
-  .pv-tile {
-    background: var(--om-surface-2);
-    border-radius: var(--om-radius-sm);
-    padding: var(--om-space-2);
-    border: 1px solid var(--om-border-subtle);
-    position: relative;
-    cursor: pointer;
-    transition:
-      border-color var(--om-transition),
-      box-shadow var(--om-transition),
-      background var(--om-transition);
-  }
-
-  .pv-tile:hover {
-    border-color: rgb(124 140 255 / 0.45);
-  }
-
-  .pv-tile.pv-tile--selected {
-    border-color: rgb(124 140 255 / 0.78);
-    background: linear-gradient(165deg, rgb(124 140 255 / 0.16) 0%, rgb(94 228 212 / 0.08) 100%);
-    box-shadow:
-      0 0 0 1px rgb(94 228 212 / 0.35),
-      0 0 18px rgb(124 140 255 / 0.22);
-  }
-
-  .pv-tile img {
-    width: 100%;
-    height: auto;
-    max-height: 240px;
-    object-fit: contain;
-    object-position: center;
-    border-radius: 6px;
-    background: rgb(0 0 0 / 0.2);
-  }
-
-  .pv-tile__name {
-    font-size: 0.65rem;
-    color: var(--om-text-muted);
-    display: block;
-    margin-top: var(--om-space-1);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .pv-tile__pick {
+  .preview-selection-float {
     position: absolute;
-    right: 8px;
-    top: 8px;
-    width: 1.5rem;
-    height: 1.5rem;
-    border-radius: 999px;
-    border: 1px solid rgb(255 255 255 / 0.35);
-    background: rgb(7 8 15 / 0.72);
-    color: #fff;
-    font-weight: 800;
-    font-size: 0.9rem;
-    cursor: pointer;
-    display: grid;
-    place-items: center;
-    z-index: 2;
-  }
-
-  .pv-tile--selected .pv-tile__pick {
-    background: linear-gradient(135deg, var(--om-accent), #4f5fd4);
-    border-color: rgb(255 255 255 / 0.56);
+    right: var(--om-space-2);
+    top: var(--om-space-2);
+    z-index: 4;
+    margin: 0;
   }
 
   .overlay--zoom {
