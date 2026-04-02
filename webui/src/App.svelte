@@ -2451,24 +2451,11 @@
     background: rgb(124 140 255 / 0.25);
   }
 
-  .splitter--h {
-    cursor: row-resize;
-    height: 10px;
-    width: auto;
-    margin: -2px 0;
-    touch-action: none;
-    background: linear-gradient(90deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.02));
-  }
-
   .destinos-work {
     display: grid;
     gap: 0;
     min-height: 0;
     align-items: stretch;
-  }
-
-  .destinos-work--drag .splitter--h {
-    background: rgb(124 140 255 / 0.35);
   }
 
   .destinos-work__top {
@@ -2485,45 +2472,6 @@
     min-height: 0;
   }
 
-  .dest-panel--bottom {
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    gap: var(--om-space-2);
-    overflow: visible;
-    container-type: size;
-    container-name: dest-panel;
-  }
-
-  /* Botón en la misma fila que las tarjetas; grid evita colapso de altura del flex + min-height:0. */
-  .dest-panel__main {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
-    gap: var(--om-space-3);
-    min-height: 0;
-    flex: 1;
-  }
-
-  /* Sobrescribe el padding de .om-panel (16px) para ganar área útil a las chips. */
-  .dest-panel.dest-panel--bottom.om-panel {
-    padding: var(--om-space-2) var(--om-space-3);
-  }
-
-  @container dest-panel (max-height: 200px) {
-    .dest-panel__title {
-      font-size: 0.65rem;
-    }
-  }
-
-  /* Sin container-type aquí: con size + flex/grid anidado la caja puede quedar a altura 0 (tarjetas invisibles). */
-  .dest-grid-wrap--scroll {
-    min-width: 0;
-    min-height: 0;
-    overflow: auto;
-    overflow-x: auto;
-  }
 
   /* Scroll interno: la barra de selección va con position:sticky y sigue visible al bajar. */
   .gallery--with-float {
@@ -2575,8 +2523,9 @@
 
   .dest-float-chips {
     position: absolute;
-    left: var(--om-space-2);
-    right: var(--om-space-2);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(820px, calc(100% - var(--om-space-4) * 2));
     bottom: var(--om-space-2);
     z-index: 7;
     display: flex;
@@ -2596,8 +2545,9 @@
     border: 1px solid rgb(255 255 255 / 0.18);
     background: rgb(255 255 255 / 0.07);
     color: var(--om-text-secondary);
-    min-height: 1.65rem;
-    padding: 2px 10px;
+    min-height: 1.95rem;
+    padding: 4px 12px;
+    font-size: 0.82rem;
   }
 
   .dest-float-add:hover {
@@ -2614,8 +2564,8 @@
   .dest-float-chip {
     display: inline-flex;
     align-items: center;
-    min-height: 1.65rem;
-    padding: 2px 10px;
+    min-height: 1.95rem;
+    padding: 4px 12px;
     border-radius: 999px;
     border: 1px solid rgb(255 255 255 / 0.16);
     background: rgb(255 255 255 / 0.06);
@@ -2640,7 +2590,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.74rem;
+    font-size: 0.82rem;
     line-height: 1.2;
   }
 
@@ -2715,13 +2665,8 @@
     box-sizing: border-box;
   }
 
-  /* Durante DnD, los botones de la tarjeta capturan eventos; el área de drop es la tarjeta. */
-  :global(body.om-dragging) .dest-card .om-btn {
-    pointer-events: none;
-  }
-
   :global(body.om-dragging) .splitter,
-  :global(body.om-dragging) .splitter--h {
+  :global(body.om-dragging) .splitter {
     pointer-events: none;
   }
 
@@ -2892,215 +2837,7 @@
     white-space: nowrap;
   }
 
-  .dest-panel__title {
-    display: block;
-    flex-shrink: 0;
-    margin-bottom: 0;
-  }
 
-  .dest-panel--bottom .dest-panel__title {
-    margin-bottom: 0;
-  }
-
-  .dest-panel__toolbar {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    margin-bottom: 0;
-    /* Alinea el botón con el borde superior de las tarjetas (padding de .dest-card). */
-    padding-top: var(--om-space-1);
-  }
-
-  .dest-panel__toolbar .om-btn {
-    min-height: 2rem;
-    padding: 0.45rem 0.85rem;
-    font-size: 0.8rem;
-    line-height: 1.2;
-    white-space: normal;
-    text-wrap: balance;
-    text-align: center;
-  }
-
-  .dest-grid-wrap {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: var(--om-space-4);
-  }
-
-  .dest-grid-wrap--embedded {
-    margin: 0;
-  }
-
-  .dest-empty-hint {
-    margin: 0;
-    grid-column: 1 / -1;
-    padding: var(--om-space-2);
-    font-size: 0.8125rem;
-    line-height: 1.45;
-    color: var(--om-text-muted);
-  }
-
-  .dest-card {
-    background: linear-gradient(165deg, var(--om-surface-2) 0%, var(--om-surface-1) 100%);
-    border: 1px solid var(--om-border-default);
-    border-radius: var(--om-radius-lg);
-    padding: var(--om-space-4);
-    display: flex;
-    flex-direction: column;
-    gap: var(--om-space-4);
-    box-shadow: var(--om-shadow-md);
-    transition: box-shadow var(--om-transition), border-color var(--om-transition);
-    cursor: pointer;
-  }
-
-  .dest-card:hover {
-    border-color: rgb(124 140 255 / 0.3);
-    box-shadow: var(--om-shadow-lg);
-  }
-
-  /* Carpeta destino activa mientras el arrastre está encima (soltar aquí). */
-  .dest-card.dest-card--drop-target {
-    border-color: rgb(124 140 255 / 0.8);
-    background: linear-gradient(
-      165deg,
-      rgb(124 140 255 / 0.18) 0%,
-      rgb(94 228 212 / 0.08) 45%,
-      var(--om-surface-1) 100%
-    );
-    box-shadow: var(--om-shadow-md);
-    position: relative;
-    z-index: 0;
-    isolation: isolate; /* permite que el pseudo-elemento “halo” quede detrás sin romper stacking */
-    transition:
-      border-color 0.12s ease,
-      background 0.12s ease,
-      box-shadow 0.12s ease;
-  }
-
-  /* Glow difuminado (no rectangular) para drop target. */
-  .dest-card.dest-card--drop-target::after {
-    content: "";
-    position: absolute;
-    inset: -4px;
-    border-radius: inherit;
-    z-index: -1;
-    pointer-events: none;
-    opacity: 1;
-    background:
-      radial-gradient(
-        circle at 22% 18%,
-        rgb(94 228 212 / 0.55) 0%,
-        transparent 55%
-      ),
-      radial-gradient(
-        circle at 78% 82%,
-        rgb(124 140 255 / 0.45) 0%,
-        transparent 58%
-      ),
-      linear-gradient(
-        180deg,
-        rgb(124 140 255 / 0.18) 0%,
-        rgb(94 228 212 / 0.10) 100%
-      );
-    filter: blur(12px) saturate(1.15);
-    transform: translateZ(0);
-  }
-
-  .dest-card__head {
-    display: flex;
-    flex-direction: column;
-    gap: var(--om-space-1);
-  }
-
-  .dest-card__title {
-    font-weight: 700;
-    font-size: 0.95rem;
-  }
-
-  .dest-card__path {
-    font-size: 0.75rem;
-    color: var(--om-text-muted);
-    word-break: break-all;
-  }
-
-  .dest-card__actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--om-space-2);
-  }
-
-  /* Vista chip: panel bajo bajo — usa dest-panel (altura real), no el scroll (antes rompía con container-type:size). */
-  @container dest-panel (max-height: 140px) {
-    .dest-panel__toolbar .om-btn {
-      min-height: 1.65rem;
-      padding: 0.28rem 0.62rem;
-      font-size: 0.72rem;
-    }
-
-    .dest-grid-wrap--scroll {
-      display: flex;
-      flex-wrap: wrap;
-      align-content: flex-start;
-      align-items: flex-start;
-      gap: 8px;
-      row-gap: 8px;
-    }
-
-    /* Ancho al texto (hasta un máximo); sin flex-grow que deja hueco vacío. */
-    .dest-grid-wrap--scroll > .dest-card {
-      flex: 0 0 auto;
-      align-self: flex-start;
-      width: fit-content;
-      max-width: min(22rem, 100%);
-      min-width: 0;
-      box-sizing: border-box;
-      padding: 6px 12px;
-      gap: 0;
-      box-shadow: var(--om-shadow-sm);
-      border-radius: var(--om-radius-sm);
-      cursor: pointer;
-    }
-
-    .dest-grid-wrap--scroll > .dest-card.dest-card--drop-target {
-      box-shadow: var(--om-shadow-sm);
-      border-color: rgb(124 140 255 / 0.85);
-    }
-
-    .dest-card__head {
-      gap: 0;
-      min-width: 0;
-      flex: 0 0 auto;
-      width: fit-content;
-      max-width: 100%;
-    }
-
-    .dest-card__path {
-      display: none;
-    }
-
-    .dest-card__actions {
-      display: none;
-    }
-
-    .dest-card__title {
-      font-size: 0.875rem;
-      font-weight: 600;
-      line-height: 1.35;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
-    }
-  }
-
-  @container dest-panel (min-height: 240px) {
-    .dest-panel__toolbar .om-btn {
-      min-height: 2.5rem;
-      padding: 0.65rem 1.1rem;
-      font-size: 0.9rem;
-      line-height: 1.25;
-    }
-  }
 
   .pager {
     display: flex;
