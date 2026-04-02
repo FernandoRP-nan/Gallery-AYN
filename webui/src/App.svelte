@@ -57,8 +57,11 @@
   let galleryThumbHydrationToken = 0;
   let previewThumbHydrationToken = 0;
   let previewScale = 1;
+  let previewVisible = true;
   let previewDestPath = "";
-  let activeTab: "ruta" | "destinos" | "organizar" = "ruta";
+  let destinationsMode = false;
+  let folderBackStack: string[] = [];
+  let folderForwardStack: string[] = [];
   /** Panel organizador en ventana flotante (tarea por lotes). */
   let orgPanelOpen = false;
   let settingsOpen = false;
@@ -294,21 +297,67 @@
     await syncDestinationsFromApi();
   };
 
-  const loadFolder = async () => {
-    const out = await trackLoad(bridge.galleryLoadFolder(folder));
+  async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
+    const target = path.trim();
+    if (!target) return;
+    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    if (opts?.pushHistory !== false && current && current !== target) {
+      folderBackStack = [...folderBackStack, current];
+      folderForwardStack = [];
+    }
+    const out = await trackLoad(bridge.galleryLoadFolder(target));
     galleryState = out.state;
     items = out.items;
     galleryThumbHydrationToken++;
     void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
     pageJumpDraft = out.state.page;
+    folder = out.state?.folder ?? target;
+    orgPath = folder || orgPath;
     status = `Cargada carpeta: ${folder}`;
+  }
+
+  const loadFolder = async () => {
+    await navigateToFolder(folder, { pushHistory: true });
   };
 
   const pickRecentFolder = async (path: string) => {
     folder = path;
-    await loadFolder();
+    await navigateToFolder(path, { pushHistory: true });
   };
+
+  function getParentFolder(rawPath: string): string {
+    const p = rawPath.replace(/\\/g, "/").replace(/\/+$/, "");
+    const i = p.lastIndexOf("/");
+    if (i <= 0) return p;
+    return p.slice(0, i);
+  }
+
+  async function goBackFolder() {
+    if (folderBackStack.length === 0) return;
+    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    const target = folderBackStack[folderBackStack.length - 1];
+    folderBackStack = folderBackStack.slice(0, -1);
+    if (current && current !== target) folderForwardStack = [...folderForwardStack, current];
+    await navigateToFolder(target, { pushHistory: false });
+  }
+
+  async function goForwardFolder() {
+    if (folderForwardStack.length === 0) return;
+    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    const target = folderForwardStack[folderForwardStack.length - 1];
+    folderForwardStack = folderForwardStack.slice(0, -1);
+    if (current && current !== target) folderBackStack = [...folderBackStack, current];
+    await navigateToFolder(target, { pushHistory: false });
+  }
+
+  async function goUpFolder() {
+    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    if (!current) return;
+    const parent = getParentFolder(current);
+    if (!parent || parent === current) return;
+    await navigateToFolder(parent, { pushHistory: true });
+  }
 
   const pinFolder = async (path: string) => {
     try {
@@ -406,17 +455,10 @@
     galleryActionBusy = true;
     try {
       if (it.kind === "folder" || it.kind === "folder_up") {
-        const out = await trackLoad(bridge.galleryOpenFolderTile(it.path));
-        galleryState = out.state;
-        items = out.items;
-        galleryThumbHydrationToken++;
-        void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-        folder = galleryState.folder;
-        if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
-        pageJumpDraft = out.state.page;
+        await navigateToFolder(it.path, { pushHistory: true });
         return;
       }
-      if (activeTab === "destinos") {
+      if (destinationsMode) {
         const out = await bridge.galleryToggleSelect(it.path);
         galleryState = out.state;
         items = out.items;
@@ -785,7 +827,7 @@
   }
 
   function isGalleryTileSelected(it: GalleryItem): boolean {
-    if (activeTab !== "destinos" || it.kind !== "image") return false;
+    if (!destinationsMode || it.kind !== "image") return false;
     if (galleryRangeDraftSelectedPaths) return galleryRangeDraftSelectedPaths.includes(it.path);
     return Boolean(it.selected);
   }
@@ -808,7 +850,7 @@
   }
 
   function onGalleryTilePointerDown(e: PointerEvent, it: GalleryItem) {
-    if (activeTab !== "destinos" || it.kind !== "image") return;
+    if (!destinationsMode || it.kind !== "image") return;
     // Solo activa selección por rango con Ctrl para no interferir con DnD normal.
     if (!e.ctrlKey) return;
     e.preventDefault();
@@ -1131,7 +1173,7 @@
   }
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
-    if (activeTab !== "destinos" || it.kind !== "image") return;
+    if (!destinationsMode || it.kind !== "image") return;
     e.stopPropagation();
     endDragSession();
     const dt = e.dataTransfer;
@@ -1282,7 +1324,7 @@
   /** Celdas de ancho fijo (sin 1fr) para que cada paso del slider se note al cambiar columnas. */
   $: gridCellPx = galleryGridCellPx(thumbScale);
 
-  $: if (activeTab !== "destinos") {
+  $: if (!destinationsMode) {
     destCtxMenu = null;
     if (destFormOpen) destFormOpen = false;
   }
@@ -1358,34 +1400,31 @@
 
 <main
   class="app"
-  class:app--layout-ruta={activeTab === "ruta"}
-  class:app--layout-destinos={activeTab === "destinos"}
-  class:app--layout-org={activeTab === "organizar"}
+  class:app--layout-ruta={!destinationsMode}
+  class:app--layout-destinos={destinationsMode}
 >
   <header class="tabs-bar om-panel">
     <nav class="tabs__nav">
-      <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "ruta"} on:click={() => (activeTab = "ruta")}>Ruta</button>
-      <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "destinos"} on:click={() => (activeTab = "destinos")}>Destinos</button>
-      <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "organizar"} on:click={() => (activeTab = "organizar")}>Organizar</button>
+      <button
+        type="button"
+        class="om-btn om-btn--tab"
+        class:om-btn--active={destinationsMode}
+        on:click={() => (destinationsMode = !destinationsMode)}
+        title="Activa/desactiva modo selección y panel de destinos"
+      >Destinos</button>
+      <button
+        type="button"
+        class="om-btn om-btn--tab"
+        on:click={() => {
+          orgPath = folder || orgPath;
+          orgPanelOpen = true;
+        }}
+      >Organizar</button>
     </nav>
-    <div class="grow"></div>
-    <button
-      type="button"
-      class="om-btn om-btn--ghost om-btn--icon om-btn--settings"
-      title="Ajustes"
-      aria-label="Ajustes"
-      on:click={openSettingsModal}
-    >
-      <svg class="settings-gear" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-      </svg>
-    </button>
-  </header>
-
-  {#if activeTab !== "destinos"}
-  <section class="route om-panel">
-    <div class="route__row">
+    <div class="route__row route__row--inline">
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Retroceder" on:click={goBackFolder} disabled={folderBackStack.length === 0}>←</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Avanzar" on:click={goForwardFolder} disabled={folderForwardStack.length === 0}>→</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Carpeta superior" on:click={goUpFolder}>↑</button>
       <input
         id="gallery-folder-input"
         class="om-input route__path"
@@ -1405,24 +1444,23 @@
         {pinnedFolders.includes(folder.trim()) ? "★" : "☆"}
       </button>
       <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Cargar</button>
-      <div class="grow"></div>
-      <span
-        class="field-label"
-        title="Arrastra la barra entre galería y vista previa para el ancho del panel"
-        >Panel derecho ~{Math.round(previewRatio * 100)}%</span>
-      <label class="field-label" for="route-thumb-scale">Miniaturas {Math.round(thumbScale * 100)}%</label>
-      <input
-        id="route-thumb-scale"
-        class="om-range"
-        type="range"
-        min="0.75"
-        max="2.25"
-        step="0.01"
-        bind:value={thumbScale}
-        on:input={scheduleThumbScaleReload}
-        on:change={flushThumbScaleOnRelease}
-      />
     </div>
+    <button
+      type="button"
+      class="om-btn om-btn--ghost om-btn--icon om-btn--settings"
+      title="Ajustes"
+      aria-label="Ajustes"
+      on:click={openSettingsModal}
+    >
+      <svg class="settings-gear" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
+  </header>
+
+  {#if !destinationsMode}
+  <section class="route route--stable om-panel">
     {#if !folder.trim() && (pinnedFolders.length > 0 || recentFolders.length > 0)}
       <div class="recent-folders" aria-label="Rutas recientes">
         {#if pinnedFolders.length > 0}
@@ -1462,14 +1500,7 @@
   </section>
   {/if}
 
-  {#if activeTab === "organizar"}
-    <section class="om-panel org-tab-bar">
-      <p class="org-tab-bar__text">Organización por lotes (comics, duplicados, etc.) en una ventana aparte.</p>
-      <button type="button" class="om-btn om-btn--primary" on:click={() => (orgPanelOpen = true)}>Abrir panel de organización…</button>
-    </section>
-  {/if}
-
-  {#if activeTab === "destinos"}
+  {#if destinationsMode}
     <div
       class="destinos-work"
       class:destinos-work--drag={destSplitDrag}
@@ -1478,7 +1509,9 @@
       <div class="destinos-work__top">
         <section
           class="content"
-          style={`grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`}
+          style={previewVisible
+            ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
+            : "grid-template-columns:minmax(0,1fr)"}
         >
           <article class="gallery om-panel om-panel--lift gallery--with-float">
             <div class="gallery__scroll">
@@ -1547,22 +1580,24 @@
             </div>
           </article>
 
-          <div
-            class="splitter"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Arrastrar para repartir galería y vista previa"
-            on:pointerdown={beginSplitDrag}
-          ></div>
+          {#if previewVisible}
+            <div
+              class="splitter"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Arrastrar para repartir galería y vista previa"
+              on:pointerdown={beginSplitDrag}
+            ></div>
 
-          <aside class="preview om-panel">
-            {#if selectedPreview?.dataUrl}
-              <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
-            {:else}
-              <div class="preview__empty">Selecciona una miniatura</div>
-            {/if}
-            <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
-          </aside>
+            <aside class="preview om-panel">
+              {#if selectedPreview?.dataUrl}
+                <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
+              {:else}
+                <div class="preview__empty">Selecciona una miniatura</div>
+              {/if}
+              <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
+            </aside>
+          {/if}
         </section>
       </div>
 
@@ -1619,7 +1654,9 @@
   {:else}
     <section
       class="content"
-      style={`grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`}
+      style={previewVisible
+        ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
+        : "grid-template-columns:minmax(0,1fr)"}
     >
       <article class="gallery om-panel om-panel--lift">
         <div class="grid" style={`--cell:${gridCellPx}px`}>
@@ -1628,8 +1665,8 @@
               type="button"
               class="tile"
               data-item-path={it.path}
-              class:selected={it.selected && activeTab === "destinos"}
-              draggable={activeTab === "destinos" && it.kind === "image"}
+              class:selected={it.selected && destinationsMode}
+              draggable={destinationsMode && it.kind === "image"}
               on:dragstart={(e) => onTileDragStart(e, it)}
               on:click={() => clickItem(it)}
               on:dblclick={() => {
@@ -1661,22 +1698,24 @@
         </div>
       </article>
 
-      <div
-        class="splitter"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Arrastrar para repartir galería y vista previa"
-        on:pointerdown={beginSplitDrag}
-      ></div>
+      {#if previewVisible}
+        <div
+          class="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Arrastrar para repartir galería y vista previa"
+          on:pointerdown={beginSplitDrag}
+        ></div>
 
-      <aside class="preview om-panel">
-        {#if selectedPreview?.dataUrl}
-          <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
-        {:else}
-          <div class="preview__empty">Selecciona una miniatura</div>
-        {/if}
-        <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
-      </aside>
+        <aside class="preview om-panel">
+          {#if selectedPreview?.dataUrl}
+            <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
+          {:else}
+            <div class="preview__empty">Selecciona una miniatura</div>
+          {/if}
+          <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
+        </aside>
+      {/if}
     </section>
   {/if}
 
@@ -1712,6 +1751,28 @@
     <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
     <div class="grow"></div>
     <span class="status-line">{status}</span>
+    <button
+      type="button"
+      class="om-btn om-btn--ghost om-btn--compact"
+      title={previewVisible ? "Ocultar vista previa" : "Mostrar vista previa"}
+      on:click={() => (previewVisible = !previewVisible)}
+    >{previewVisible ? "👁 Vista previa" : "🙈 Sin preview"}</button>
+    <span
+      class="field-label pager__split-label"
+      title="Arrastra la barra entre galería y vista previa para el ancho del panel"
+      >Panel derecho ~{Math.round(previewRatio * 100)}%</span>
+    <label class="field-label pager__thumb-label" for="route-thumb-scale-footer">Miniaturas {Math.round(thumbScale * 100)}%</label>
+    <input
+      id="route-thumb-scale-footer"
+      class="om-range pager__thumb-range"
+      type="range"
+      min="0.75"
+      max="2.25"
+      step="0.01"
+      bind:value={thumbScale}
+      on:input={scheduleThumbScaleReload}
+      on:change={flushThumbScaleOnRelease}
+    />
   </footer>
 
   {#if previewOpen}
@@ -2096,9 +2157,8 @@
     box-sizing: border-box;
   }
 
-  /* Ruta u Organizar: barra extra bajo pestañas (ruta u org). */
-  .app.app--layout-ruta,
-  .app.app--layout-org {
+  /* Barra extra bajo el header cuando no está en modo destinos. */
+  .app.app--layout-ruta {
     grid-template-rows: auto auto 1fr auto;
   }
 
@@ -2123,11 +2183,22 @@
     gap: var(--om-space-3);
   }
 
+  /* Mantiene estable la geometría externa aunque no haya "recientes". */
+  .route--stable {
+    min-height: 2.35rem;
+    padding-block: 6px;
+  }
+
   .route__row {
     display: flex;
     align-items: center;
     gap: var(--om-space-3);
     flex-wrap: wrap;
+  }
+
+  .route__row--inline {
+    flex: 1 1 540px;
+    min-width: min(520px, 100%);
   }
 
   .recent-folders__head {
@@ -2586,22 +2657,6 @@
     text-align: center;
   }
 
-  .org-tab-bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--om-space-4);
-    justify-content: space-between;
-  }
-
-  .org-tab-bar__text {
-    margin: 0;
-    font-size: 0.875rem;
-    color: var(--om-text-secondary);
-    max-width: min(520px, 100%);
-    line-height: 1.45;
-  }
-
   .dest-grid-wrap {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -2794,10 +2849,24 @@
   .pager.pager--bar {
     flex-wrap: nowrap;
     min-width: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow-x: hidden;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
-    scrollbar-gutter: stable;
+    gap: var(--om-space-2);
+    align-items: center;
+    box-sizing: border-box;
+  }
+
+  .pager.pager--bar.om-panel {
+    padding: 0 11px;
+    padding-block: 8px;
+    margin-top: 6px;
+    min-height: 2.7rem;
+  }
+
+  /* Mantiene tamaño visual consistente aunque cambie el contenido del estado. */
+  .pager.pager--bar > :not(.grow):not(.status-line) {
+    flex-shrink: 0;
   }
 
   .pager.pager--bar .grow {
@@ -2811,7 +2880,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: min(42vw, 520px);
+    max-width: min(26vw, 320px);
+  }
+
+  .pager__split-label,
+  .pager__thumb-label {
+    font-size: 0.68rem;
+    white-space: nowrap;
+  }
+
+  .pager__thumb-range {
+    width: min(160px, 24vw);
+    min-width: 110px;
   }
 
   .pager__jump {
@@ -2824,8 +2904,8 @@
 
   .pager__jump-input {
     width: 4.25rem;
-    min-height: 2rem;
-    padding: var(--om-space-1) var(--om-space-2);
+    min-height: 1.8rem;
+    padding: 3px 7px;
     text-align: center;
   }
 
@@ -2839,10 +2919,18 @@
     font-size: 0.8125rem;
   }
 
+  .pager.pager--bar .om-btn--compact {
+    padding: 3px 10px;
+    font-size: 0.76rem;
+    min-height: 1.8rem;
+    line-height: 1.2;
+  }
+
   .status-line {
-    font-size: 0.8125rem;
+    font-size: 0.72rem;
     font-weight: 500;
-    color: var(--om-accent-2);
+    color: color-mix(in oklab, var(--om-text-muted) 78%, transparent);
+    opacity: 0.9;
   }
 
   .org-float-overlay {
