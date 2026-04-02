@@ -1,0 +1,43 @@
+/* Tokens visuales — Organizador (tema oscuro premium) */
+:root {
+  --om-font-sans: "Outfit", "Segoe UI", system-ui, sans-serif;
+  --om-font-mono: ui-monospace, "Cascadia Code", monospace;
+
+  --om-bg-base: #07080f;
+  --om-bg-elevated: #10121c;
+  --om-surface-1: #15182a;
+  --om-surface-2: #1c2036;
+  --om-surface-3: #232947;
+
+  --om-border-subtle: rgb(255 255 255 / 0.06);
+  --om-border-default: rgb(255 255 255 / 0.1);
+  --om-border-strong: rgb(255 255 255 / 0.16);
+
+  --om-text-primary: #eef0fb;
+  --om-text-secondary: #a8b0d8;
+  --om-text-muted: #6c7699;
+
+  --om-accent: #7c8cff;
+  --om-accent-soft: rgb(124 140 255 / 0.18);
+  --om-accent-glow: rgb(124 140 255 / 0.35);
+  --om-accent-2: #5ee4d4;
+
+  --om-radius-sm: 8px;
+  --om-radius-md: 12px;
+  --om-radius-lg: 16px;
+  --om-radius-xl: 20px;
+
+  --om-space-1: 4px;
+  --om-space-2: 8px;
+  --om-space-3: 12px;
+  --om-space-4: 16px;
+  --om-space-5: 20px;
+  --om-space-6: 24px;
+
+  --om-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.35);
+  --om-shadow-md: 0 4px 12px rgb(0 0 0 / 0.45), 0 0 0 1px var(--om-border-subtle);
+  --om-shadow-lg: 0 12px 40px rgb(0 0 0 / 0.55), 0 0 0 1px var(--om-border-subtle);
+  --om-shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.06);
+
+  --om-transition: 0.18s ease;
+}

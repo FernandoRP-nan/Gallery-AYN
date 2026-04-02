@@ -1,0 +1,4 @@
+Pillow
+pywebview
+# Opcional — Qt WebEngine: pip install PyQt6 PyQt6-WebEngine qtpy
+# ORGANIZADOR_PREFER_QT=1 python3 -m org_multimedia  (fija QT_API=pyqt6 para qtpy)

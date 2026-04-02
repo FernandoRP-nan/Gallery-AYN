@@ -24,12 +24,15 @@ def load_app_settings() -> dict:
             "gallery_last_folder": "",
             "gallery_thumb_scale": 1.0,
             "gallery_show_thumb_filename": True,
-            "gallery_thumbs_per_page": 120,
+            "gallery_thumbs_per_page": 48,
             "gallery_scroll_top_on_page_change": True,
             "gallery_compact_thumb_padding": False,
             "gallery_preview_sash_x": None,
             "dest_preview_thumb_scale": 1.0,
             "dest_preview_geometry": "",
+            "web_preview_ratio": 0.4,
+            "dest_preview_modal_w": 0.9,
+            "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
         }
     try:
@@ -64,6 +67,15 @@ def load_app_settings() -> dict:
             data["dest_preview_thumb_scale"] = max(0.7, min(2.1, ds))
         if "dest_preview_geometry" not in data:
             data["dest_preview_geometry"] = ""
+        if "web_preview_ratio" not in data:
+            data["web_preview_ratio"] = 0.4
+        else:
+            vr = float(data["web_preview_ratio"])
+            data["web_preview_ratio"] = max(0.14, min(0.68, vr))
+        if "dest_preview_modal_w" not in data:
+            data["dest_preview_modal_w"] = 0.9
+        if "dest_preview_modal_h" not in data:
+            data["dest_preview_modal_h"] = 0.8
         if "window_start_maximized" not in data:
             data["window_start_maximized"] = True
         return data
@@ -73,12 +85,15 @@ def load_app_settings() -> dict:
             "gallery_last_folder": "",
             "gallery_thumb_scale": 1.0,
             "gallery_show_thumb_filename": True,
-            "gallery_thumbs_per_page": 120,
+            "gallery_thumbs_per_page": 48,
             "gallery_scroll_top_on_page_change": True,
             "gallery_compact_thumb_padding": False,
             "gallery_preview_sash_x": None,
             "dest_preview_thumb_scale": 1.0,
             "dest_preview_geometry": "",
+            "web_preview_ratio": 0.4,
+            "dest_preview_modal_w": 0.9,
+            "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
         }
 
