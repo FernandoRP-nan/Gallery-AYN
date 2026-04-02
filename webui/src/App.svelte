@@ -1253,7 +1253,10 @@
     await tick();
     const apply = () => {
       if (!fromDest) {
-        if (galleryScrollEl) galleryScrollEl.scrollTop = currentScrollTop;
+        if (galleryScrollEl) {
+          galleryScrollEl.scrollTop = currentScrollTop;
+          galleryScrollAtTop = galleryScrollEl.scrollTop <= 2;
+        }
       } else {
         if (galleryPlainEl) galleryPlainEl.scrollTop = currentScrollTop;
       }
@@ -2747,6 +2750,30 @@
         >
           <article class="gallery om-panel om-panel--lift gallery--with-float">
             <div class="gallery__scroll" bind:this={galleryScrollEl} on:scroll={onGalleryScroll}>
+              {#if galleryScrollAtTop}
+              <div
+                class="selection-float"
+                class:selection-float--top-gap={galleryScrollAtTop}
+                role="toolbar"
+                aria-label="Selección"
+              >
+                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
+                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--mini"
+                  disabled={Number(galleryState.selectedCount || 0) === 0}
+                  on:click={() =>
+                    openConfirmDelete(
+                      "Eliminar selección",
+                      `¿Eliminar ${galleryState.selectedCount} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+                      deleteSelectedGalleryItems
+                    )}
+                >Eliminar</button>
+                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
+                <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
+              </div>
+              {/if}
               <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
               {#each items as it (it.path)}
                 <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
@@ -2806,58 +2833,41 @@
               {/each}
               <div class="grid-end-spacer" aria-hidden="true"></div>
               </div>
-              <div class="selection-float" class:selection-float--top-gap={galleryScrollAtTop} role="toolbar" aria-label="Selección">
-                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
-                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
-                <button
-                  type="button"
-                  class="om-btn om-btn--ghost om-btn--mini"
-                  disabled={Number(galleryState.selectedCount || 0) === 0}
-                  on:click={() =>
-                    openConfirmDelete(
-                      "Eliminar selección",
-                      `¿Eliminar ${galleryState.selectedCount} imágenes seleccionadas? Esta acción no se puede deshacer.`,
-                      deleteSelectedGalleryItems
-                    )}
-                >Eliminar</button>
-                <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
-                <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
-              </div>
-              <div class="dest-float-chips" aria-label="Carpetas destino">
-                <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
-                  +
-                </button>
-                {#if destRows.length === 0}
-                  <span class="dest-float-empty">No hay carpetas destino</span>
-                {/if}
-                {#each destRows as d, i (d.path + "\0" + i)}
-                  <div
-                    class="dest-float-chip"
-                    class:dest-float-chip--drop-target={dragOverDestPath === d.path}
-                    class:dest-float-chip--dragging={draggedDestIdx === i}
-                    data-dest-path={d.path}
-                    title={d.path}
-                    role="button"
-                    tabindex="0"
-                    draggable={true}
-                    on:click={(e) => onDestCardClick(e, d.path)}
-                    on:keydown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onDestCardClick(e as unknown as MouseEvent, d.path);
-                      }
-                    }}
-                    on:contextmenu={(e) => onDestContextMenu(e, i, "gallery")}
-                    on:dragstart={(e) => onDestChipDragStart(e, i)}
-                    on:dragend={onDestChipDragEnd}
-                    on:dragenter|preventDefault
-                    on:dragover|preventDefault
-                    on:drop={(e) => onDestDrop(e, d.path)}
-                  >
-                    <span class="dest-float-chip__title">{d.label}</span>
-                  </div>
-                {/each}
-              </div>
+            </div>
+            <div class="dest-float-chips" aria-label="Carpetas destino">
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
+                +
+              </button>
+              {#if destRows.length === 0}
+                <span class="dest-float-empty">No hay carpetas destino</span>
+              {/if}
+              {#each destRows as d, i (d.path + "\0" + i)}
+                <div
+                  class="dest-float-chip"
+                  class:dest-float-chip--drop-target={dragOverDestPath === d.path}
+                  class:dest-float-chip--dragging={draggedDestIdx === i}
+                  data-dest-path={d.path}
+                  title={d.path}
+                  role="button"
+                  tabindex="0"
+                  draggable={true}
+                  on:click={(e) => onDestCardClick(e, d.path)}
+                  on:keydown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onDestCardClick(e as unknown as MouseEvent, d.path);
+                    }
+                  }}
+                  on:contextmenu={(e) => onDestContextMenu(e, i, "gallery")}
+                  on:dragstart={(e) => onDestChipDragStart(e, i)}
+                  on:dragend={onDestChipDragEnd}
+                  on:dragenter|preventDefault
+                  on:dragover|preventDefault
+                  on:drop={(e) => onDestDrop(e, d.path)}
+                >
+                  <span class="dest-float-chip__title">{d.label}</span>
+                </div>
+              {/each}
             </div>
           </article>
 
@@ -3908,37 +3918,64 @@
     position: relative;
   }
 
+  /* Sin padding del panel: la banda om-panel (16px) era la que “cortaba” arriba y a la derecha del scroll. */
   .gallery--with-float.om-panel {
-    padding-bottom: 0;
+    padding: 0;
+  }
+
+  /* Por encima de components.css: sin inset ni anillo 1px (línea superior + esquina derecha del panel). */
+  .gallery--with-float.om-panel.om-panel--lift {
+    box-shadow: 0 14px 42px rgb(0 0 0 / 0.52) !important;
+    border-color: rgb(255 255 255 / 0.07) !important;
   }
 
   .gallery--with-float .gallery__scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
-    scrollbar-gutter: stable;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-content: start;
+    /* Sin scrollbar-gutter: evita que el contenido se “meta” y la franja lateral fija. */
+    display: block;
+    /* El espacio pasa al interior del scroll (ya no hay doble marco con el padding del panel). */
+    padding-top: var(--om-space-2);
+    padding-bottom: max(3.75rem, calc(env(safe-area-inset-bottom, 0px) + 3.25rem));
+    scrollbar-color: rgb(124 140 255 / 0.18) transparent;
+    /* Recorte suave con el redondeado del panel (evita línea dura en esquina superior derecha). */
+    border-radius: inherit;
+    background: transparent;
   }
 
-  .gallery--with-float .gallery__scroll > .grid {
-    grid-column: 1;
-    grid-row: 1;
+  .gallery--with-float .gallery__scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .gallery--with-float .gallery__scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgb(124 140 255 / 0.28), rgb(94 228 212 / 0.16));
+    border: 4px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+  }
+
+  .gallery--with-float .gallery__scroll::-webkit-scrollbar-track {
+    margin-block: var(--om-space-2);
+    background: transparent;
   }
 
   .gallery--with-float .gallery__scroll > .selection-float {
-    grid-column: 1;
-    grid-row: 1;
-    position: absolute;
-    right: var(--om-space-2);
-    top: 0;
-    margin: 0 var(--om-space-2) 0 0;
+    position: static;
+    margin: 0 0 var(--om-space-2);
     z-index: 5;
+    /* Igual que dest-float: solo borde inferior visible hacia el contenido. */
+    background: linear-gradient(180deg, rgb(8 10 18 / 0.72), rgb(8 10 18 / 0.48));
+    border: 1px solid rgb(255 255 255 / 0.1);
+    border-top-color: transparent;
+    border-left-color: transparent;
+    border-right-color: transparent;
+    box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
+    backdrop-filter: blur(10px);
   }
 
   .gallery--with-float .gallery__scroll > .selection-float.selection-float--top-gap {
-    top: var(--om-space-2);
+    margin-top: var(--om-space-2);
   }
 
   .selection-float {
@@ -3955,7 +3992,8 @@
     backdrop-filter: blur(8px);
   }
 
-  .dest-float-chips {
+  /* Fuera del área con scroll: no provoca artefactos ni cortes raros al desplazar. */
+  .gallery--with-float > .dest-float-chips {
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
@@ -3968,10 +4006,13 @@
     gap: var(--om-space-1);
     padding: var(--om-space-1) var(--om-space-2);
     border-radius: var(--om-radius-md);
-    background: rgb(8 10 18 / 0.78);
+    background: linear-gradient(180deg, rgb(8 10 18 / 0.55), rgb(8 10 18 / 0.88));
     border: 1px solid rgb(255 255 255 / 0.1);
-    box-shadow: var(--om-shadow-md);
-    backdrop-filter: blur(8px);
+    border-top-color: transparent;
+    border-left-color: transparent;
+    border-right-color: transparent;
+    box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
+    backdrop-filter: blur(10px);
     overflow-x: auto;
     overflow-y: hidden;
     box-sizing: border-box;
@@ -4103,10 +4144,19 @@
     box-sizing: border-box;
   }
 
+  /* En modo Edición evita líneas raras en bordes al redimensionar / scroll. */
+  .gallery--with-float .grid {
+    contain: none;
+  }
+
   .grid-end-spacer {
     grid-column: 1 / -1;
     height: 3.6rem;
     pointer-events: none;
+  }
+
+  .gallery--with-float .grid-end-spacer {
+    height: 0;
   }
 
   :global(body.om-dragging) .splitter,
