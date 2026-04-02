@@ -39,6 +39,9 @@
   let galleryRangePendingPath: string | null = null;
   let galleryRangeRaf: number | null = null;
   let galleryRangeSuppressClick = false;
+  let galleryCursorPath: string | null = null;
+  let galleryKeyboardRangeAnchorPath: string | null = null;
+  let galleryKeyboardNavHintActive = false;
   let previewZoomOpen = false;
   let previewZoomPath = "";
   let previewZoomName = "";
@@ -766,6 +769,7 @@
       suppressNextGalleryClick = false;
       return;
     }
+    galleryKeyboardNavHintActive = false;
     if (galleryActionBusy) return;
     galleryActionBusy = true;
     try {
@@ -792,6 +796,7 @@
             })
             .catch(() => undefined);
         });
+        galleryCursorPath = it.path;
       } else {
         if (!previewVisible && it.kind === "image") {
           openZoomFromGallery(it);
@@ -811,6 +816,7 @@
             })
             .catch(() => undefined);
         });
+        galleryCursorPath = it.path;
       }
     } finally {
       galleryActionBusy = false;
@@ -835,6 +841,70 @@
         })
         .catch(() => undefined);
     });
+  }
+
+  function getGalleryNavigablePaths(): string[] {
+    return items.filter((x) => x.kind === "image").map((x) => x.path);
+  }
+
+  function getOrInitGalleryCursorPath(): string | null {
+    const paths = getGalleryNavigablePaths();
+    if (paths.length === 0) return null;
+    if (galleryCursorPath && paths.includes(galleryCursorPath)) return galleryCursorPath;
+    galleryCursorPath = paths[0];
+    return galleryCursorPath;
+  }
+
+  function getGalleryEstimatedColumns(): number {
+    const tileNodes = Array.from(document.querySelectorAll<HTMLElement>(".tile[data-item-path]"))
+      .filter((el) => {
+        const p = String(el.dataset?.itemPath ?? "");
+        return items.some((x) => x.kind === "image" && x.path === p);
+      });
+    if (tileNodes.length <= 1) return 1;
+    const firstTop = Math.round(tileNodes[0].getBoundingClientRect().top);
+    const cols = tileNodes.filter((n) => Math.abs(Math.round(n.getBoundingClientRect().top) - firstTop) <= 3).length;
+    return Math.max(1, cols);
+  }
+
+  function moveGalleryCursorByKey(keyLower: string): string | null {
+    const paths = getGalleryNavigablePaths();
+    if (paths.length === 0) return null;
+    const cur = getOrInitGalleryCursorPath();
+    if (!cur) return null;
+    const idx = Math.max(0, paths.indexOf(cur));
+    if (keyLower === "arrowright" || keyLower === "d") return paths[Math.min(paths.length - 1, idx + 1)];
+    if (keyLower === "arrowleft" || keyLower === "a") return paths[Math.max(0, idx - 1)];
+    const cols = getGalleryEstimatedColumns();
+    if (keyLower === "arrowdown" || keyLower === "s") return paths[Math.min(paths.length - 1, idx + cols)];
+    if (keyLower === "arrowup" || keyLower === "w") return paths[Math.max(0, idx - cols)];
+    return cur;
+  }
+
+  async function toggleGalleryCursorSelection(path: string) {
+    const prevItems = items;
+    const out = await bridge.galleryToggleSelect(path);
+    galleryState = out.state;
+    items = mergeItemsKeepingBestThumb(prevItems, out.items);
+    setSelectedPreviewFromPath(path);
+  }
+
+  async function applyGalleryKeyboardRangeSelection(anchorPath: string, toPath: string) {
+    const imagePaths = getGalleryNavigablePaths();
+    const a = imagePaths.indexOf(anchorPath);
+    const b = imagePaths.indexOf(toPath);
+    if (a < 0 || b < 0) return;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const target = new Set<string>();
+    for (let i = lo; i <= hi; i++) target.add(imagePaths[i]);
+    const current = new Set(items.filter((x) => x.kind === "image" && Boolean(x.selected)).map((x) => x.path));
+    const addPaths = [...target].filter((p) => !current.has(p));
+    if (addPaths.length === 0) return;
+    const prevItems = items;
+    const out = await bridge.galleryApplySelectionDelta(addPaths, []);
+    galleryState = out.state;
+    items = mergeItemsKeepingBestThumb(prevItems, out.items);
   }
 
   const selectPage = async () => {
@@ -2089,6 +2159,16 @@
     deferredZoomMoveRefresh = null;
   }
 
+  $: {
+    const nav = getGalleryNavigablePaths();
+    if (nav.length === 0) {
+      galleryCursorPath = null;
+      galleryKeyboardRangeAnchorPath = null;
+    } else if (!galleryCursorPath || !nav.includes(galleryCursorPath)) {
+      galleryCursorPath = nav[0];
+    }
+  }
+
   $: if (!previewZoomOpen) {
     previewZoomSkipMoveConfirm = false;
   }
@@ -2147,6 +2227,20 @@
     void endGalleryRangeSelection();
   }}
   on:keydown={(e) => {
+    if (confirmDeleteOpen) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        void runConfirmDelete();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeConfirmDelete();
+        return;
+      }
+    }
     const activeEl = (document.activeElement as HTMLElement | null) ?? null;
     const isTypingEl = Boolean(
       activeEl &&
@@ -2190,6 +2284,51 @@
         moveZoomBy(1);
         return;
       }
+    }
+    const keyLower = String(e.key || "").toLowerCase();
+    const isGalleryNavKey = ["arrowleft", "arrowright", "arrowup", "arrowdown", "a", "d", "w", "s"].includes(keyLower);
+    if (
+      !isTypingEl &&
+      !previewOpen &&
+      !previewZoomOpen &&
+      !settingsOpen &&
+      !orgPanelOpen &&
+      !destFormOpen &&
+      !routePickerOpen &&
+      isGalleryNavKey
+    ) {
+      e.preventDefault();
+      const current = getOrInitGalleryCursorPath();
+      const next = moveGalleryCursorByKey(keyLower);
+      if (next) {
+        galleryCursorPath = next;
+        galleryKeyboardNavHintActive = true;
+        setSelectedPreviewFromPath(next);
+        if (e.ctrlKey) {
+          const anchor = galleryKeyboardRangeAnchorPath ?? current ?? next;
+          galleryKeyboardRangeAnchorPath = anchor;
+          void applyGalleryKeyboardRangeSelection(anchor, next);
+        } else {
+          galleryKeyboardRangeAnchorPath = null;
+        }
+      }
+      return;
+    }
+    if (
+      !isTypingEl &&
+      !previewOpen &&
+      !previewZoomOpen &&
+      !settingsOpen &&
+      !orgPanelOpen &&
+      !destFormOpen &&
+      !routePickerOpen &&
+      shortcutMatchesSingle(e as KeyboardEvent, " ")
+    ) {
+      const cur = getOrInitGalleryCursorPath();
+      if (!cur) return;
+      e.preventDefault();
+      void toggleGalleryCursorSelection(cur);
+      return;
     }
     if (!isTypingEl && shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.deleteAction)) {
       const hasPreviewSelectionForDelete = previewOpen && previewSelectedPaths.length > 0;
@@ -2403,6 +2542,7 @@
                   role="button"
                   tabindex="0"
                   class="tile"
+                  class:tile--active={galleryKeyboardNavHintActive && galleryCursorPath === it.path}
                   data-item-path={it.path}
                   class:selected={isGalleryTileSelected(it)}
                   draggable={it.kind === "image" && !galleryRangeSelecting}
@@ -2543,6 +2683,7 @@
             <button
               type="button"
               class="tile"
+              class:tile--active={galleryKeyboardNavHintActive && galleryCursorPath === it.path}
               data-item-path={it.path}
               class:selected={it.selected && destinationsMode}
               draggable={destinationsMode && it.kind === "image"}
@@ -3253,6 +3394,15 @@
         aria-labelledby="confirm-delete-title"
         tabindex="-1"
         on:click|stopPropagation={() => undefined}
+        on:keydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void runConfirmDelete();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            closeConfirmDelete();
+          }
+        }}
       >
         <header class="modal__head">
           <strong id="confirm-delete-title">{confirmDeleteTitle}</strong>
@@ -3789,6 +3939,30 @@
   .tile:focus-visible {
     outline: 2px solid var(--om-accent);
     outline-offset: 2px;
+  }
+
+  .tile.tile--active {
+    box-shadow:
+      0 0 0 3px color-mix(in oklab, var(--om-accent) 78%, #ffffff),
+      0 0 22px rgb(124 140 255 / 0.45),
+      var(--om-shadow-md);
+    border-color: color-mix(in oklab, var(--om-accent) 76%, #ffffff);
+  }
+
+  .tile.tile--active::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: color-mix(in oklab, var(--om-accent) 30%, #7db5ff);
+    opacity: 0.42;
+  }
+
+  .tile.tile--active img,
+  .tile.tile--active .folder-ph {
+    filter: saturate(1.12) contrast(1.05);
   }
 
   .tile.selected {
