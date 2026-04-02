@@ -16,7 +16,14 @@
   let status = "Listo";
   let thumbScale = 1;
   let previewOpen = false;
-  let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null }> = [];
+  let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
+  let previewSelectedPaths: string[] = [];
+  let previewZoomOpen = false;
+  let previewZoomPath = "";
+  let previewZoomName = "";
+  let previewZoomDataUrl: string | null = null;
+  let galleryThumbHydrationToken = 0;
+  let previewThumbHydrationToken = 0;
   let previewScale = 1;
   let previewDestPath = "";
   let activeTab: "ruta" | "destinos" | "organizar" = "ruta";
@@ -46,6 +53,9 @@
 
   /** Rutas recientes (persistidas en settings) para acceso rápido si el campo está vacío. */
   let recentFolders: string[] = [];
+  /** Rutas ancladas (no se descartan del historial). */
+  let pinnedFolders: string[] = [];
+  $: recentUnpinnedFolders = recentFolders.filter((p) => !pinnedFolders.includes(p));
 
   let ghostVisible = false;
   let ghostX = 0;
@@ -123,6 +133,95 @@
     return out;
   }
 
+  function prioritizePathsByViewport(paths: string[], selector: string, attrName: string): string[] {
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
+    if (nodes.length === 0) return paths;
+    const nodeByPath = new Map<string, HTMLElement>();
+    for (const n of nodes) {
+      const p = n.dataset[attrName];
+      if (p) nodeByPath.set(p, n);
+    }
+    const visible: string[] = [];
+    const rest: string[] = [];
+    for (const p of paths) {
+      const el = nodeByPath.get(p);
+      if (!el) {
+        rest.push(p);
+        continue;
+      }
+      const r = el.getBoundingClientRect();
+      const isVisible = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
+      (isVisible ? visible : rest).push(p);
+    }
+    return [...visible, ...rest];
+  }
+
+  async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: number, token: number) {
+    const base = snapshot.filter((x) => x.kind === "image");
+    const orderedPaths = prioritizePathsByViewport(
+      base.map((x) => x.path),
+      ".tile[data-item-path]",
+      "itemPath"
+    );
+    const targets = orderedPaths
+      .map((p) => base.find((x) => x.path === p))
+      .filter((x): x is GalleryItem => Boolean(x));
+    let idx = 0;
+    const workers = Array.from({ length: 4 }, async () => {
+      while (idx < targets.length) {
+        const cur = idx++;
+        const it = targets[cur];
+        try {
+          const out = await bridge.galleryThumbHq(it.path, scale);
+          if (galleryThumbHydrationToken !== token) return;
+          if (!out?.thumbDataUrl) continue;
+          items = items.map((x) =>
+            x.kind === "image" && x.path === it.path
+              ? { ...x, thumbDataUrl: out.thumbDataUrl, thumbQuality: "hq" }
+              : x
+          );
+        } catch {
+          /* ignore: se queda LQ */
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  async function hydratePreviewThumbsHq(
+    snapshot: Array<{ name: string; path: string; thumbDataUrl?: string | null }>,
+    scale: number,
+    token: number
+  ) {
+    const orderedPaths = prioritizePathsByViewport(
+      snapshot.map((x) => x.path),
+      ".pv-tile[data-preview-path]",
+      "previewPath"
+    );
+    const targets = orderedPaths
+      .map((p) => snapshot.find((x) => x.path === p))
+      .filter((x): x is { name: string; path: string; thumbDataUrl?: string | null } => Boolean(x));
+    let idx = 0;
+    const workers = Array.from({ length: 4 }, async () => {
+      while (idx < targets.length) {
+        const cur = idx++;
+        const it = targets[cur];
+        try {
+          const out = await bridge.destinationThumbHq(it.path, scale);
+          if (previewThumbHydrationToken !== token) return;
+          if (!out?.thumbDataUrl) continue;
+          previewItems = previewItems.map((x) =>
+            x.path === it.path ? { ...x, thumbDataUrl: out.thumbDataUrl, thumbQuality: "hq" } : x
+          );
+          if (previewZoomOpen && previewZoomPath === it.path) previewZoomDataUrl = out.thumbDataUrl;
+        } catch {
+          /* ignore: se queda LQ */
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
   /** Prioriza destinations_get (payload pequeño); get_initial_state a veces falla el parse en Qt. */
   async function syncDestinationsFromApi() {
     try {
@@ -155,6 +254,9 @@
     recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
       ? (data.settings.gallery_recent_folders as string[])
       : [];
+    pinnedFolders = Array.isArray(data.settings?.gallery_pinned_folders)
+      ? (data.settings.gallery_pinned_folders as string[])
+      : [];
     thumbsPerPage = Math.min(120, Math.max(12, Number(data.settings?.gallery_thumbs_per_page ?? 48)));
     pageJumpDraft = Number(data.gallery?.page ?? 1);
     await syncDestinationsFromApi();
@@ -164,6 +266,8 @@
     const out = await trackLoad(bridge.galleryLoadFolder(folder));
     galleryState = out.state;
     items = out.items;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
     pageJumpDraft = out.state.page;
     status = `Cargada carpeta: ${folder}`;
@@ -172,6 +276,26 @@
   const pickRecentFolder = async (path: string) => {
     folder = path;
     await loadFolder();
+  };
+
+  const pinFolder = async (path: string) => {
+    try {
+      const out = await bridge.galleryPinFolder(path);
+      pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders;
+      status = "Ruta anclada";
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo anclar la ruta";
+    }
+  };
+
+  const unpinFolder = async (path: string) => {
+    try {
+      const out = await bridge.galleryUnpinFolder(path);
+      pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders.filter((x) => x !== path);
+      status = "Ruta desanclada";
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudo quitar el anclaje";
+    }
   };
 
   const pickGalleryFolder = async () => {
@@ -204,12 +328,16 @@
     const out = opts?.silent ? await p : await trackLoad(p);
     galleryState = out.state;
     items = out.items;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
   };
 
   const goPage = async (page: number) => {
     const out = await trackLoad(bridge.galleryGoPage(page));
     galleryState = out.state;
     items = out.items;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
     pageJumpDraft = out.state.page;
   };
 
@@ -249,6 +377,8 @@
         const out = await trackLoad(bridge.galleryOpenFolderTile(it.path));
         galleryState = out.state;
         items = out.items;
+        galleryThumbHydrationToken++;
+        void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
         folder = galleryState.folder;
         if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
         pageJumpDraft = out.state.page;
@@ -258,6 +388,8 @@
         const out = await bridge.galleryToggleSelect(it.path);
         galleryState = out.state;
         items = out.items;
+        galleryThumbHydrationToken++;
+        void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
         const row = out.items?.find((x: GalleryItem) => x.path === it.path);
         selectedPreview = {
           path: it.path,
@@ -298,22 +430,30 @@
     const out = await bridge.gallerySelectPage();
     galleryState = out.state;
     items = out.items;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
   };
   const clearSelection = async () => {
     const out = await bridge.galleryClearSelection();
     galleryState = out.state;
     items = out.items;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
   };
   const invertSelection = async () => {
     const out = await bridge.galleryInvertSelection();
     galleryState = out.state;
     items = out.items;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
   };
 
   const moveToDest = async (path: string) => {
     const out = await trackLoad(bridge.destinationMoveSelected(path));
     galleryState = out.state;
     items = out.items;
+    galleryThumbHydrationToken++;
+    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
     status = `Movidas ${out.moveResult?.moved ?? 0} · errores ${out.moveResult?.errors ?? 0}`;
   };
 
@@ -357,25 +497,13 @@
     window.addEventListener("pointercancel", up);
   }
 
-  /** Números de página estilo resultados (1 … 5 6 7 … N). */
+  /** Números de página estilo resultados (mínimo 5 visibles + extremos). */
   function googlePageItems(page: number, totalPages: number): Array<number | "gap"> {
     if (totalPages <= 1) return totalPages === 1 ? [1] : [];
-    const delta = 2;
-    const set = new Set<number>();
-    set.add(1);
-    set.add(totalPages);
-    for (let i = page - delta; i <= page + delta; i++) {
-      if (i >= 1 && i <= totalPages) set.add(i);
-    }
-    const sorted = [...set].sort((a, b) => a - b);
-    const out: Array<number | "gap"> = [];
-    let prev = 0;
-    for (const p of sorted) {
-      if (prev && p - prev > 1) out.push("gap");
-      out.push(p);
-      prev = p;
-    }
-    return out;
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    if (page <= 4) return [1, 2, 3, 4, 5, "gap", totalPages];
+    if (page >= totalPages - 3) return [1, "gap", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+    return [1, "gap", page - 2, page - 1, page, page + 1, page + 2, "gap", totalPages];
   }
 
   $: pageLinks = googlePageItems(Number(galleryState.page) || 1, Number(galleryState.totalPages) || 1);
@@ -437,6 +565,7 @@
 
   const openDestPreview = async (path: string) => {
     previewDestPath = path;
+    previewSelectedPaths = [];
     previewOpen = true;
     await refreshDestPreview();
   };
@@ -445,7 +574,64 @@
     const w = Math.max(320, Math.round(window.innerWidth * DEST_MODAL_FRAC));
     const out = await bridge.destinationPreview(previewDestPath, previewScale, w);
     previewItems = out.items;
+    previewThumbHydrationToken++;
+    void hydratePreviewThumbsHq(previewItems, previewScale, previewThumbHydrationToken);
+    const valid = new Set(out.items.map((x: { path: string }) => x.path));
+    previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
   };
+
+  function togglePreviewPick(path: string) {
+    const has = previewSelectedPaths.includes(path);
+    previewSelectedPaths = has
+      ? previewSelectedPaths.filter((p) => p !== path)
+      : [...previewSelectedPaths, path];
+  }
+
+  function selectAllPreviewItems() {
+    previewSelectedPaths = previewItems.map((x) => x.path);
+  }
+
+  function clearPreviewSelection() {
+    previewSelectedPaths = [];
+  }
+
+  async function movePreviewSelectionToCurrentRoute() {
+    if (previewSelectedPaths.length === 0) {
+      status = "Selecciona elementos del modal primero";
+      return;
+    }
+    if (!folder.trim()) {
+      status = "Carga una carpeta en Ruta para recibir los archivos";
+      return;
+    }
+    try {
+      const out = await trackLoad(bridge.destinationMoveFromPreview(previewSelectedPaths));
+      galleryState = out.state ?? galleryState;
+      items = out.items ?? items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      const moved = Number(out.moveResult?.moved ?? 0);
+      const errors = Number(out.moveResult?.errors ?? 0);
+      status = `Movidos ${moved} del modal a la ruta actual${errors ? ` · errores ${errors}` : ""}`;
+      previewSelectedPaths = [];
+      await refreshDestPreview();
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : "No se pudieron mover los elementos seleccionados";
+    }
+  }
+
+  function openPreviewZoom(it: { path: string; name: string; thumbDataUrl?: string | null }) {
+    previewZoomPath = it.path;
+    previewZoomName = it.name;
+    previewZoomDataUrl = it.thumbDataUrl ?? null;
+    previewZoomOpen = true;
+    bridge
+      .galleryPreview(it.path, 2200, 1600)
+      .then((pr) => {
+        if (previewZoomOpen && previewZoomPath === it.path) previewZoomDataUrl = pr.dataUrl ?? previewZoomDataUrl;
+      })
+      .catch(() => undefined);
+  }
 
   /** Ancho mínimo de pista en el modal destino: auto-fill sin columna cortada ni scroll horizontal. */
   $: destModalGridMinPx = destPreviewGridMinPx(previewScale);
@@ -501,6 +687,8 @@
   let suppressNextGalleryClick = false;
   /** Ignorar clics justo tras soltar en un destino (evita abrir vista previa por el click fantasma). */
   let ignoreDestCardClickUntil = 0;
+  /** Destino bajo el cursor durante DnD (resaltado de tarjeta). */
+  let dragOverDestPath: string | null = null;
 
   /** Formulario agregar/editar destino (modal). */
   let destFormOpen = false;
@@ -526,6 +714,7 @@
   /** Cierra ghost, listeners y estado de arrastre (WebEngine a veces no emite dragend). */
   function endDragSession() {
     ghostVisible = false;
+    dragOverDestPath = null;
     document.body.classList.remove("om-dragging");
     clearGhostListeners();
   }
@@ -560,6 +749,9 @@
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
       ghostX = ev.clientX;
       ghostY = ev.clientY;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const card = el?.closest?.("[data-dest-path]") as HTMLElement | null;
+      dragOverDestPath = card?.dataset?.destPath ?? null;
     };
     dragWinEnd = () => {
       endDragSessionAfterGesture();
@@ -790,19 +982,40 @@
         on:change={flushThumbScaleOnRelease}
       />
     </div>
-    {#if !folder.trim() && recentFolders.length > 0}
+    {#if !folder.trim() && (pinnedFolders.length > 0 || recentFolders.length > 0)}
       <div class="recent-folders" aria-label="Rutas recientes">
-        <div class="recent-folders__head">
-          <span class="field-label">Rutas recientes</span>
-          <span class="recent-folders__hint">Pulsa para cargar</span>
-        </div>
-        <div class="recent-folders__list">
-          {#each recentFolders as p}
-            <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
-              {p.length > 56 ? `${p.slice(0, 53)}…` : p}
-            </button>
-          {/each}
-        </div>
+        {#if pinnedFolders.length > 0}
+          <div class="recent-folders__head">
+            <span class="field-label">Rutas ancladas</span>
+            <span class="recent-folders__hint">No se pierden del historial</span>
+          </div>
+          <div class="recent-folders__list">
+            {#each pinnedFolders as p}
+              <div class="recent-folders__chip-wrap">
+                <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
+                  {p.length > 56 ? `${p.slice(0, 53)}…` : p}
+                </button>
+                <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Quitar anclaje" on:click={() => unpinFolder(p)}>★</button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        {#if recentUnpinnedFolders.length > 0}
+          <div class="recent-folders__head">
+            <span class="field-label">Rutas recientes</span>
+            <span class="recent-folders__hint">Pulsa para cargar y usa ☆ para anclar</span>
+          </div>
+          <div class="recent-folders__list">
+            {#each recentUnpinnedFolders as p}
+              <div class="recent-folders__chip-wrap">
+                <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
+                  {p.length > 56 ? `${p.slice(0, 53)}…` : p}
+                </button>
+                <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Anclar ruta" on:click={() => pinFolder(p)}>☆</button>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
   </section>
@@ -835,6 +1048,7 @@
                   role="button"
                   tabindex="0"
                   class="tile"
+                  data-item-path={it.path}
                   class:selected={it.selected && activeTab === "destinos"}
                   draggable={it.kind === "image"}
                   on:dragstart={(e) => onTileDragStart(e, it)}
@@ -847,7 +1061,14 @@
                   }}
                 >
                   {#if it.thumbDataUrl}
-                    <img src={it.thumbDataUrl} alt="" draggable={false} loading="lazy" decoding="async" />
+                    <img
+                      src={it.thumbDataUrl}
+                      alt=""
+                      class:thumb--lq={it.thumbQuality === "lq"}
+                      draggable={false}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   {:else}
                     <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
                   {/if}
@@ -908,13 +1129,15 @@
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <div
               class="dest-card"
+              class:dest-card--drop-target={dragOverDestPath === d.path}
+              data-dest-path={d.path}
               role="group"
               aria-label="Destino {d.label}"
               title={d.path}
               on:click={(e) => onDestCardClick(e, d.path)}
               on:contextmenu={(e) => onDestContextMenu(e, i)}
-              on:dragenter={(e) => e.preventDefault()}
-              on:dragover={(e) => e.preventDefault()}
+              on:dragenter|preventDefault
+              on:dragover|preventDefault
               on:drop={(e) => onDestDrop(e, d.path)}
             >
               <div class="dest-card__head">
@@ -942,13 +1165,14 @@
             <button
               type="button"
               class="tile"
+              data-item-path={it.path}
               class:selected={it.selected && activeTab === "destinos"}
               draggable={activeTab === "destinos" && it.kind === "image"}
               on:dragstart={(e) => onTileDragStart(e, it)}
               on:click={() => clickItem(it)}
             >
               {#if it.thumbDataUrl}
-                <img src={it.thumbDataUrl} alt="" loading="lazy" decoding="async" />
+                <img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} loading="lazy" decoding="async" />
               {:else}
                 <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
               {/if}
@@ -1050,16 +1274,88 @@
             bind:value={previewScale}
             on:input={scheduleDestScaleSave}
           />
+          <div class="modal__pick-tools" role="toolbar" aria-label="Selección del modal de destino">
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={selectAllPreviewItems}>Seleccionar todo</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={clearPreviewSelection}>Limpiar</button>
+            <button
+              type="button"
+              class="om-btn om-btn--primary om-btn--compact"
+              disabled={previewSelectedPaths.length === 0}
+              on:click={movePreviewSelectionToCurrentRoute}
+              title="Mueve los elementos seleccionados a la carpeta cargada en la pestaña Ruta"
+            >
+              Mover seleccionados a Ruta ({previewSelectedPaths.length})
+            </button>
+          </div>
         </section>
         <div class="modal__scroll">
           <section class="dest-grid" style={`--pv-min:${destModalGridMinPx}px`}>
             {#each previewItems as it}
-              <div class="pv-tile">
-                {#if it.thumbDataUrl}<img src={it.thumbDataUrl} alt="" />{/if}
+              <div
+                class="pv-tile"
+                data-preview-path={it.path}
+                class:pv-tile--selected={previewSelectedPaths.includes(it.path)}
+                role="button"
+                tabindex="0"
+                on:click={() => openPreviewZoom(it)}
+                on:keydown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openPreviewZoom(it);
+                  }
+                }}
+              >
+                <button
+                  type="button"
+                  class="pv-tile__pick"
+                  aria-label={previewSelectedPaths.includes(it.path) ? "Quitar de selección" : "Seleccionar elemento"}
+                  aria-pressed={previewSelectedPaths.includes(it.path)}
+                  on:click|stopPropagation={() => togglePreviewPick(it.path)}
+                >
+                  {previewSelectedPaths.includes(it.path) ? "✓" : "+"}
+                </button>
+                {#if it.thumbDataUrl}<img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} />{/if}
                 <span class="pv-tile__name">{it.name}</span>
               </div>
             {/each}
           </section>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if previewZoomOpen}
+    <div
+      class="overlay overlay--zoom"
+      role="button"
+      tabindex="-1"
+      aria-label="Cerrar vista previa ampliada"
+      on:click={() => (previewZoomOpen = false)}
+      on:keydown={(e) => {
+        if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          previewZoomOpen = false;
+        }
+      }}
+    >
+      <div
+        class="zoom-modal"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        on:click|stopPropagation
+        on:keydown={(e) => e.stopPropagation()}
+      >
+        <header class="zoom-modal__head">
+          <strong>{previewZoomName}</strong>
+          <button type="button" class="om-btn om-btn--ghost" on:click={() => (previewZoomOpen = false)}>Cerrar</button>
+        </header>
+        <div class="zoom-modal__body">
+          {#if previewZoomDataUrl}
+            <img class="zoom-modal__img" src={previewZoomDataUrl} alt={previewZoomName} />
+          {:else}
+            <div class="preview__empty">Cargando imagen…</div>
+          {/if}
         </div>
       </div>
     </div>
@@ -1282,6 +1578,13 @@
     gap: var(--om-space-2);
   }
 
+  .recent-folders__chip-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+  }
+
   .recent-folders__chip {
     max-width: 100%;
     text-align: left;
@@ -1289,6 +1592,14 @@
     line-height: 1.3;
     white-space: normal;
     word-break: break-all;
+  }
+
+  .recent-folders__pin {
+    min-width: 2rem;
+    min-height: 2rem;
+    padding: 0.2rem 0.45rem;
+    line-height: 1;
+    color: var(--om-accent-2);
   }
 
   .route__path {
@@ -1572,6 +1883,12 @@
     display: block;
   }
 
+  .thumb--lq {
+    filter: blur(4px) saturate(0.92);
+    transform: scale(1.02);
+    transition: filter 0.18s ease, transform 0.18s ease;
+  }
+
   .folder-ph {
     width: 100%;
     aspect-ratio: 1;
@@ -1653,6 +1970,16 @@
     padding-top: var(--om-space-1);
   }
 
+  .dest-panel__toolbar .om-btn {
+    min-height: 2rem;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    white-space: normal;
+    text-wrap: balance;
+    text-align: center;
+  }
+
   .org-tab-bar {
     display: flex;
     flex-wrap: wrap;
@@ -1706,6 +2033,54 @@
     box-shadow: var(--om-shadow-lg);
   }
 
+  /* Carpeta destino activa mientras el arrastre está encima (soltar aquí). */
+  .dest-card.dest-card--drop-target {
+    border-color: rgb(124 140 255 / 0.8);
+    background: linear-gradient(
+      165deg,
+      rgb(124 140 255 / 0.18) 0%,
+      rgb(94 228 212 / 0.08) 45%,
+      var(--om-surface-1) 100%
+    );
+    box-shadow: var(--om-shadow-md);
+    position: relative;
+    z-index: 0;
+    isolation: isolate; /* permite que el pseudo-elemento “halo” quede detrás sin romper stacking */
+    transition:
+      border-color 0.12s ease,
+      background 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+
+  /* Glow difuminado (no rectangular) para drop target. */
+  .dest-card.dest-card--drop-target::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: inherit;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 1;
+    background:
+      radial-gradient(
+        circle at 22% 18%,
+        rgb(94 228 212 / 0.55) 0%,
+        transparent 55%
+      ),
+      radial-gradient(
+        circle at 78% 82%,
+        rgb(124 140 255 / 0.45) 0%,
+        transparent 58%
+      ),
+      linear-gradient(
+        180deg,
+        rgb(124 140 255 / 0.18) 0%,
+        rgb(94 228 212 / 0.10) 100%
+      );
+    filter: blur(12px) saturate(1.15);
+    transform: translateZ(0);
+  }
+
   .dest-card__head {
     display: flex;
     flex-direction: column;
@@ -1731,6 +2106,12 @@
 
   /* Vista chip: panel bajo bajo — usa dest-panel (altura real), no el scroll (antes rompía con container-type:size). */
   @container dest-panel (max-height: 140px) {
+    .dest-panel__toolbar .om-btn {
+      min-height: 1.65rem;
+      padding: 0.28rem 0.62rem;
+      font-size: 0.72rem;
+    }
+
     .dest-grid-wrap--scroll {
       display: flex;
       flex-wrap: wrap;
@@ -1753,6 +2134,11 @@
       box-shadow: var(--om-shadow-sm);
       border-radius: var(--om-radius-sm);
       cursor: pointer;
+    }
+
+    .dest-grid-wrap--scroll > .dest-card.dest-card--drop-target {
+      box-shadow: var(--om-shadow-sm);
+      border-color: rgb(124 140 255 / 0.85);
     }
 
     .dest-card__head {
@@ -1779,6 +2165,15 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 100%;
+    }
+  }
+
+  @container dest-panel (min-height: 240px) {
+    .dest-panel__toolbar .om-btn {
+      min-height: 2.5rem;
+      padding: 0.65rem 1.1rem;
+      font-size: 0.9rem;
+      line-height: 1.25;
     }
   }
 
@@ -2096,6 +2491,14 @@
     flex-shrink: 0;
   }
 
+  .modal__pick-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--om-space-2);
+    margin-left: auto;
+  }
+
   .modal__scroll {
     flex: 1 1 0;
     min-height: 0;
@@ -2123,6 +2526,24 @@
     border-radius: var(--om-radius-sm);
     padding: var(--om-space-2);
     border: 1px solid var(--om-border-subtle);
+    position: relative;
+    cursor: pointer;
+    transition:
+      border-color var(--om-transition),
+      box-shadow var(--om-transition),
+      background var(--om-transition);
+  }
+
+  .pv-tile:hover {
+    border-color: rgb(124 140 255 / 0.45);
+  }
+
+  .pv-tile.pv-tile--selected {
+    border-color: rgb(124 140 255 / 0.78);
+    background: linear-gradient(165deg, rgb(124 140 255 / 0.16) 0%, rgb(94 228 212 / 0.08) 100%);
+    box-shadow:
+      0 0 0 1px rgb(94 228 212 / 0.35),
+      0 0 18px rgb(124 140 255 / 0.22);
   }
 
   .pv-tile img {
@@ -2143,6 +2564,68 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .pv-tile__pick {
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.35);
+    background: rgb(7 8 15 / 0.72);
+    color: #fff;
+    font-weight: 800;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    z-index: 2;
+  }
+
+  .pv-tile--selected .pv-tile__pick {
+    background: linear-gradient(135deg, var(--om-accent), #4f5fd4);
+    border-color: rgb(255 255 255 / 0.56);
+  }
+
+  .overlay--zoom {
+    background: rgb(2 3 8 / 0.92);
+    z-index: 60;
+  }
+
+  .zoom-modal {
+    width: min(96vw, 1320px);
+    height: min(94vh, 980px);
+    display: flex;
+    flex-direction: column;
+    gap: var(--om-space-3);
+  }
+
+  .zoom-modal__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--om-space-3);
+    padding: 0 var(--om-space-2);
+    color: var(--om-text-primary);
+  }
+
+  .zoom-modal__body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    overflow: auto;
+    border-radius: var(--om-radius-lg);
+  }
+
+  .zoom-modal__img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: var(--om-radius-md);
+    box-shadow: 0 16px 42px rgb(0 0 0 / 0.55);
+    background: rgb(0 0 0 / 0.22);
   }
 
   /* Ghost de arrastre */

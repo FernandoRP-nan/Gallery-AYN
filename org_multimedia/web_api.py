@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover
 def _thumb_px_from_gallery_scale(scale: float) -> int:
     """Escala lineal 0.75–2.25 → ~80–340 px (muchos pasos visibles, sin saltos por columnas)."""
     lo, hi = 0.75, 2.25
-    px_min, px_max = 80, 340
+    px_min, px_max = 96, 400
     s = max(lo, min(hi, float(scale)))
     return int(round(px_min + (s - lo) / (hi - lo) * (px_max - px_min)))
 
@@ -35,7 +35,7 @@ def _thumb_px_from_gallery_scale(scale: float) -> int:
 def _thumb_px_from_dest_scale(scale: float) -> int:
     """Vista previa de carpeta destino (rango de escala distinto en la UI)."""
     lo, hi = 0.7, 2.1
-    px_min, px_max = 72, 320
+    px_min, px_max = 88, 360
     s = max(lo, min(hi, float(scale)))
     return int(round(px_min + (s - lo) / (hi - lo) * (px_max - px_min)))
 
@@ -75,7 +75,7 @@ def _img_to_data_url_contain(path: Path, max_w: int, max_h: int) -> str | None:
         return None
 
 
-def _thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 82) -> str | None:
+def _thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 90) -> str | None:
     """Miniatura cuadrada para la rejilla; JPEG reduce mucho el tamaño frente a PNG."""
     if Image is None:
         return None
@@ -94,7 +94,7 @@ def _thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 82) -> str
         return None
 
 
-def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 82) -> str | None:
+def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) -> str | None:
     """Miniatura modal destino: encaja en size×size manteniendo proporción."""
     if Image is None:
         return None
@@ -124,14 +124,14 @@ class WebApi:
         # Candado solo para la caché de miniaturas (los workers no deben tomar `self.lock` mientras el hilo principal construye la página).
         self._thumb_cache_lock = threading.Lock()
         self._organizer_job: dict | None = None
-        # Caché (ruta, tamaño, formato) -> (mtime, data_url)
+        # Caché (ruta, tamaño, perfil) -> (mtime, data_url)
         self._thumb_cache: dict[tuple[str, int, str], tuple[float, str | None]] = {}
 
     def _clear_thumb_cache(self) -> None:
         self._thumb_cache.clear()
 
-    def _thumb_data_url_cached(self, path: Path, thumb_px: int) -> str | None:
-        key = (str(path.resolve()), thumb_px, "jpeg")
+    def _thumb_data_url_cached(self, path: Path, thumb_px: int, profile: str = "hq") -> str | None:
+        key = (str(path.resolve()), thumb_px, profile)
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -140,7 +140,12 @@ class WebApi:
             hit = self._thumb_cache.get(key)
             if hit is not None and hit[0] == mtime:
                 return hit[1]
-        data = _thumb_jpeg_data_url_square(path, thumb_px)
+        if profile == "lq":
+            # Fase 1: miniatura rápida (menos calidad) para pintar la rejilla antes.
+            data = _thumb_jpeg_data_url_square(path, max(56, int(thumb_px * 0.72)), quality=58)
+        else:
+            # Fase 2: miniatura nítida.
+            data = _thumb_jpeg_data_url_square(path, thumb_px, quality=92)
         with self._thumb_cache_lock:
             self._thumb_cache[key] = (mtime, data)
         return data
@@ -160,12 +165,35 @@ class WebApi:
         unique.insert(0, p)
         self.settings["gallery_recent_folders"] = unique[:20]
 
+    def _pinned_folders(self) -> list[str]:
+        pins = self.settings.get("gallery_pinned_folders")
+        if not isinstance(pins, list):
+            pins = []
+            self.settings["gallery_pinned_folders"] = pins
+        return [str(x) for x in pins if str(x).strip()]
+
     def get_initial_state(self) -> dict:
         return {
             "settings": self.settings,
             "gallery": self._gallery_state(),
             "destinations": list(self._destinations_list()),
         }
+
+    def gallery_pin_folder(self, raw_path: str) -> dict:
+        p = str(Path(raw_path).expanduser().resolve())
+        pins = self._pinned_folders()
+        if p not in pins:
+            pins.insert(0, p)
+            self.settings["gallery_pinned_folders"] = pins[:40]
+            save_app_settings(self.settings)
+        return {"pinnedFolders": list(self.settings.get("gallery_pinned_folders", []))}
+
+    def gallery_unpin_folder(self, raw_path: str) -> dict:
+        p = str(Path(raw_path).expanduser().resolve())
+        pins = [x for x in self._pinned_folders() if x != p]
+        self.settings["gallery_pinned_folders"] = pins
+        save_app_settings(self.settings)
+        return {"pinnedFolders": pins}
 
     def _thumbs_per_page(self) -> int:
         n = int(self.settings.get("gallery_thumbs_per_page", 48))
@@ -225,7 +253,8 @@ class WebApi:
                 "name": p.name,
                 "path": str(p),
                 "selected": p in selected_frozenset,
-                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px),
+                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
+                "thumbQuality": "lq",
             }
 
         if not slice_paths:
@@ -346,10 +375,56 @@ class WebApi:
                 {
                     "name": p.name,
                     "path": str(p),
-                    "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(p, thumb),
+                    "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(
+                        p, max(56, int(thumb * 0.72)), quality=58
+                    ),
+                    "thumbQuality": "lq",
                 }
             )
         return {"items": items, "cols": cols}
+
+    def gallery_thumb_hq(self, path: str, scale: float) -> dict:
+        p = Path(path).expanduser().resolve()
+        thumb_px = _thumb_px_from_gallery_scale(float(scale))
+        return {"path": str(p), "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "hq"), "thumbQuality": "hq"}
+
+    def destination_thumb_hq(self, path: str, scale: float) -> dict:
+        p = Path(path).expanduser().resolve()
+        thumb = _thumb_px_from_dest_scale(float(scale))
+        return {"path": str(p), "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(p, thumb, quality=92), "thumbQuality": "hq"}
+
+    def destination_move_from_preview(self, src_paths: list[str]) -> dict:
+        """Mueve imágenes seleccionadas del modal de destino a la carpeta cargada en galería."""
+        if not self.gallery_folder or not self.gallery_folder.is_dir():
+            raise ValueError("No hay carpeta cargada en Ruta para recibir los archivos.")
+        dest_dir = self.gallery_folder.resolve()
+        moved = 0
+        errors = 0
+        unique_raw = []
+        seen: set[str] = set()
+        for raw in src_paths or []:
+            s = str(raw).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            unique_raw.append(s)
+        with self.lock:
+            for raw in unique_raw:
+                try:
+                    src = Path(raw).expanduser().resolve()
+                    if not src.is_file():
+                        continue
+                    if src.parent.resolve() == dest_dir:
+                        continue
+                    target = ensure_unique_destination(dest_dir / src.name)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src), str(target))
+                    moved += 1
+                except Exception:
+                    errors += 1
+        data = self.gallery_reload()
+        data["moveResult"] = {"moved": moved, "errors": errors}
+        return data
 
     def _destinations_list(self) -> list:
         """Si en JSON quedó null o tipo inválido, setdefault no crea lista y falla el append."""

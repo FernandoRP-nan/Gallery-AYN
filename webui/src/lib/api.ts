@@ -3,6 +3,7 @@ export type GalleryItem = {
   name: string;
   path: string;
   thumbDataUrl?: string | null;
+  thumbQuality?: "lq" | "hq";
   selected?: boolean;
 };
 
@@ -53,6 +54,8 @@ const devMockApi: WebApi = {
   }),
   gallery_load_folder: async () => ({ ...mockGalleryPayload(), recentFolders: [] as string[] }),
   gallery_reload: async () => mockGalleryPayload(),
+  gallery_pin_folder: async () => ({ pinnedFolders: [] as string[] }),
+  gallery_unpin_folder: async () => ({ pinnedFolders: [] as string[] }),
   gallery_go_page: async () => mockGalleryPayload(),
   gallery_open_folder_tile: async () => ({ ...mockGalleryPayload(), recentFolders: [] as string[] }),
   gallery_toggle_select: async () => mockGalleryPayload(),
@@ -65,7 +68,13 @@ const devMockApi: WebApi = {
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
   }),
+  destination_move_from_preview: async () => ({
+    ...mockGalleryPayload(),
+    moveResult: { moved: 0, errors: 0 },
+  }),
+  gallery_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
   destination_preview: async () => ({ items: [], cols: 4 }),
+  destination_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
   destinations_add: async () => ({ destinations: [] }),
   destinations_edit: async () => ({ destinations: [] }),
   destinations_remove: async () => ({ destinations: [] }),
@@ -103,6 +112,8 @@ export const bridge = {
   getInitialState: () => call<any>("get_initial_state"),
   galleryLoadFolder: (path: string) => call<any>("gallery_load_folder", path),
   galleryReload: () => call<any>("gallery_reload"),
+  galleryPinFolder: (path: string) => call<any>("gallery_pin_folder", path),
+  galleryUnpinFolder: (path: string) => call<any>("gallery_unpin_folder", path),
   galleryGoPage: (page: number) => call<any>("gallery_go_page", page),
   galleryOpenFolderTile: (path: string) => call<any>("gallery_open_folder_tile", path),
   galleryToggleSelect: (path: string) => call<any>("gallery_toggle_select", path),
@@ -113,8 +124,11 @@ export const bridge = {
   galleryPreview: (path: string, width: number, height: number) =>
     call<any>("gallery_preview", path, width, height),
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
+  destinationMoveFromPreview: (paths: string[]) => call<any>("destination_move_from_preview", paths),
+  galleryThumbHq: (path: string, scale: number) => call<any>("gallery_thumb_hq", path, scale),
   destinationPreview: (path: string, scale: number, width: number) =>
     call<any>("destination_preview", path, scale, width),
+  destinationThumbHq: (path: string, scale: number) => call<any>("destination_thumb_hq", path, scale),
   destinationsAdd: (label: string, path: string) => call<any>("destinations_add", label, path),
   destinationsEdit: (idx: number, label: string, path: string) =>
     call<any>("destinations_edit", idx, label, path),
