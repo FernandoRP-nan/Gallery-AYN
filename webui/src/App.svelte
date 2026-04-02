@@ -85,7 +85,7 @@
   let thumbFrameVisibleBackup = true;
   let thumbImageRadiusPxBackup = 6;
   const thumbScalePresets = [
-    { id: "compacto", label: "Compacto", value: 0.82 },
+    { id: "compacto", label: "Compacto", value: 0.62 },
     { id: "medio", label: "Medio", value: 1.0 },
     { id: "comodo", label: "Cómodo", value: 1.18 },
     { id: "grande", label: "Grande", value: 1.45 },
@@ -325,7 +325,8 @@
     pinnedFolders = Array.isArray(data.settings?.gallery_pinned_folders)
       ? (data.settings.gallery_pinned_folders as string[])
       : [];
-    thumbsPerPage = Math.min(120, Math.max(12, Number(data.settings?.gallery_thumbs_per_page ?? 48)));
+    const perPageRaw = Math.round(Number(data.settings?.gallery_thumbs_per_page ?? 48)) || 48;
+    thumbsPerPage = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     pageJumpDraft = Number(data.gallery?.page ?? 1);
     await syncDestinationsFromApi();
   };
@@ -493,12 +494,13 @@
   };
 
   const saveSettingsModal = async () => {
-    const n = Math.min(120, Math.max(12, Math.round(Number(thumbsPerPage)) || 48));
+    const perPageRaw = Math.round(Number(thumbsPerPage)) || 48;
+    const n = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     thumbsPerPage = n;
-    const ts = Math.max(0.75, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
+    const ts = Math.max(0.45, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
     thumbScale = ts;
     await bridge.settingsPatch({
-      gallery_thumbs_per_page: n,
+      gallery_thumbs_per_page: n, // 0 = sin límite
       gallery_thumb_scale: Number(ts.toFixed(3)),
       web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
       web_show_thumb_labels: Boolean(showThumbLabels),
@@ -544,6 +546,10 @@
             .catch(() => undefined);
         });
       } else {
+        if (!previewVisible && it.kind === "image") {
+          openZoomFromGallery(it);
+          return;
+        }
         selectedPreview = {
           path: it.path,
           name: it.name,
@@ -1385,17 +1391,10 @@
     }
   }
 
-  // Ajusta el tamaño efectivo de celda a "saltos" que encajan con el ancho actual,
-  // para conservar padding lateral fijo y reducir hueco sobrante en el borde derecho.
+  // Tamaño objetivo directo: la grilla flexible (minmax + 1fr) absorbe cambios finos
+  // de ancho y evita hueco fijo en el borde derecho.
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
-  $: gridCellPx = (() => {
-    const usableW = Math.max(0, galleryGridWidth - GALLERY_GRID_EDGE_PAD_PX * 2);
-    if (usableW <= 0) return gridCellTargetPx;
-    const gapPx = Math.max(0, Math.round(thumbGapPx));
-    const cols = Math.max(1, Math.floor((usableW + gapPx) / (gridCellTargetPx + gapPx)));
-    const fitted = Math.floor((usableW - (cols - 1) * gapPx) / cols);
-    return Math.max(72, fitted);
-  })();
+  $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
   $: settingsPreviewCellPx = galleryGridCellPx(settingsThumbScaleDraft);
 
   $: if (galleryScrollEl && galleryScrollEl !== galleryGridObservedEl) {
@@ -1846,7 +1845,7 @@
       id="route-thumb-scale-footer"
       class="om-range pager__thumb-range"
       type="range"
-      min="0.75"
+      min="0.45"
       max="2.25"
       step="0.01"
       bind:value={thumbScale}
@@ -1880,7 +1879,7 @@
       >
         <header class="modal__head">
           <strong id="dest-preview-title">Destino: {previewDestPath}</strong>
-          <button type="button" class="om-btn om-btn--ghost" on:click={() => (previewOpen = false)}>Cerrar</button>
+          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewOpen = false)}>✕</button>
         </header>
         <section class="modal__ctrl">
           <label class="field-label" for="dest-preview-scale">Miniaturas en vista previa {Math.round(previewScale * 100)}%</label>
@@ -2015,7 +2014,7 @@
               }}
             >{Math.round(previewZoomScale * 100)}%</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Acercar" on:click={() => zoomStep(0.2)}>＋</button>
-            <button type="button" class="om-btn om-btn--ghost" on:click={() => (previewZoomOpen = false)}>Cerrar</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewZoomOpen = false)}>✕</button>
           </div>
         </header>
         <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
@@ -2103,7 +2102,7 @@
       >
         <header class="org-float__head">
           <strong id="org-float-title">Organizar medios</strong>
-          <button type="button" class="om-btn om-btn--ghost" on:click={() => (orgPanelOpen = false)}>Cerrar</button>
+          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (orgPanelOpen = false)}>✕</button>
         </header>
         <div class="org-row">
           <label class="field-label" for="org-path-input-float">Ruta</label>
@@ -2158,7 +2157,7 @@
       >
         <header class="modal__head">
           <strong id="dest-form-title">{destFormMode === "add" ? "Agregar carpeta destino" : "Editar destino"}</strong>
-          <button type="button" class="om-btn om-btn--ghost" on:click={closeDestForm}>Cerrar</button>
+          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={closeDestForm}>✕</button>
         </header>
         <section class="dest-form-body">
           <label class="field-label" for="dest-form-label">Nombre</label>
@@ -2190,111 +2189,131 @@
       >
         <header class="modal__head">
           <strong id="settings-title">Ajustes</strong>
-          <button type="button" class="om-btn om-btn--ghost" on:click={cancelSettingsModal}>Cerrar</button>
+          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={cancelSettingsModal}>✕</button>
         </header>
         <section class="settings-body">
-          <label class="field-label" for="set-thumbs-page">Imágenes por página</label>
-          <input
-            id="set-thumbs-page"
-            class="om-input"
-            type="number"
-            min="12"
-            max="120"
-            bind:value={thumbsPerPage}
-          />
-          <label class="field-label" for="set-thumb-preset">Tamaño de miniaturas (preset)</label>
-          <input
-            id="set-thumb-preset"
-            class="om-range"
-            type="range"
-            min="0"
-            max={thumbScalePresets.length - 1}
-            step="1"
-            bind:value={settingsThumbPresetIdx}
-            on:input={() => {
-              const p = thumbScalePresets[Math.max(0, Math.min(thumbScalePresets.length - 1, Number(settingsThumbPresetIdx) || 0))];
-              settingsThumbScaleDraft = p.value;
-            }}
-          />
-          <div class="settings-preset-row">
-            {#each thumbScalePresets as p, i}
+          <div class="settings-group">
+            <h3 class="settings-group__title">Rendimiento</h3>
+            <label class="field-label" for="set-thumbs-page">Imágenes por página (0 = sin límite)</label>
+            <input
+              id="set-thumbs-page"
+              class="om-input"
+              type="number"
+              min="0"
+              placeholder="Ejemplo: 48"
+              bind:value={thumbsPerPage}
+            />
+            <div class="settings-preset-row">
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 24)}>Alto rendimiento (24)</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 48)}>Rendimiento (48)</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 96)}>Equilibrado (96)</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 0)}>Sin límite (0)</button>
+            </div>
+            {#if Number(thumbsPerPage) === 0}
+              <p class="settings-hint settings-hint--warn">Sin límite puede degradar el rendimiento en carpetas grandes.</p>
+            {/if}
+            <p class="settings-hint">Mientras más bajo, mejor rendimiento.</p>
+          </div>
+
+          <div class="settings-group">
+            <h3 class="settings-group__title">Miniaturas</h3>
+            <label class="field-label" for="set-thumb-preset">Tamaño (preset)</label>
+            <input
+              id="set-thumb-preset"
+              class="om-range"
+              type="range"
+              min="0"
+              max={thumbScalePresets.length - 1}
+              step="1"
+              bind:value={settingsThumbPresetIdx}
+              on:input={() => {
+                const p = thumbScalePresets[Math.max(0, Math.min(thumbScalePresets.length - 1, Number(settingsThumbPresetIdx) || 0))];
+                settingsThumbScaleDraft = p.value;
+              }}
+            />
+            <div class="settings-preset-row">
+              {#each thumbScalePresets as p, i}
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+                  class:om-btn--primary={i === settingsThumbPresetIdx}
+                  on:click={() => {
+                    settingsThumbPresetIdx = i;
+                    settingsThumbScaleDraft = p.value;
+                  }}
+                >{p.label}</button>
+              {/each}
+            </div>
+            <label class="field-label" for="set-thumb-scale">Ajuste fino {Math.round(settingsThumbScaleDraft * 100)}%</label>
+            <input
+              id="set-thumb-scale"
+              class="om-range"
+              type="range"
+              min="0.45"
+              max="2.25"
+              step="0.01"
+              bind:value={settingsThumbScaleDraft}
+            />
+            <label class="field-label" for="set-thumb-gap">Separación entre miniaturas {Math.round(thumbGapPx)}px</label>
+            <input
+              id="set-thumb-gap"
+              class="om-range"
+              type="range"
+              min="0"
+              max="20"
+              step="1"
+              bind:value={thumbGapPx}
+            />
+            <label class="field-label" for="set-thumb-radius">Redondeado de imagen {Math.round(thumbImageRadiusPx)}px</label>
+            <input
+              id="set-thumb-radius"
+              class="om-range"
+              type="range"
+              min="0"
+              max="18"
+              step="1"
+              bind:value={thumbImageRadiusPx}
+            />
+          </div>
+
+          <div class="settings-group">
+            <h3 class="settings-group__title">Apariencia</h3>
+            <div class="settings-preset-row">
+              <label class="check"><input type="checkbox" bind:checked={showThumbLabels} /> Mostrar etiquetas en miniaturas</label>
+            </div>
+            <div class="settings-preset-row">
+              <label class="check"><input type="checkbox" bind:checked={thumbFrameVisible} /> Mostrar recuadro de miniaturas</label>
+            </div>
+            <div class="settings-preset-row">
               <button
                 type="button"
                 class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-                class:om-btn--primary={i === settingsThumbPresetIdx}
-                on:click={() => {
-                  settingsThumbPresetIdx = i;
-                  settingsThumbScaleDraft = p.value;
-                }}
-              >{p.label}</button>
-            {/each}
+                class:om-btn--primary={thumbCardStyle === "soft"}
+                on:click={() => (thumbCardStyle = "soft")}
+              >Recuadro suave</button>
+              <button
+                type="button"
+                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+                class:om-btn--primary={thumbCardStyle === "flat"}
+                on:click={() => (thumbCardStyle = "flat")}
+              >Recuadro plano</button>
+              <button
+                type="button"
+                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+                class:om-btn--primary={thumbCardStyle === "outlined"}
+                on:click={() => (thumbCardStyle = "outlined")}
+              >Solo contorno</button>
+            </div>
+            <div
+              class="settings-thumb-preview"
+              class:settings-thumb-preview--no-frame={!thumbFrameVisible}
+              style={`--cell:${settingsPreviewCellPx}px;--thumb-gap:${thumbGapPx}px;--thumb-image-radius:${thumbImageRadiusPx}px`}
+            >
+              <div class="tile"><div class="folder-ph">A</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 1</span>{/if}</div>
+              <div class="tile"><div class="folder-ph">B</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 2</span>{/if}</div>
+              <div class="tile"><div class="folder-ph">C</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 3</span>{/if}</div>
+            </div>
           </div>
-          <label class="field-label" for="set-thumb-scale">Ajuste fino {Math.round(settingsThumbScaleDraft * 100)}%</label>
-          <input
-            id="set-thumb-scale"
-            class="om-range"
-            type="range"
-            min="0.75"
-            max="2.25"
-            step="0.01"
-            bind:value={settingsThumbScaleDraft}
-          />
-          <label class="field-label" for="set-thumb-gap">Separación entre miniaturas {Math.round(thumbGapPx)}px</label>
-          <input
-            id="set-thumb-gap"
-            class="om-range"
-            type="range"
-            min="0"
-            max="20"
-            step="1"
-            bind:value={thumbGapPx}
-          />
-          <div class="settings-preset-row">
-            <label class="check"><input type="checkbox" bind:checked={showThumbLabels} /> Mostrar etiquetas en miniaturas</label>
-          </div>
-          <div class="settings-preset-row">
-            <label class="check"><input type="checkbox" bind:checked={thumbFrameVisible} /> Mostrar recuadro de miniaturas</label>
-          </div>
-          <div class="settings-preset-row">
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-              class:om-btn--primary={thumbCardStyle === "soft"}
-              on:click={() => (thumbCardStyle = "soft")}
-            >Recuadro suave</button>
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-              class:om-btn--primary={thumbCardStyle === "flat"}
-              on:click={() => (thumbCardStyle = "flat")}
-            >Recuadro plano</button>
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-              class:om-btn--primary={thumbCardStyle === "outlined"}
-              on:click={() => (thumbCardStyle = "outlined")}
-            >Solo contorno</button>
-          </div>
-          <label class="field-label" for="set-thumb-radius">Redondeado de imagen {Math.round(thumbImageRadiusPx)}px</label>
-          <input
-            id="set-thumb-radius"
-            class="om-range"
-            type="range"
-            min="0"
-            max="18"
-            step="1"
-            bind:value={thumbImageRadiusPx}
-          />
-          <div
-            class="settings-thumb-preview"
-            class:settings-thumb-preview--no-frame={!thumbFrameVisible}
-            style={`--cell:${settingsPreviewCellPx}px;--thumb-gap:${thumbGapPx}px;--thumb-image-radius:${thumbImageRadiusPx}px`}
-          >
-            <div class="tile"><div class="folder-ph">A</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 1</span>{/if}</div>
-            <div class="tile"><div class="folder-ph">B</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 2</span>{/if}</div>
-            <div class="tile"><div class="folder-ph">C</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 3</span>{/if}</div>
-          </div>
-          <p class="settings-hint">Valores más bajos (p. ej. 24–48) aceleran el cambio de página; el máximo es 120.</p>
         </section>
         <div class="settings-actions">
           <button type="button" class="om-btn om-btn--ghost" on:click={cancelSettingsModal}>Cancelar</button>
@@ -2337,8 +2356,10 @@
   .tabs-bar {
     display: flex;
     align-items: center;
-    gap: var(--om-space-3);
+    gap: var(--om-space-2);
     flex-wrap: wrap;
+    padding-block: 4px;
+    padding-inline: 10px;
   }
 
   .tabs__nav {
@@ -2493,7 +2514,7 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    scrollbar-gutter: stable both-edges;
+    scrollbar-gutter: stable;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-content: start;
@@ -2672,13 +2693,12 @@
 
   .grid {
     display: grid;
-    /* Ancho fijo por celda (sin 1fr): el slider recorre muchos tamaños sin quedar atrapado en 2–3 columnas. */
-    grid-template-columns: repeat(auto-fill, minmax(var(--cell, 160px), var(--cell, 160px)));
+    /* Columnas flexibles: se ajustan con cambios finos de ancho (splitter/vista previa). */
+    grid-template-columns: repeat(auto-fill, minmax(var(--cell, 160px), 1fr));
     gap: var(--thumb-gap, var(--om-space-3));
     contain: layout style;
-    justify-content: start;
     padding-left: var(--grid-edge-pad, 8px);
-    padding-right: calc(var(--grid-edge-pad, 8px) - 1px);
+    padding-right: var(--grid-edge-pad, 8px);
     box-sizing: border-box;
   }
 
@@ -2741,9 +2761,16 @@
   }
 
   .tile.selected {
-    outline: 2px solid var(--om-accent);
-    outline-offset: 2px;
-    box-shadow: 0 0 20px var(--om-accent-glow);
+    background: color-mix(in oklab, var(--om-accent) 24%, var(--om-surface-2));
+    border-color: color-mix(in oklab, var(--om-accent) 68%, var(--om-border-default));
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--om-accent) 52%, transparent);
+  }
+
+  .tile.selected img,
+  .tile.selected .folder-ph {
+    transform: scale(0.96);
+    transform-origin: center;
+    transition: transform var(--om-transition);
   }
 
   .tile img {
@@ -3073,9 +3100,10 @@
     max-height: min(92vh, 780px);
     display: flex;
     flex-direction: column;
-    gap: var(--om-space-4);
-    padding: var(--om-space-5);
+    gap: var(--om-space-3);
+    padding: var(--om-space-4);
     box-sizing: border-box;
+    overflow: hidden;
   }
 
   .modal--dest-form {
@@ -3153,7 +3181,37 @@
   .settings-body {
     display: flex;
     flex-direction: column;
+    gap: var(--om-space-3);
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 4px;
+  }
+
+  .settings-body::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .settings-body::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 0.22);
+    border-radius: 999px;
+  }
+
+  .settings-group {
+    display: flex;
+    flex-direction: column;
     gap: var(--om-space-2);
+    padding: var(--om-space-2);
+    border: 1px solid color-mix(in oklab, var(--om-border-default) 78%, transparent);
+    border-radius: var(--om-radius-md);
+    background: color-mix(in oklab, var(--om-surface-2) 86%, transparent);
+  }
+
+  .settings-group__title {
+    margin: 0;
+    font-size: 0.84rem;
+    color: var(--om-text-secondary);
+    letter-spacing: 0.01em;
   }
 
   .settings-hint {
@@ -3161,6 +3219,10 @@
     font-size: 0.75rem;
     color: var(--om-text-muted);
     line-height: 1.4;
+  }
+
+  .settings-hint--warn {
+    color: color-mix(in oklab, #ffbf66 78%, var(--om-text-primary));
   }
 
   .settings-preset-row {
@@ -3171,6 +3233,13 @@
 
   .settings-preset-chip {
     min-height: 1.65rem;
+  }
+
+  .om-btn--close {
+    min-width: 2rem;
+    padding-inline: 0.45rem;
+    font-size: 1rem;
+    line-height: 1;
   }
 
   .settings-thumb-preview {
@@ -3330,6 +3399,8 @@
 
   .overlay--zoom {
     background: rgb(2 3 8 / 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     z-index: 60;
   }
 

@@ -66,13 +66,15 @@ def load_app_settings() -> dict:
         else:
             # Migrar valores viejos (0.5) a rango usable
             gs = float(data["gallery_thumb_scale"])
-            data["gallery_thumb_scale"] = max(0.75, min(2.25, gs))
+            data["gallery_thumb_scale"] = max(0.45, min(2.25, gs))
         if "gallery_show_thumb_filename" not in data:
             data["gallery_show_thumb_filename"] = True
         if "gallery_thumbs_per_page" not in data:
             data["gallery_thumbs_per_page"] = 48
         else:
-            data["gallery_thumbs_per_page"] = max(12, min(120, int(data["gallery_thumbs_per_page"])))
+            n = int(data["gallery_thumbs_per_page"])
+            # 0 = sin límite; cualquier otro valor mínimo 12.
+            data["gallery_thumbs_per_page"] = 0 if n <= 0 else max(12, n)
         if "gallery_scroll_top_on_page_change" not in data:
             data["gallery_scroll_top_on_page_change"] = True
         if "gallery_compact_thumb_padding" not in data:

@@ -25,8 +25,8 @@ except Exception:  # pragma: no cover
 
 
 def _thumb_px_from_gallery_scale(scale: float) -> int:
-    """Escala lineal 0.75–2.25 → ~80–340 px (muchos pasos visibles, sin saltos por columnas)."""
-    lo, hi = 0.75, 2.25
+    """Escala lineal 0.45–2.25 → ~80–340 px (más zoom-out para miniaturas)."""
+    lo, hi = 0.45, 2.25
     px_min, px_max = 96, 400
     s = max(lo, min(hi, float(scale)))
     return int(round(px_min + (s - lo) / (hi - lo) * (px_max - px_min)))
@@ -197,7 +197,10 @@ class WebApi:
 
     def _thumbs_per_page(self) -> int:
         n = int(self.settings.get("gallery_thumbs_per_page", 48))
-        return max(12, min(120, n))
+        if n <= 0:
+            # 0 = sin límite (cargar toda la galería en una sola página).
+            return max(1, len(self.ordered_paths))
+        return max(12, n)
 
     def _total_pages(self) -> int:
         total = len(self.ordered_paths)
