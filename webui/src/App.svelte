@@ -3887,15 +3887,15 @@
     align-items: center;
     gap: var(--om-space-2);
     flex-wrap: wrap;
-    padding: 4px 8px;
+    padding: 2px 5px;
     border-radius: 999px;
     border: 1px solid rgb(255 255 255 / 0.12);
     background: rgb(255 255 255 / 0.05);
   }
 
   .zoom-modal__tools .om-btn--compact {
-    min-height: 2rem;
-    padding: 0 10px;
+    min-height: 1.8rem;
+    padding: 0 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;

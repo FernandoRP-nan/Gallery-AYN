@@ -2,7 +2,7 @@
 
 const G_LO = 0.01;
 const G_HI = 2.25;
-const G_PX_MIN = 80;
+const G_PX_MIN = 48;
 const G_PX_MAX = 340;
 
 export function galleryThumbPx(scale: number): number {
