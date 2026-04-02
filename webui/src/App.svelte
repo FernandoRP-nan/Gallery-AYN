@@ -972,7 +972,7 @@
   const openDestPreview = async (path: string) => {
     previewDestPath = path;
     previewSelectedPaths = [];
-    previewSelectionMode = true;
+    previewSelectionMode = false;
     previewOpen = true;
     await refreshDestPreview();
   };
@@ -2478,6 +2478,12 @@
         </header>
         <div class="modal__scroll">
           <div class="selection-float preview-selection-float" role="toolbar" aria-label="Selección del modal de destino">
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--mini"
+              on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
+              title={previewSelectionMode ? "Salir del modo selección" : "Entrar al modo selección"}
+            >{previewSelectionMode ? "Salir" : "Selección"}</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}>Todo</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}>Quitar</button>
             <button
@@ -3331,11 +3337,6 @@
     overflow-x: auto;
     overflow-y: hidden;
     box-sizing: border-box;
-    scrollbar-width: none;
-  }
-
-  .dest-float-chips::-webkit-scrollbar {
-    height: 0;
   }
 
   .dest-float-add {
@@ -4034,15 +4035,6 @@
     padding-right: 4px;
   }
 
-  .settings-body::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .settings-body::-webkit-scrollbar-thumb {
-    background: rgb(255 255 255 / 0.22);
-    border-radius: 999px;
-  }
-
   .settings-group {
     display: flex;
     flex-direction: column;
@@ -4142,17 +4134,18 @@
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    position: relative;
     display: flex;
     flex-direction: column;
   }
 
   .preview-selection-float {
-    position: absolute;
-    right: var(--om-space-2);
+    position: sticky;
     top: var(--om-space-2);
+    align-self: flex-end;
+    margin: var(--om-space-1) var(--om-space-1) 0 0;
     z-index: 4;
-    margin: 0;
+    gap: 2px;
+    padding: 2px 6px;
   }
 
   .overlay--zoom {
@@ -4361,8 +4354,6 @@
     padding: var(--om-space-1) var(--om-space-2);
     border-radius: var(--om-radius-md);
     background: rgb(255 255 255 / 0.04);
-    scrollbar-width: thin;
-    scrollbar-color: rgb(124 140 255 / 0.38) transparent;
     flex: 0 0 auto;
     position: relative;
     z-index: 5;
@@ -4373,15 +4364,21 @@
     z-index: 1;
   }
 
-  .zoom-modal__carousel::-webkit-scrollbar {
+  :global(*) {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(124 140 255 / 0.38) transparent;
+  }
+
+  :global(*::-webkit-scrollbar) {
+    width: 6px;
     height: 6px;
   }
 
-  .zoom-modal__carousel::-webkit-scrollbar-track {
+  :global(*::-webkit-scrollbar-track) {
     background: transparent;
   }
 
-  .zoom-modal__carousel::-webkit-scrollbar-thumb {
+  :global(*::-webkit-scrollbar-thumb) {
     background: linear-gradient(90deg, rgb(124 140 255 / 0.42), rgb(94 228 212 / 0.28));
     border-radius: 999px;
   }
