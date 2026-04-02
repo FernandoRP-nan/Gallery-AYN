@@ -31,7 +31,12 @@
   let galleryRangeAnchorPath: string | null = null;
   let galleryRangeMode: "select" | "deselect" = "select";
   let galleryRangeBaseSelectedPaths: string[] = [];
+  let galleryRangeBaseSelectedSet: Set<string> | null = null;
   let galleryRangeDraftSelectedPaths: string[] | null = null;
+  let galleryRangeDraftSelectedSet: Set<string> | null = null;
+  let galleryRangeCurrentPath: string | null = null;
+  let galleryRangePendingPath: string | null = null;
+  let galleryRangeRaf: number | null = null;
   let galleryRangeSuppressClick = false;
   let previewZoomOpen = false;
   let previewZoomPath = "";
@@ -1091,7 +1096,6 @@
 
   function isGalleryTileSelected(it: GalleryItem): boolean {
     if (!destinationsMode || it.kind !== "image") return false;
-    if (galleryRangeDraftSelectedPaths) return galleryRangeDraftSelectedPaths.includes(it.path);
     return Boolean(it.selected);
   }
 
@@ -1102,14 +1106,37 @@
     if (a < 0 || b < 0) return;
     const lo = Math.min(a, b);
     const hi = Math.max(a, b);
-    const draft = new Set(galleryRangeBaseSelectedPaths);
+    const draft = new Set(galleryRangeBaseSelectedSet ?? []);
     for (let i = lo; i <= hi; i++) {
       const p = imagePaths[i];
       if (!p) continue;
       if (mode === "select") draft.add(p);
       else draft.delete(p);
     }
-    galleryRangeDraftSelectedPaths = [...draft];
+    const next = [...draft];
+    galleryRangeDraftSelectedPaths = next;
+    galleryRangeDraftSelectedSet = new Set(next);
+    galleryRangeCurrentPath = toPath;
+    // Reflejo en vivo: actualizar selección visible sin esperar el commit backend.
+    items = items.map((it) =>
+      it.kind === "image"
+        ? { ...it, selected: galleryRangeDraftSelectedSet?.has(it.path) ?? Boolean(it.selected) }
+        : it
+    );
+  }
+
+  function scheduleGalleryRangeSelection(path: string) {
+    if (!galleryRangeSelecting || !galleryRangeAnchorPath) return;
+    if (galleryRangeCurrentPath === path) return;
+    galleryRangePendingPath = path;
+    if (galleryRangeRaf !== null) return;
+    galleryRangeRaf = requestAnimationFrame(() => {
+      galleryRangeRaf = null;
+      const target = galleryRangePendingPath;
+      galleryRangePendingPath = null;
+      if (!target || !galleryRangeAnchorPath) return;
+      applyGalleryRangeSelection(galleryRangeAnchorPath, target, galleryRangeMode);
+    });
   }
 
   function onGalleryTilePointerDown(e: PointerEvent, it: GalleryItem) {
@@ -1121,6 +1148,7 @@
       .filter((x) => x.kind === "image" && x.selected)
       .map((x) => x.path);
     galleryRangeBaseSelectedPaths = baseSelected;
+    galleryRangeBaseSelectedSet = new Set(baseSelected);
     galleryRangeAnchorPath = it.path;
     galleryRangeMode = baseSelected.includes(it.path) ? "deselect" : "select";
     galleryRangeSelecting = true;
@@ -1133,7 +1161,12 @@
     const tile = el?.closest?.(".tile[data-item-path]") as HTMLElement | null;
     const path = tile?.dataset?.itemPath;
     if (!path) return;
-    applyGalleryRangeSelection(galleryRangeAnchorPath, path, galleryRangeMode);
+    scheduleGalleryRangeSelection(path);
+  }
+
+  function onGalleryTilePointerEnter(path: string) {
+    if (!galleryRangeSelecting || !galleryRangeAnchorPath) return;
+    scheduleGalleryRangeSelection(path);
   }
 
   async function endGalleryRangeSelection() {
@@ -1145,7 +1178,15 @@
     galleryRangeSelecting = false;
     galleryRangeAnchorPath = null;
     galleryRangeBaseSelectedPaths = [];
+    galleryRangeBaseSelectedSet = null;
     galleryRangeDraftSelectedPaths = null;
+    galleryRangeDraftSelectedSet = null;
+    galleryRangeCurrentPath = null;
+    galleryRangePendingPath = null;
+    if (galleryRangeRaf !== null) {
+      cancelAnimationFrame(galleryRangeRaf);
+      galleryRangeRaf = null;
+    }
     galleryRangeSuppressClick = true;
     setTimeout(() => {
       galleryRangeSuppressClick = false;
@@ -1531,6 +1572,12 @@
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
     if (!destinationsMode || it.kind !== "image") return;
+    // Si estamos en selección por rango (Ctrl sostenido), no iniciar DnD nativo:
+    // en WebEngine bloquea los eventos de puntero y no se ve el resaltado en vivo.
+    if (galleryRangeSelecting || (e as DragEvent).ctrlKey) {
+      e.preventDefault();
+      return;
+    }
     e.stopPropagation();
     endDragSession();
     const dt = e.dataTransfer;
@@ -1990,8 +2037,9 @@
                   class="tile"
                   data-item-path={it.path}
                   class:selected={isGalleryTileSelected(it)}
-                  draggable={it.kind === "image"}
+                  draggable={it.kind === "image" && !galleryRangeSelecting}
                   on:pointerdown={(e) => onGalleryTilePointerDown(e, it)}
+                  on:pointerenter={() => onGalleryTilePointerEnter(it.path)}
                   on:dragstart={(e) => onTileDragStart(e, it)}
                   on:click={() => {
                     if (galleryRangeSuppressClick) return;
