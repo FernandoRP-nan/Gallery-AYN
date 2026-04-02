@@ -58,7 +58,6 @@
   let galleryGridResizeObserver: ResizeObserver | null = null;
   let galleryGridWidth = 0;
   const GALLERY_GRID_EDGE_PAD_PX = 8;
-  const GALLERY_GRID_GAP_PX = 12;
   let zoomNavItems: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
   let galleryThumbHydrationToken = 0;
   let previewThumbHydrationToken = 0;
@@ -74,6 +73,16 @@
   let thumbsPerPage = 48;
   let thumbsPerPageBackup = 48;
   let settingsThumbScaleDraft = 1;
+  let thumbGapPx = 12;
+  let showThumbLabels = true;
+  let thumbCardStyle: "soft" | "flat" | "outlined" = "soft";
+  let thumbFrameVisible = true;
+  let thumbImageRadiusPx = 6;
+  let thumbGapPxBackup = 12;
+  let showThumbLabelsBackup = true;
+  let thumbCardStyleBackup: "soft" | "flat" | "outlined" = "soft";
+  let thumbFrameVisibleBackup = true;
+  let thumbImageRadiusPxBackup = 6;
   const thumbScalePresets = [
     { id: "compacto", label: "Compacto", value: 0.82 },
     { id: "medio", label: "Medio", value: 1.0 },
@@ -294,6 +303,14 @@
   const loadInitial = async () => {
     const data = await trackLoad(bridge.getInitialState());
     thumbScale = Number(data.settings?.gallery_thumb_scale ?? 1);
+    thumbGapPx = Math.max(0, Math.min(20, Number(data.settings?.web_thumb_gap_px ?? 12)));
+    showThumbLabels = Boolean(data.settings?.web_show_thumb_labels ?? true);
+    {
+      const style = String(data.settings?.web_thumb_card_style ?? "soft");
+      thumbCardStyle = style === "flat" || style === "outlined" ? style : "soft";
+    }
+    thumbFrameVisible = Boolean(data.settings?.web_thumb_frame_visible ?? true);
+    thumbImageRadiusPx = Math.max(0, Math.min(18, Number(data.settings?.web_thumb_image_radius_px ?? 6)));
     previewScale = Number(data.settings?.dest_preview_thumb_scale ?? 1);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
@@ -445,6 +462,11 @@
 
   const openSettingsModal = () => {
     thumbsPerPageBackup = thumbsPerPage;
+    thumbGapPxBackup = thumbGapPx;
+    showThumbLabelsBackup = showThumbLabels;
+    thumbCardStyleBackup = thumbCardStyle;
+    thumbFrameVisibleBackup = thumbFrameVisible;
+    thumbImageRadiusPxBackup = thumbImageRadiusPx;
     settingsThumbScaleDraft = thumbScale;
     let bestIdx = 0;
     let bestDiff = Number.POSITIVE_INFINITY;
@@ -461,6 +483,11 @@
 
   const cancelSettingsModal = () => {
     thumbsPerPage = thumbsPerPageBackup;
+    thumbGapPx = thumbGapPxBackup;
+    showThumbLabels = showThumbLabelsBackup;
+    thumbCardStyle = thumbCardStyleBackup;
+    thumbFrameVisible = thumbFrameVisibleBackup;
+    thumbImageRadiusPx = thumbImageRadiusPxBackup;
     settingsOpen = false;
   };
 
@@ -469,7 +496,15 @@
     thumbsPerPage = n;
     const ts = Math.max(0.75, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
     thumbScale = ts;
-    await bridge.settingsPatch({ gallery_thumbs_per_page: n, gallery_thumb_scale: Number(ts.toFixed(3)) });
+    await bridge.settingsPatch({
+      gallery_thumbs_per_page: n,
+      gallery_thumb_scale: Number(ts.toFixed(3)),
+      web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
+      web_show_thumb_labels: Boolean(showThumbLabels),
+      web_thumb_card_style: thumbCardStyle,
+      web_thumb_frame_visible: Boolean(thumbFrameVisible),
+      web_thumb_image_radius_px: Math.round(thumbImageRadiusPx)
+    });
     await reload();
     settingsOpen = false;
   };
@@ -1355,8 +1390,9 @@
   $: gridCellPx = (() => {
     const usableW = Math.max(0, galleryGridWidth - GALLERY_GRID_EDGE_PAD_PX * 2);
     if (usableW <= 0) return gridCellTargetPx;
-    const cols = Math.max(1, Math.floor((usableW + GALLERY_GRID_GAP_PX) / (gridCellTargetPx + GALLERY_GRID_GAP_PX)));
-    const fitted = Math.floor((usableW - (cols - 1) * GALLERY_GRID_GAP_PX) / cols);
+    const gapPx = Math.max(0, Math.round(thumbGapPx));
+    const cols = Math.max(1, Math.floor((usableW + gapPx) / (gridCellTargetPx + gapPx)));
+    const fitted = Math.floor((usableW - (cols - 1) * gapPx) / cols);
     return Math.max(72, fitted);
   })();
   $: settingsPreviewCellPx = galleryGridCellPx(settingsThumbScaleDraft);
@@ -1452,6 +1488,10 @@
   class="app"
   class:app--layout-ruta={!destinationsMode}
   class:app--layout-destinos={destinationsMode}
+  class:app--tile-flat={thumbCardStyle === "flat"}
+  class:app--tile-outlined={thumbCardStyle === "outlined"}
+  class:app--tile-no-frame={!thumbFrameVisible}
+  style={`--thumb-image-radius:${thumbImageRadiusPx}px`}
 >
   <header class="tabs-bar om-panel">
     <nav class="tabs__nav">
@@ -1510,8 +1550,8 @@
   </header>
 
   {#if !destinationsMode}
-  <section class="route route--stable om-panel">
     {#if !folder.trim() && (pinnedFolders.length > 0 || recentFolders.length > 0)}
+  <section class="route om-panel">
       <div class="recent-folders" aria-label="Rutas recientes">
         {#if pinnedFolders.length > 0}
           <div class="recent-folders__head">
@@ -1546,15 +1586,17 @@
           </div>
         {/if}
       </div>
-    {/if}
   </section>
+    {:else}
+      <section class="route route--placeholder" aria-hidden="true"></section>
+    {/if}
   {/if}
 
   {#if destinationsMode}
     <div
       class="destinos-work"
       class:destinos-work--drag={destSplitDrag}
-      style={`grid-template-rows: minmax(0,${(1 - destPanelRatio).toFixed(4)}fr) 10px minmax(0,${destPanelRatio.toFixed(4)}fr)`}
+      style="grid-template-rows:minmax(0,1fr)"
     >
       <div class="destinos-work__top">
         <section
@@ -1565,7 +1607,7 @@
         >
           <article class="gallery om-panel om-panel--lift gallery--with-float">
             <div class="gallery__scroll">
-              <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px`}>
+              <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
               {#each items as it (it.path)}
                 <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
                 <div
@@ -1617,7 +1659,7 @@
                       {/if}
                     </div>
                   {/if}
-                  <span class="tile__name">{it.name}</span>
+                  {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
                 </div>
               {/each}
               </div>
@@ -1626,6 +1668,37 @@
                 <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
                 <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
                 <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
+              </div>
+              <div class="dest-float-chips" aria-label="Carpetas destino">
+                <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
+                  + Agregar carpeta
+                </button>
+                {#if destRows.length === 0}
+                  <span class="dest-float-empty">No hay carpetas destino</span>
+                {/if}
+                {#each destRows as d, i (d.path + "\0" + i)}
+                  <div
+                    class="dest-float-chip"
+                    class:dest-float-chip--drop-target={dragOverDestPath === d.path}
+                    data-dest-path={d.path}
+                    title={d.path}
+                    role="button"
+                    tabindex="0"
+                    on:click={(e) => onDestCardClick(e, d.path)}
+                    on:keydown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onDestCardClick(e as unknown as MouseEvent, d.path);
+                      }
+                    }}
+                    on:contextmenu={(e) => onDestContextMenu(e, i)}
+                    on:dragenter|preventDefault
+                    on:dragover|preventDefault
+                    on:drop={(e) => onDestDrop(e, d.path)}
+                  >
+                    <span class="dest-float-chip__title">{d.label}</span>
+                  </div>
+                {/each}
               </div>
             </div>
           </article>
@@ -1650,56 +1723,6 @@
           {/if}
         </section>
       </div>
-
-      <div
-        class="splitter splitter--h"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Arrastrar para tamaño del panel de destinos"
-        on:pointerdown={beginDestPanelDrag}
-      ></div>
-
-      <section class="dest-panel om-panel dest-panel--bottom" aria-label="Carpetas destino">
-        <span class="field-label dest-panel__title">Carpetas destino</span>
-        <div class="dest-panel__main">
-          <div class="dest-panel__toolbar">
-            <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={openAddDestForm}>
-              + Agregar carpeta
-            </button>
-          </div>
-          <div class="dest-grid-wrap dest-grid-wrap--embedded dest-grid-wrap--scroll">
-          {#if destRows.length === 0}
-            <p class="dest-empty-hint">No hay carpetas destino. Pulsa «+ Agregar carpeta» o revisa que la ruta tenga permisos.</p>
-          {/if}
-          {#each destRows as d, i (d.path + "\0" + i)}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-            <div
-              class="dest-card"
-              class:dest-card--drop-target={dragOverDestPath === d.path}
-              data-dest-path={d.path}
-              role="group"
-              aria-label="Destino {d.label}"
-              title={d.path}
-              on:click={(e) => onDestCardClick(e, d.path)}
-              on:contextmenu={(e) => onDestContextMenu(e, i)}
-              on:dragenter|preventDefault
-              on:dragover|preventDefault
-              on:drop={(e) => onDestDrop(e, d.path)}
-            >
-              <div class="dest-card__head">
-                <span class="dest-card__title">{d.label}</span>
-                <span class="dest-card__path">{d.path}</span>
-              </div>
-              <div class="dest-card__actions">
-                <button type="button" class="om-btn om-btn--primary" on:click|stopPropagation={() => moveToDest(d.path)}>Mover aquí</button>
-                <button type="button" class="om-btn om-btn--ghost" on:click|stopPropagation={() => openDestPreview(d.path)}>Ver carpeta</button>
-              </div>
-            </div>
-          {/each}
-          </div>
-        </div>
-      </section>
     </div>
   {:else}
     <section
@@ -1709,7 +1732,7 @@
         : "grid-template-columns:minmax(0,1fr)"}
     >
       <article class="gallery om-panel om-panel--lift">
-        <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px`}>
+        <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
           {#each items as it (it.path)}
             <button
               type="button"
@@ -1742,7 +1765,7 @@
                   {/if}
                 </div>
               {/if}
-              <span class="tile__name">{it.name}</span>
+              {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
             </button>
           {/each}
         </div>
@@ -2209,10 +2232,60 @@
             step="0.01"
             bind:value={settingsThumbScaleDraft}
           />
-          <div class="settings-thumb-preview" style={`--cell:${settingsPreviewCellPx}px`}>
-            <div class="tile"><div class="folder-ph">A</div><span class="tile__name">Ejemplo 1</span></div>
-            <div class="tile"><div class="folder-ph">B</div><span class="tile__name">Ejemplo 2</span></div>
-            <div class="tile"><div class="folder-ph">C</div><span class="tile__name">Ejemplo 3</span></div>
+          <label class="field-label" for="set-thumb-gap">Separación entre miniaturas {Math.round(thumbGapPx)}px</label>
+          <input
+            id="set-thumb-gap"
+            class="om-range"
+            type="range"
+            min="0"
+            max="20"
+            step="1"
+            bind:value={thumbGapPx}
+          />
+          <div class="settings-preset-row">
+            <label class="check"><input type="checkbox" bind:checked={showThumbLabels} /> Mostrar etiquetas en miniaturas</label>
+          </div>
+          <div class="settings-preset-row">
+            <label class="check"><input type="checkbox" bind:checked={thumbFrameVisible} /> Mostrar recuadro de miniaturas</label>
+          </div>
+          <div class="settings-preset-row">
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+              class:om-btn--primary={thumbCardStyle === "soft"}
+              on:click={() => (thumbCardStyle = "soft")}
+            >Recuadro suave</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+              class:om-btn--primary={thumbCardStyle === "flat"}
+              on:click={() => (thumbCardStyle = "flat")}
+            >Recuadro plano</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+              class:om-btn--primary={thumbCardStyle === "outlined"}
+              on:click={() => (thumbCardStyle = "outlined")}
+            >Solo contorno</button>
+          </div>
+          <label class="field-label" for="set-thumb-radius">Redondeado de imagen {Math.round(thumbImageRadiusPx)}px</label>
+          <input
+            id="set-thumb-radius"
+            class="om-range"
+            type="range"
+            min="0"
+            max="18"
+            step="1"
+            bind:value={thumbImageRadiusPx}
+          />
+          <div
+            class="settings-thumb-preview"
+            class:settings-thumb-preview--no-frame={!thumbFrameVisible}
+            style={`--cell:${settingsPreviewCellPx}px;--thumb-gap:${thumbGapPx}px;--thumb-image-radius:${thumbImageRadiusPx}px`}
+          >
+            <div class="tile"><div class="folder-ph">A</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 1</span>{/if}</div>
+            <div class="tile"><div class="folder-ph">B</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 2</span>{/if}</div>
+            <div class="tile"><div class="folder-ph">C</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 3</span>{/if}</div>
           </div>
           <p class="settings-hint">Valores más bajos (p. ej. 24–48) aceleran el cambio de página; el máximo es 120.</p>
         </section>
@@ -2239,10 +2312,10 @@
   .app {
     height: 100%;
     display: grid;
-    gap: var(--om-space-4);
+    gap: 6px;
     /* tabs · área principal · paginador */
     grid-template-rows: auto 1fr auto;
-    padding: var(--om-space-4) var(--om-space-5);
+    padding: 8px 12px;
     font-family: var(--om-font-sans);
     color: var(--om-text-primary);
     background: radial-gradient(120% 80% at 50% -20%, rgb(124 140 255 / 0.12), transparent 50%), var(--om-bg-base);
@@ -2272,13 +2345,15 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: var(--om-space-3);
+    gap: var(--om-space-2);
   }
 
-  /* Mantiene estable la geometría externa aunque no haya "recientes". */
-  .route--stable {
-    min-height: 2.35rem;
-    padding-block: 6px;
+  .route--placeholder {
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .route__row {
@@ -2356,6 +2431,7 @@
     gap: 0;
     min-height: 0;
     align-items: stretch;
+    margin-block: 0;
   }
 
   .splitter {
@@ -2401,6 +2477,7 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    position: relative;
   }
 
   .destinos-work__top > .content {
@@ -2454,6 +2531,7 @@
     flex-direction: column;
     overflow: hidden;
     min-height: 0;
+    position: relative;
   }
 
   .gallery--with-float .gallery__scroll {
@@ -2493,6 +2571,77 @@
     border: 1px solid rgb(255 255 255 / 0.1);
     box-shadow: var(--om-shadow-md);
     backdrop-filter: blur(8px);
+  }
+
+  .dest-float-chips {
+    position: absolute;
+    left: var(--om-space-2);
+    right: var(--om-space-2);
+    bottom: var(--om-space-2);
+    z-index: 7;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--om-space-1);
+    padding: var(--om-space-1) var(--om-space-2);
+    border-radius: var(--om-radius-md);
+    background: rgb(8 10 18 / 0.78);
+    border: 1px solid rgb(255 255 255 / 0.1);
+    box-shadow: var(--om-shadow-md);
+    backdrop-filter: blur(8px);
+  }
+
+  .dest-float-add {
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.18);
+    background: rgb(255 255 255 / 0.07);
+    color: var(--om-text-secondary);
+    min-height: 1.65rem;
+    padding: 2px 10px;
+  }
+
+  .dest-float-add:hover {
+    border-color: rgb(124 140 255 / 0.45);
+    background: rgb(124 140 255 / 0.14);
+    color: var(--om-text-primary);
+  }
+
+  .dest-float-empty {
+    font-size: 0.72rem;
+    color: var(--om-text-muted);
+  }
+
+  .dest-float-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.65rem;
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.16);
+    background: rgb(255 255 255 / 0.06);
+    color: var(--om-text-secondary);
+    cursor: pointer;
+    user-select: none;
+    max-width: min(280px, 100%);
+  }
+
+  .dest-float-chip:hover {
+    border-color: rgb(124 140 255 / 0.45);
+    background: rgb(124 140 255 / 0.14);
+  }
+
+  .dest-float-chip--drop-target {
+    border-color: rgb(124 140 255 / 0.82);
+    background: linear-gradient(160deg, rgb(124 140 255 / 0.32), rgb(94 228 212 / 0.18));
+    color: var(--om-text-primary);
+  }
+
+  .dest-float-chip__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.74rem;
+    line-height: 1.2;
   }
 
   .selection-float__count {
@@ -2558,10 +2707,11 @@
     display: grid;
     /* Ancho fijo por celda (sin 1fr): el slider recorre muchos tamaños sin quedar atrapado en 2–3 columnas. */
     grid-template-columns: repeat(auto-fill, minmax(var(--cell, 160px), var(--cell, 160px)));
-    gap: var(--om-space-3);
+    gap: var(--thumb-gap, var(--om-space-3));
     contain: layout style;
     justify-content: start;
-    padding-inline: var(--grid-edge-pad, 8px);
+    padding-left: var(--grid-edge-pad, 8px);
+    padding-right: calc(var(--grid-edge-pad, 8px) - 1px);
     box-sizing: border-box;
   }
 
@@ -2595,6 +2745,25 @@
       border-color var(--om-transition);
   }
 
+  .app.app--tile-flat .tile {
+    background: var(--om-surface-2);
+    box-shadow: none;
+    border-color: color-mix(in oklab, var(--om-border-default) 85%, transparent);
+  }
+
+  .app.app--tile-outlined .tile {
+    background: transparent;
+    box-shadow: none;
+    border-color: color-mix(in oklab, var(--om-accent) 48%, var(--om-border-default));
+  }
+
+  .app.app--tile-no-frame .tile {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+
   .tile:hover {
     box-shadow: var(--om-shadow-md), 0 0 0 1px rgb(124 140 255 / 0.2);
     border-color: rgb(124 140 255 / 0.25);
@@ -2619,7 +2788,7 @@
     width: 100%;
     aspect-ratio: 1;
     object-fit: cover;
-    border-radius: var(--om-radius-sm);
+    border-radius: var(--thumb-image-radius, var(--om-radius-sm));
     display: block;
   }
 
@@ -2636,7 +2805,7 @@
     display: grid;
     place-items: center;
     background: rgb(0 0 0 / 0.25);
-    border-radius: var(--om-radius-sm);
+    border-radius: var(--thumb-image-radius, var(--om-radius-sm));
     font-size: 0.75rem;
     color: var(--om-text-muted);
   }
@@ -2954,8 +3123,8 @@
 
   .pager.pager--bar.om-panel {
     padding: 0 11px;
-    padding-block: 8px;
-    margin-top: 6px;
+    padding-block: 7px;
+    margin-top: 2px;
     min-height: 2.7rem;
   }
 
@@ -3146,8 +3315,8 @@
   }
 
   .modal--settings {
-    width: min(420px, 92vw);
-    max-height: min(90vh, 560px);
+    width: min(760px, 96vw);
+    max-height: min(92vh, 780px);
     display: flex;
     flex-direction: column;
     gap: var(--om-space-4);
@@ -3253,11 +3422,18 @@
   .settings-thumb-preview {
     display: grid;
     grid-template-columns: repeat(3, minmax(var(--cell, 140px), var(--cell, 140px)));
-    gap: var(--om-space-2);
+    gap: var(--thumb-gap, var(--om-space-2));
     justify-content: start;
     max-width: 100%;
     overflow-x: auto;
     padding: 2px 0;
+  }
+
+  .settings-thumb-preview--no-frame .tile {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    padding: 0;
   }
 
   .settings-actions {
