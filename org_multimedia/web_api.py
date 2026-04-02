@@ -456,6 +456,40 @@ class WebApi:
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
+    def destination_move_paths(self, src_paths: list[str], dest_path: str) -> dict:
+        """Mueve rutas explícitas a un destino (útil para cola en frontend)."""
+        dest_dir = Path(dest_path).expanduser().resolve()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        moved = 0
+        errors = 0
+        unique_raw: list[str] = []
+        seen: set[str] = set()
+        for raw in src_paths or []:
+            s = str(raw).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            unique_raw.append(s)
+        with self.lock:
+            for raw in unique_raw:
+                try:
+                    src = Path(raw).expanduser().resolve()
+                    if not src.is_file():
+                        continue
+                    target = ensure_unique_destination(dest_dir / src.name)
+                    if src.resolve() == target.resolve():
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src), str(target))
+                    moved += 1
+                except Exception:
+                    errors += 1
+            moved_src = {Path(x).expanduser().resolve() for x in unique_raw}
+            self.selected = {p for p in self.selected if p not in moved_src and p.exists()}
+        data = self.gallery_reload()
+        data["moveResult"] = {"moved": moved, "errors": errors}
+        return data
+
     def gallery_delete_selected(self) -> dict:
         """Elimina del disco las imágenes seleccionadas en la galería."""
         deleted = 0

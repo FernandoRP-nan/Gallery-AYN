@@ -56,6 +56,8 @@
   let previewZoomCanUndoMove = false;
   let zoomMoveQueue: Array<{ srcPath: string; destPath: string }> = [];
   let zoomMoveWorkerRunning = false;
+  let galleryMoveQueue: Array<{ srcPaths: string[]; destPath: string }> = [];
+  let galleryMoveWorkerRunning = false;
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   let zoomStageEl: HTMLDivElement | null = null;
@@ -756,13 +758,50 @@
     items = mergeItemsKeepingBestThumb(prevItems, out.items);
   };
 
+  async function processGalleryMoveQueue() {
+    if (galleryMoveWorkerRunning) return;
+    galleryMoveWorkerRunning = true;
+    try {
+      while (galleryMoveQueue.length > 0) {
+        const [job, ...rest] = galleryMoveQueue;
+        galleryMoveQueue = rest;
+        try {
+          const out = await bridge.destinationMovePaths(job.srcPaths, job.destPath);
+          galleryState = out.state;
+          items = mergeItemsKeepingBestThumb(items, out.items);
+          galleryThumbHydrationToken++;
+          void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+          status = `Movidas ${out.moveResult?.moved ?? 0} · errores ${out.moveResult?.errors ?? 0} · cola ${galleryMoveQueue.length}`;
+        } catch (e: unknown) {
+          status = e instanceof Error ? e.message : "Error al procesar cola de movimientos";
+        }
+      }
+    } finally {
+      galleryMoveWorkerRunning = false;
+    }
+  }
+
   const moveToDest = async (path: string) => {
-    const out = await trackLoad(bridge.destinationMoveSelected(path));
-    galleryState = out.state;
-    items = out.items;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-    status = `Movidas ${out.moveResult?.moved ?? 0} · errores ${out.moveResult?.errors ?? 0}`;
+    const selectedPaths = items
+      .filter((x) => x.kind === "image" && x.selected)
+      .map((x) => x.path);
+    if (selectedPaths.length === 0) {
+      status = "No hay imágenes seleccionadas para mover";
+      return;
+    }
+    const selectedSet = new Set(selectedPaths);
+    items = items.map((it) =>
+      it.kind === "image" && selectedSet.has(it.path) ? { ...it, selected: false } : it
+    );
+    galleryState = {
+      ...galleryState,
+      selectedCount: Math.max(0, Number(galleryState?.selectedCount ?? 0) - selectedPaths.length),
+    };
+    galleryMoveQueue = [...galleryMoveQueue, { srcPaths: selectedPaths, destPath: path }];
+    status = `Encoladas ${selectedPaths.length} imágenes · cola ${galleryMoveQueue.length}`;
+    if (!galleryMoveWorkerRunning) {
+      void processGalleryMoveQueue();
+    }
   };
 
   const savePreviewRatio = async () => {
