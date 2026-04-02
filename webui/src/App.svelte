@@ -49,6 +49,8 @@
   let previewZoomCarouselVisible = true;
   let previewZoomDestMode = false;
   let previewZoomCanUndoMove = false;
+  let zoomMoveQueue: Array<{ srcPath: string; destPath: string }> = [];
+  let zoomMoveWorkerRunning = false;
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   let zoomStageEl: HTMLDivElement | null = null;
@@ -1287,17 +1289,52 @@
 
   async function moveCurrentZoomToDestination(destPath: string) {
     if (!previewZoomPath) return;
-    try {
-      const out = await trackLoad(bridge.galleryMovePath(previewZoomPath, destPath));
-      galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-      previewZoomCanUndoMove = Number(out.moveResult?.moved ?? 0) > 0;
-      status = previewZoomCanUndoMove ? "Imagen movida al destino" : "No se movió la imagen";
+    const currentPath = previewZoomPath;
+    const currentIdx = zoomNavItems.findIndex((x) => x.path === currentPath);
+    const remainingNav = zoomNavItems.filter((x) => x.path !== currentPath);
+    // Fluidez: avanzar de inmediato en fullscreen y procesar move en cola.
+    if (remainingNav.length > 0) {
+      const nextIdx = currentIdx >= 0 ? Math.min(currentIdx, remainingNav.length - 1) : 0;
+      const nextItem = remainingNav[nextIdx];
+      zoomNavItems = remainingNav;
+      if (nextItem) {
+        openPreviewZoom(nextItem, { preserveCarousel: true, preserveMode: true, navItems: remainingNav });
+      }
+    } else {
       previewZoomOpen = false;
-    } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo mover la imagen al destino";
+    }
+    zoomMoveQueue = [...zoomMoveQueue, { srcPath: currentPath, destPath }];
+    status = `Imagen en cola de movimiento (${zoomMoveQueue.length})`;
+    if (!zoomMoveWorkerRunning) {
+      void processZoomMoveQueue();
+    }
+  }
+
+  async function processZoomMoveQueue() {
+    if (zoomMoveWorkerRunning) return;
+    zoomMoveWorkerRunning = true;
+    try {
+      while (zoomMoveQueue.length > 0) {
+        const [job, ...rest] = zoomMoveQueue;
+        zoomMoveQueue = rest;
+        try {
+          const out = await bridge.galleryMovePath(job.srcPath, job.destPath);
+          galleryState = out.state;
+          items = out.items;
+          galleryThumbHydrationToken++;
+          void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+          const moved = Number(out.moveResult?.moved ?? 0);
+          const errors = Number(out.moveResult?.errors ?? 0);
+          previewZoomCanUndoMove = moved > 0;
+          status = moved > 0
+            ? `Imagen movida (${zoomMoveQueue.length} en cola)`
+            : `No se movió la imagen${errors ? " · con errores" : ""}`;
+        } catch (e: unknown) {
+          status = e instanceof Error ? e.message : "Error en cola de movimientos";
+        }
+      }
+    } finally {
+      zoomMoveWorkerRunning = false;
     }
   }
 
@@ -1642,7 +1679,7 @@
     galleryGridResizeObserver.observe(galleryScrollEl);
   }
 
-  $: if (!destinationsMode) {
+  $: if (!destinationsMode && !previewZoomDestMode) {
     destCtxMenu = null;
     if (destFormOpen) destFormOpen = false;
   }
@@ -2345,12 +2382,19 @@
                 </div>
               {/if}
               {#if previewZoomDestMode}
-                <div class="zoom-dest-chips" class:zoom-dest-chips--carousel-hidden={!previewZoomCarouselVisible}>
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="zoom-dest-chips"
+                  class:zoom-dest-chips--carousel-hidden={!previewZoomCarouselVisible}
+                  on:pointerdown|stopPropagation={() => undefined}
+                  on:click|stopPropagation={() => undefined}
+                >
                   <button
                     type="button"
                     class="om-btn om-btn--ghost om-btn--compact zoom-dest-add"
+                    on:pointerdown|stopPropagation={() => undefined}
                     on:click={openAddDestForm}
-                  >+ Agregar</button>
+                  >+</button>
                   <button
                     type="button"
                     class="om-btn om-btn--ghost om-btn--compact"
