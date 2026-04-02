@@ -70,6 +70,7 @@
   let galleryGridEl: HTMLDivElement | null = null;
   let galleryScrollEl: HTMLDivElement | null = null;
   let galleryPlainEl: HTMLElement | null = null;
+  let routePathEl: HTMLInputElement | null = null;
   let galleryGridObservedEl: HTMLDivElement | null = null;
   let galleryGridResizeObserver: ResizeObserver | null = null;
   let galleryGridWidth = 0;
@@ -969,6 +970,15 @@
     applyThumbScaleNow();
   }
 
+  function keepRoutePathEndVisible() {
+    if (!routePathEl) return;
+    if (document.activeElement === routePathEl) return;
+    requestAnimationFrame(() => {
+      if (!routePathEl) return;
+      routePathEl.scrollLeft = routePathEl.scrollWidth;
+    });
+  }
+
   const openDestPreview = async (path: string) => {
     previewDestPath = path;
     previewSelectedPaths = [];
@@ -976,6 +986,12 @@
     previewOpen = true;
     await refreshDestPreview();
   };
+
+  $: {
+    const _route = folder;
+    void _route;
+    keepRoutePathEndVisible();
+  }
 
   const refreshDestPreview = async () => {
     const w = Math.max(320, Math.round(window.innerWidth * DEST_MODAL_FRAC));
@@ -1155,6 +1171,8 @@
       startPreviewLongPress(it.path);
       return;
     }
+    // Con Ctrl sostenido priorizamos arrastre, no rango de selección.
+    if (e.ctrlKey) return;
     e.preventDefault();
     cancelPreviewLongPress();
     previewRangeSelecting = true;
@@ -1172,13 +1190,14 @@
   function onPreviewRangePointerMove(e: PointerEvent) {
     if (!previewSelectionMode || !previewRangeSelecting || !previewRangeAnchorPath) return;
     const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-    const tile = el?.closest?.(".pv-tile[data-preview-path]") as HTMLElement | null;
+    const tile = el?.closest?.(".tile[data-preview-path]") as HTMLElement | null;
     const path = tile?.dataset?.previewPath;
     if (!path) return;
     applyPreviewRangeSelection(previewRangeAnchorPath, path, previewRangeMode);
   }
 
-  function onPreviewTileClick(it: { path: string; name: string; thumbDataUrl?: string | null }) {
+  function onPreviewTileClick(e: MouseEvent, it: { path: string; name: string; thumbDataUrl?: string | null }) {
+    if (e.ctrlKey) return;
     if (previewSuppressClick) return;
     if (previewLongPressTriggered && previewLongPressPath === it.path) {
       previewLongPressTriggered = false;
@@ -1195,6 +1214,12 @@
   function onPreviewTileDragStart(e: DragEvent, it: { path: string }) {
     if (!previewSelectionMode) {
       e.preventDefault();
+      return;
+    }
+    // Mantener el mismo patrón que en galería: arrastre solo con Ctrl sostenido.
+    if (!(e as DragEvent).ctrlKey) {
+      e.preventDefault();
+      status = "Para arrastrar desde vista previa, mantén Ctrl sostenido";
       return;
     }
     if (!previewSelectedPaths.includes(it.path)) {
@@ -2000,15 +2025,37 @@
     void endGalleryRangeSelection();
   }}
   on:keydown={(e) => {
+    const activeEl = (document.activeElement as HTMLElement | null) ?? null;
+    const isTypingEl = Boolean(
+      activeEl &&
+        (activeEl.isContentEditable ||
+          activeEl.tagName === "INPUT" ||
+          activeEl.tagName === "TEXTAREA" ||
+          activeEl.closest('[contenteditable="true"]'))
+    );
+    if (
+      e.key === "Shift" &&
+      !e.repeat &&
+      !isTypingEl &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.metaKey
+    ) {
+      e.preventDefault();
+      if (previewZoomOpen) {
+        previewZoomDestMode = !previewZoomDestMode;
+        status = previewZoomDestMode ? "Destinos activado (fullscreen)" : "Destinos desactivado (fullscreen)";
+      } else if (previewOpen) {
+        previewSelectionMode = !previewSelectionMode;
+        if (!previewSelectionMode) previewSelectedPaths = [];
+        status = previewSelectionMode ? "Selección activada (vista previa)" : "Selección desactivada (vista previa)";
+      } else {
+        destinationsMode = !destinationsMode;
+        status = destinationsMode ? "Modo Destinos activado" : "Modo Destinos desactivado";
+      }
+      return;
+    }
     if (previewZoomOpen) {
-      const activeEl = (document.activeElement as HTMLElement | null) ?? null;
-      const isTypingEl = Boolean(
-        activeEl &&
-          (activeEl.isContentEditable ||
-            activeEl.tagName === "INPUT" ||
-            activeEl.tagName === "TEXTAREA" ||
-            activeEl.closest('[contenteditable="true"]'))
-      );
       const typingInDestForm = Boolean(activeEl?.closest(".modal--dest-form"));
       if (destFormOpen && isTypingEl && typingInDestForm) return;
       const key = e.key.toLowerCase();
@@ -2024,6 +2071,22 @@
       }
     }
     if (e.key !== "Escape") return;
+    const hasPreviewSelection = previewSelectedPaths.length > 0 || previewRangeSelecting;
+    const hasGallerySelection =
+      Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => x.kind === "image" && Boolean(x.selected));
+    if (hasPreviewSelection || hasGallerySelection) {
+      e.preventDefault();
+      if (hasPreviewSelection) {
+        endPreviewRangeSelection();
+        previewSelectedPaths = [];
+        previewSelectionMode = false;
+      }
+      if (hasGallerySelection) {
+        void clearSelection();
+      }
+      status = "Selección limpiada";
+      return;
+    }
     if (destCtxMenu) closeDestCtxMenu();
     else if (destFormOpen) closeDestForm();
     else if (settingsOpen) settingsOpen = false;
@@ -2069,6 +2132,7 @@
           id="gallery-folder-input"
           class="om-input route__path"
           type="text"
+          bind:this={routePathEl}
           bind:value={folder}
           placeholder="Ruta de carpeta…"
           title="Pega la ruta o pulsa el icono de carpeta"
@@ -2450,8 +2514,19 @@
       tabindex="-1"
       aria-label="Cerrar vista previa del destino"
       on:dragover|preventDefault
-      on:drop|self={() => {
-        if (!previewDragActive) return;
+      on:drop={(e) => {
+        const t = e.target as HTMLElement | null;
+        if (t?.closest(".modal--dest")) return;
+        const raw = e.dataTransfer?.getData("application/x-om-preview-paths") ?? "";
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            previewSelectedPaths = parsed.map((x) => String(x)).filter((x) => x.trim().length > 0);
+          }
+        } catch {
+          // Mantener selección actual si no se pudo parsear.
+        }
         previewDragActive = false;
         void movePreviewSelectionToCurrentRoute();
       }}
@@ -2473,33 +2548,35 @@
         on:keydown={(e) => e.stopPropagation()}
       >
         <header class="modal__head">
-          <strong id="dest-preview-title">Destino: {previewDestPath}</strong>
-          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewOpen = false)}>✕</button>
+          <strong id="dest-preview-title">{previewDestPath}</strong>
+          <div class="modal__head-actions">
+            <div class="selection-float preview-selection-float" role="toolbar" aria-label="Selección del modal de destino">
+              <button
+                type="button"
+                class="om-btn om-btn--ghost om-btn--mini"
+                on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
+                title={previewSelectionMode ? "Desactivar modo selección" : "Activar modo selección"}
+              >{previewSelectionMode ? "Desactivar" : "Activar"}</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}>Todo</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}>Deseleccionar</button>
+              <button
+                type="button"
+                class="om-btn om-btn--ghost om-btn--mini"
+                disabled={previewSelectedPaths.length === 0}
+                on:click={() =>
+                  openConfirmDelete(
+                    "Eliminar selección",
+                    `¿Eliminar ${previewSelectedPaths.length} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+                    deletePreviewSelectedItems
+                  )}
+              >Eliminar</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertPreviewSelection}>Invertir</button>
+              <span class="selection-float__count" title="Seleccionadas">{previewSelectedPaths.length}</span>
+            </div>
+            <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewOpen = false)}>✕</button>
+          </div>
         </header>
         <div class="modal__scroll">
-          <div class="selection-float preview-selection-float" role="toolbar" aria-label="Selección del modal de destino">
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--mini"
-              on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
-              title={previewSelectionMode ? "Salir del modo selección" : "Entrar al modo selección"}
-            >{previewSelectionMode ? "Salir" : "Selección"}</button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}>Todo</button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}>Quitar</button>
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--mini"
-              disabled={previewSelectedPaths.length === 0}
-              on:click={() =>
-                openConfirmDelete(
-                  "Eliminar selección",
-                  `¿Eliminar ${previewSelectedPaths.length} imágenes seleccionadas? Esta acción no se puede deshacer.`,
-                  deletePreviewSelectedItems
-                )}
-            >Eliminar</button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertPreviewSelection}>Invertir</button>
-            <span class="selection-float__count" title="Seleccionadas">{previewSelectedPaths.length}</span>
-          </div>
           <section class="grid" style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
             {#each previewItems as it}
               <div
@@ -2516,15 +2593,17 @@
                 on:pointercancel={cancelPreviewLongPress}
                 on:dragstart={(e) => onPreviewTileDragStart(e, it)}
                 on:dragend={onPreviewTileDragEnd}
-                on:click={() => onPreviewTileClick(it)}
+                on:click={(e) => onPreviewTileClick(e, it)}
                 on:keydown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    onPreviewTileClick(it);
+                    onPreviewTileClick(e as unknown as MouseEvent, it);
                   }
                 }}
               >
-                {#if it.thumbDataUrl}<img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} />{/if}
+                {#if it.thumbDataUrl}
+                  <img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} draggable={false} />
+                {/if}
                 {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
               </div>
             {/each}
@@ -3052,10 +3131,10 @@
   .tabs-bar {
     display: flex;
     align-items: center;
-    gap: var(--om-space-2);
+    gap: var(--om-space-1);
     flex-wrap: wrap;
     padding-block: 4px;
-    padding-inline: 10px;
+    padding-inline: 8px;
   }
 
   .tabs-bar.om-panel,
@@ -3070,18 +3149,19 @@
     flex-wrap: wrap;
     gap: var(--om-space-2);
     align-items: center;
+    flex: 0 0 auto;
   }
 
   .route__row {
     display: flex;
     align-items: center;
-    gap: var(--om-space-3);
+    gap: var(--om-space-2);
     flex-wrap: wrap;
   }
 
   .route__row--inline {
-    flex: 1 1 540px;
-    min-width: min(520px, 100%);
+    flex: 1 1 680px;
+    min-width: min(420px, 100%);
   }
 
   .recent-folders__head {
@@ -4120,6 +4200,8 @@
     width: min(80vw, min(1100px, 96vw));
     height: clamp(480px, 82vh, 920px);
     max-height: min(94vh, 920px);
+    padding: var(--om-space-3);
+    gap: var(--om-space-2);
   }
 
   .modal__head {
@@ -4127,6 +4209,12 @@
     justify-content: space-between;
     align-items: center;
     gap: var(--om-space-3);
+  }
+
+  .modal__head-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--om-space-1);
   }
 
   .modal__scroll {
@@ -4139,13 +4227,10 @@
   }
 
   .preview-selection-float {
-    position: sticky;
-    top: var(--om-space-2);
-    align-self: flex-end;
-    margin: var(--om-space-1) var(--om-space-1) 0 0;
+    margin: 0;
     z-index: 4;
-    gap: 2px;
-    padding: 2px 6px;
+    flex-wrap: nowrap;
+    white-space: nowrap;
   }
 
   .overlay--zoom {
