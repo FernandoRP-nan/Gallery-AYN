@@ -3943,10 +3943,10 @@
 
   .tile.tile--active {
     box-shadow:
-      0 0 0 3px color-mix(in oklab, var(--om-accent) 78%, #ffffff),
-      0 0 22px rgb(124 140 255 / 0.45),
+      0 0 0 4px color-mix(in oklab, var(--om-accent) 88%, #ffffff),
+      0 0 28px rgb(124 140 255 / 0.62),
       var(--om-shadow-md);
-    border-color: color-mix(in oklab, var(--om-accent) 76%, #ffffff);
+    border-color: color-mix(in oklab, var(--om-accent) 88%, #ffffff);
   }
 
   .tile.tile--active::before {
@@ -3956,13 +3956,14 @@
     z-index: 0;
     pointer-events: none;
     border-radius: inherit;
-    background: color-mix(in oklab, var(--om-accent) 30%, #7db5ff);
-    opacity: 0.42;
+    background: rgb(70 132 255 / 0.25);
+    opacity: 1;
   }
 
   .tile.tile--active img,
   .tile.tile--active .folder-ph {
-    filter: saturate(1.12) contrast(1.05);
+    /* Tinte azul real sobre el contenido (funciona igual en LQ/HQ). */
+    filter: sepia(0.38) hue-rotate(168deg) saturate(1.85) contrast(1.1) brightness(1.04);
   }
 
   .tile.selected {
