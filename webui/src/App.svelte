@@ -18,11 +18,21 @@
   let previewOpen = false;
   let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
   let previewSelectedPaths: string[] = [];
+  let previewSelectionMode = false;
+  let previewLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let previewLongPressPath: string | null = null;
+  let previewLongPressTriggered = false;
   let previewZoomOpen = false;
   let previewZoomPath = "";
   let previewZoomName = "";
   let previewZoomDataUrl: string | null = null;
   let previewZoomScale = 1;
+  let previewZoomMode: "fit" | "fillWidth" = "fit";
+  let previewPanX = 0;
+  let previewPanY = 0;
+  let previewPanDrag = false;
+  let previewPanStartX = 0;
+  let previewPanStartY = 0;
   let galleryThumbHydrationToken = 0;
   let previewThumbHydrationToken = 0;
   let previewScale = 1;
@@ -596,6 +606,18 @@
     previewSelectedPaths = [];
   }
 
+  function enterPreviewSelectionMode(path?: string) {
+    previewSelectionMode = true;
+    if (path && !previewSelectedPaths.includes(path)) {
+      previewSelectedPaths = [...previewSelectedPaths, path];
+    }
+  }
+
+  function exitPreviewSelectionMode() {
+    previewSelectionMode = false;
+    previewSelectedPaths = [];
+  }
+
   async function movePreviewSelectionToCurrentRoute() {
     if (previewSelectedPaths.length === 0) {
       status = "Selecciona elementos del modal primero";
@@ -626,6 +648,9 @@
     previewZoomName = it.name;
     previewZoomDataUrl = it.thumbDataUrl ?? null;
     previewZoomScale = 1;
+    previewPanX = 0;
+    previewPanY = 0;
+    previewZoomMode = "fit";
     previewZoomOpen = true;
     bridge
       .galleryPreview(it.path, 2200, 1600)
@@ -635,8 +660,42 @@
       .catch(() => undefined);
   }
 
+  function startPreviewLongPress(path: string) {
+    if (previewLongPressTimer) clearTimeout(previewLongPressTimer);
+    previewLongPressPath = path;
+    previewLongPressTriggered = false;
+    previewLongPressTimer = setTimeout(() => {
+      previewLongPressTriggered = true;
+      enterPreviewSelectionMode(path);
+    }, 380);
+  }
+
+  function cancelPreviewLongPress() {
+    if (previewLongPressTimer) clearTimeout(previewLongPressTimer);
+    previewLongPressTimer = null;
+    previewLongPressPath = null;
+  }
+
+  function onPreviewTileClick(it: { path: string; name: string; thumbDataUrl?: string | null }) {
+    if (previewLongPressTriggered && previewLongPressPath === it.path) {
+      previewLongPressTriggered = false;
+      previewLongPressPath = null;
+      return;
+    }
+    if (previewSelectionMode) {
+      togglePreviewPick(it.path);
+      return;
+    }
+    openPreviewZoom(it);
+  }
+
   function zoomStep(delta: number) {
     previewZoomScale = Math.min(4, Math.max(1, Number((previewZoomScale + delta).toFixed(2))));
+  }
+
+  $: if (previewZoomScale <= 1 && (previewPanX !== 0 || previewPanY !== 0)) {
+    previewPanX = 0;
+    previewPanY = 0;
   }
 
   function zoomWithWheel(e: WheelEvent) {
@@ -652,6 +711,25 @@
     const it = previewItems[next];
     if (!it) return;
     openPreviewZoom(it);
+  }
+
+  function beginPan(e: PointerEvent) {
+    if (previewZoomScale <= 1) return;
+    previewPanDrag = true;
+    previewPanStartX = e.clientX - previewPanX;
+    previewPanStartY = e.clientY - previewPanY;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+
+  function movePan(e: PointerEvent) {
+    if (!previewPanDrag) return;
+    previewPanX = e.clientX - previewPanStartX;
+    previewPanY = e.clientY - previewPanStartY;
+  }
+
+  function endPan(e: PointerEvent) {
+    previewPanDrag = false;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
   }
 
   /** Ancho mínimo de pista en el modal destino: auto-fill sin columna cortada ni scroll horizontal. */
@@ -1317,6 +1395,14 @@
             on:input={scheduleDestScaleSave}
           />
           <div class="modal__pick-tools" role="toolbar" aria-label="Selección del modal de destino">
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact"
+              on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
+              title={previewSelectionMode ? "Salir del modo selección" : "Entrar al modo selección"}
+            >
+              {previewSelectionMode ? "Salir selección" : "Modo selección"}
+            </button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={selectAllPreviewItems}>Seleccionar todo</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={clearPreviewSelection}>Limpiar</button>
             <button
@@ -1339,23 +1425,29 @@
                 class:pv-tile--selected={previewSelectedPaths.includes(it.path)}
                 role="button"
                 tabindex="0"
-                on:click={() => openPreviewZoom(it)}
+                on:pointerdown={() => startPreviewLongPress(it.path)}
+                on:pointerup={cancelPreviewLongPress}
+                on:pointerleave={cancelPreviewLongPress}
+                on:pointercancel={cancelPreviewLongPress}
+                on:click={() => onPreviewTileClick(it)}
                 on:keydown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    openPreviewZoom(it);
+                    onPreviewTileClick(it);
                   }
                 }}
               >
-                <button
-                  type="button"
-                  class="pv-tile__pick"
-                  aria-label={previewSelectedPaths.includes(it.path) ? "Quitar de selección" : "Seleccionar elemento"}
-                  aria-pressed={previewSelectedPaths.includes(it.path)}
-                  on:click|stopPropagation={() => togglePreviewPick(it.path)}
-                >
-                  {previewSelectedPaths.includes(it.path) ? "✓" : "+"}
-                </button>
+                {#if previewSelectionMode}
+                  <button
+                    type="button"
+                    class="pv-tile__pick"
+                    aria-label="Ver en pantalla completa"
+                    title="Ver en pantalla completa"
+                    on:click|stopPropagation={() => openPreviewZoom(it)}
+                  >
+                    ⛶
+                  </button>
+                {/if}
                 {#if it.thumbDataUrl}<img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} />{/if}
                 <span class="pv-tile__name">{it.name}</span>
               </div>
@@ -1393,6 +1485,18 @@
           <div class="zoom-modal__tools">
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Anterior (A/W/←/↑)" on:click={() => moveZoomBy(-1)}>←</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Siguiente (D/S/→/↓)" on:click={() => moveZoomBy(1)}>→</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact"
+              title="Alternar entre ver completa y rellenar ancho"
+              on:click={() => {
+                previewZoomMode = previewZoomMode === "fit" ? "fillWidth" : "fit";
+                previewPanX = 0;
+                previewPanY = 0;
+              }}
+            >
+              {previewZoomMode === "fit" ? "Completa" : "Rellenar ancho"}
+            </button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Alejar" on:click={() => zoomStep(-0.2)}>−</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Restablecer zoom" on:click={() => (previewZoomScale = 1)}>{Math.round(previewZoomScale * 100)}%</button>
             <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Acercar" on:click={() => zoomStep(0.2)}>＋</button>
@@ -1401,12 +1505,24 @@
         </header>
         <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
           {#if previewZoomDataUrl}
-            <img
-              class="zoom-modal__img"
-              src={previewZoomDataUrl}
-              alt={previewZoomName}
-              style={`transform: scale(${previewZoomScale});`}
-            />
+            <div
+              class="zoom-modal__stage"
+              role="application"
+              aria-label="Área de zoom y arrastre"
+              on:pointerdown={beginPan}
+              on:pointermove={movePan}
+              on:pointerup={endPan}
+              on:pointercancel={endPan}
+            >
+              <img
+                class="zoom-modal__img"
+                class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
+                class:zoom-modal__img--pannable={previewZoomScale > 1}
+                src={previewZoomDataUrl}
+                alt={previewZoomName}
+                style={`transform: translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale});`}
+              />
+            </div>
           {:else}
             <div class="preview__empty">Cargando imagen…</div>
           {/if}
@@ -2647,6 +2763,7 @@
     background: rgb(7 8 15 / 0.72);
     color: #fff;
     font-weight: 800;
+    font-size: 0.9rem;
     cursor: pointer;
     display: grid;
     place-items: center;
@@ -2692,9 +2809,20 @@
     min-height: 0;
     display: grid;
     place-items: center;
-    overflow: auto;
+    overflow: hidden;
     border-radius: var(--om-radius-lg);
     background: radial-gradient(130% 100% at 50% 40%, rgb(124 140 255 / 0.08), transparent 65%);
+  }
+
+  .zoom-modal__stage {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    cursor: default;
   }
 
   .zoom-modal__img {
@@ -2706,6 +2834,23 @@
     background: rgb(0 0 0 / 0.22);
     transform-origin: center center;
     transition: transform 0.08s linear;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  .zoom-modal__img--fill-width {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    max-height: none;
+  }
+
+  .zoom-modal__img--pannable {
+    cursor: grab;
+  }
+
+  .zoom-modal__img--pannable:active {
+    cursor: grabbing;
   }
 
   .zoom-modal__carousel {
