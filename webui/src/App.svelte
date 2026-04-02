@@ -22,6 +22,7 @@
   let previewZoomPath = "";
   let previewZoomName = "";
   let previewZoomDataUrl: string | null = null;
+  let previewZoomScale = 1;
   let galleryThumbHydrationToken = 0;
   let previewThumbHydrationToken = 0;
   let previewScale = 1;
@@ -624,6 +625,7 @@
     previewZoomPath = it.path;
     previewZoomName = it.name;
     previewZoomDataUrl = it.thumbDataUrl ?? null;
+    previewZoomScale = 1;
     previewZoomOpen = true;
     bridge
       .galleryPreview(it.path, 2200, 1600)
@@ -631,6 +633,25 @@
         if (previewZoomOpen && previewZoomPath === it.path) previewZoomDataUrl = pr.dataUrl ?? previewZoomDataUrl;
       })
       .catch(() => undefined);
+  }
+
+  function zoomStep(delta: number) {
+    previewZoomScale = Math.min(4, Math.max(1, Number((previewZoomScale + delta).toFixed(2))));
+  }
+
+  function zoomWithWheel(e: WheelEvent) {
+    e.preventDefault();
+    zoomStep(e.deltaY < 0 ? 0.14 : -0.14);
+  }
+
+  function moveZoomBy(step: number) {
+    if (!previewItems.length) return;
+    const i = previewItems.findIndex((x) => x.path === previewZoomPath);
+    const base = i >= 0 ? i : 0;
+    const next = (base + step + previewItems.length) % previewItems.length;
+    const it = previewItems[next];
+    if (!it) return;
+    openPreviewZoom(it);
   }
 
   /** Ancho mínimo de pista en el modal destino: auto-fill sin columna cortada ni scroll horizontal. */
@@ -914,10 +935,23 @@
 
 <svelte:window
   on:keydown={(e) => {
+    if (previewZoomOpen) {
+      if (["ArrowLeft", "ArrowUp", "KeyA", "KeyW"].includes(e.code)) {
+        e.preventDefault();
+        moveZoomBy(-1);
+        return;
+      }
+      if (["ArrowRight", "ArrowDown", "KeyD", "KeyS"].includes(e.code)) {
+        e.preventDefault();
+        moveZoomBy(1);
+        return;
+      }
+    }
     if (e.key !== "Escape") return;
     if (destCtxMenu) closeDestCtxMenu();
     else if (destFormOpen) closeDestForm();
     else if (settingsOpen) settingsOpen = false;
+    else if (previewZoomOpen) previewZoomOpen = false;
     else if (previewOpen) previewOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
   }}
@@ -963,6 +997,14 @@
       />
       <button type="button" class="om-btn om-btn--primary" title="Explorador del sistema" on:click={pickGalleryFolder}>Examinar…</button>
       <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Recargar galería" on:click={reload}>↻</button>
+      <button
+        type="button"
+        class="om-btn om-btn--ghost om-btn--icon"
+        title={pinnedFolders.includes(folder.trim()) ? "Quitar anclaje de esta ruta" : "Anclar esta ruta"}
+        on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : pinFolder(folder))}
+      >
+        {pinnedFolders.includes(folder.trim()) ? "★" : "☆"}
+      </button>
       <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Cargar</button>
       <div class="grow"></div>
       <span
@@ -1348,14 +1390,41 @@
       >
         <header class="zoom-modal__head">
           <strong>{previewZoomName}</strong>
-          <button type="button" class="om-btn om-btn--ghost" on:click={() => (previewZoomOpen = false)}>Cerrar</button>
+          <div class="zoom-modal__tools">
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Anterior (A/W/←/↑)" on:click={() => moveZoomBy(-1)}>←</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Siguiente (D/S/→/↓)" on:click={() => moveZoomBy(1)}>→</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Alejar" on:click={() => zoomStep(-0.2)}>−</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Restablecer zoom" on:click={() => (previewZoomScale = 1)}>{Math.round(previewZoomScale * 100)}%</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Acercar" on:click={() => zoomStep(0.2)}>＋</button>
+            <button type="button" class="om-btn om-btn--ghost" on:click={() => (previewZoomOpen = false)}>Cerrar</button>
+          </div>
         </header>
-        <div class="zoom-modal__body">
+        <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
           {#if previewZoomDataUrl}
-            <img class="zoom-modal__img" src={previewZoomDataUrl} alt={previewZoomName} />
+            <img
+              class="zoom-modal__img"
+              src={previewZoomDataUrl}
+              alt={previewZoomName}
+              style={`transform: scale(${previewZoomScale});`}
+            />
           {:else}
             <div class="preview__empty">Cargando imagen…</div>
           {/if}
+        </div>
+        <div class="zoom-modal__carousel" aria-label="Carrusel de miniaturas">
+          {#each previewItems as it}
+            <button
+              type="button"
+              class="zoom-carousel__item"
+              class:zoom-carousel__item--active={it.path === previewZoomPath}
+              title={it.name}
+              on:click={() => openPreviewZoom(it)}
+            >
+              {#if it.thumbDataUrl}
+                <img src={it.thumbDataUrl} alt={it.name} class:thumb--lq={it.thumbQuality === "lq"} />
+              {/if}
+            </button>
+          {/each}
         </div>
       </div>
     </div>
@@ -1884,9 +1953,10 @@
   }
 
   .thumb--lq {
-    filter: blur(4px) saturate(0.92);
-    transform: scale(1.02);
-    transition: filter 0.18s ease, transform 0.18s ease;
+    filter: blur(8px) saturate(0.85) contrast(0.92);
+    transform: scale(1.04);
+    opacity: 0.92;
+    transition: filter 0.28s ease, transform 0.28s ease, opacity 0.28s ease;
   }
 
   .folder-ph {
@@ -2610,6 +2680,13 @@
     color: var(--om-text-primary);
   }
 
+  .zoom-modal__tools {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--om-space-2);
+    flex-wrap: wrap;
+  }
+
   .zoom-modal__body {
     flex: 1;
     min-height: 0;
@@ -2617,6 +2694,7 @@
     place-items: center;
     overflow: auto;
     border-radius: var(--om-radius-lg);
+    background: radial-gradient(130% 100% at 50% 40%, rgb(124 140 255 / 0.08), transparent 65%);
   }
 
   .zoom-modal__img {
@@ -2626,6 +2704,42 @@
     border-radius: var(--om-radius-md);
     box-shadow: 0 16px 42px rgb(0 0 0 / 0.55);
     background: rgb(0 0 0 / 0.22);
+    transform-origin: center center;
+    transition: transform 0.08s linear;
+  }
+
+  .zoom-modal__carousel {
+    display: flex;
+    gap: var(--om-space-2);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: var(--om-space-1) var(--om-space-2);
+    border-radius: var(--om-radius-md);
+    background: rgb(255 255 255 / 0.04);
+  }
+
+  .zoom-carousel__item {
+    border: 1px solid var(--om-border-subtle);
+    border-radius: var(--om-radius-sm);
+    padding: 0;
+    width: 72px;
+    height: 72px;
+    flex: 0 0 auto;
+    overflow: hidden;
+    background: var(--om-surface-2);
+    cursor: pointer;
+  }
+
+  .zoom-carousel__item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .zoom-carousel__item--active {
+    border-color: rgb(124 140 255 / 0.85);
+    box-shadow: 0 0 0 1px rgb(94 228 212 / 0.35), 0 0 14px rgb(124 140 255 / 0.3);
   }
 
   /* Ghost de arrastre */

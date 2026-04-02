@@ -142,10 +142,10 @@ class WebApi:
                 return hit[1]
         if profile == "lq":
             # Fase 1: miniatura rápida (menos calidad) para pintar la rejilla antes.
-            data = _thumb_jpeg_data_url_square(path, max(56, int(thumb_px * 0.72)), quality=58)
+            data = _thumb_jpeg_data_url_square(path, max(48, int(thumb_px * 0.55)), quality=40)
         else:
             # Fase 2: miniatura nítida.
-            data = _thumb_jpeg_data_url_square(path, thumb_px, quality=92)
+            data = _thumb_jpeg_data_url_square(path, int(round(thumb_px * 1.35)), quality=96)
         with self._thumb_cache_lock:
             self._thumb_cache[key] = (mtime, data)
         return data
@@ -376,7 +376,7 @@ class WebApi:
                     "name": p.name,
                     "path": str(p),
                     "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(
-                        p, max(56, int(thumb * 0.72)), quality=58
+                        p, max(48, int(thumb * 0.55)), quality=40
                     ),
                     "thumbQuality": "lq",
                 }
@@ -391,7 +391,11 @@ class WebApi:
     def destination_thumb_hq(self, path: str, scale: float) -> dict:
         p = Path(path).expanduser().resolve()
         thumb = _thumb_px_from_dest_scale(float(scale))
-        return {"path": str(p), "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(p, thumb, quality=92), "thumbQuality": "hq"}
+        return {
+            "path": str(p),
+            "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(p, int(round(thumb * 1.35)), quality=96),
+            "thumbQuality": "hq",
+        }
 
     def destination_move_from_preview(self, src_paths: list[str]) -> dict:
         """Mueve imágenes seleccionadas del modal de destino a la carpeta cargada en galería."""
