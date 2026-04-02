@@ -42,6 +42,7 @@ const devMockApi: WebApi = {
       gallery_thumb_scale: 1,
       dest_preview_thumb_scale: 1,
       web_preview_ratio: 0.4,
+      web_dest_panel_ratio: 0.26,
       dest_preview_modal_w: 0.9,
       dest_preview_modal_h: 0.8,
       gallery_recent_folders: [] as string[],

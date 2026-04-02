@@ -26,6 +26,9 @@
   let thumbsPerPageBackup = 48;
   let pageJumpDraft = 1;
   let previewRatio = 0.4;
+  /** Fracción de altura para el panel inferior de destinos (solo pestaña Destinos). */
+  let destPanelRatio = 0.26;
+  let destSplitDrag = false;
   /** Modal “ver carpeta destino”: ~80 % del viewport (sin sliders). */
   const DEST_MODAL_FRAC = 0.8;
   let orgPath = "";
@@ -107,6 +110,7 @@
     thumbScale = Number(data.settings?.gallery_thumb_scale ?? 1);
     previewScale = Number(data.settings?.dest_preview_thumb_scale ?? 1);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
+    destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
     const last = (data.settings?.gallery_last_folder ?? "").trim();
     folder = (data.gallery?.folder ?? last) || "";
     orgPath = folder || orgPath;
@@ -274,6 +278,65 @@
   const savePreviewRatio = async () => {
     await bridge.settingsPatch({ web_preview_ratio: Number(previewRatio.toFixed(3)) });
   };
+
+  const saveDestPanelRatio = async () => {
+    await bridge.settingsPatch({ web_dest_panel_ratio: Number(destPanelRatio.toFixed(3)) });
+  };
+
+  function updateDestPanelFromClientY(clientY: number) {
+    const el = document.querySelector(".destinos-work");
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const h = rect.height;
+    if (h <= 16) return;
+    const fromBottom = (rect.bottom - clientY) / h;
+    destPanelRatio = Math.min(0.55, Math.max(0.12, fromBottom));
+  }
+
+  function beginDestPanelDrag(e: PointerEvent) {
+    e.preventDefault();
+    destSplitDrag = true;
+    const bar = e.currentTarget as HTMLElement;
+    bar.setPointerCapture?.(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      if (!destSplitDrag) return;
+      updateDestPanelFromClientY(ev.clientY);
+    };
+    const up = (ev: PointerEvent) => {
+      destSplitDrag = false;
+      bar.releasePointerCapture?.(ev.pointerId);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      saveDestPanelRatio().catch(() => undefined);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  /** Números de página estilo resultados (1 … 5 6 7 … N). */
+  function googlePageItems(page: number, totalPages: number): Array<number | "gap"> {
+    if (totalPages <= 1) return totalPages === 1 ? [1] : [];
+    const delta = 2;
+    const set = new Set<number>();
+    set.add(1);
+    set.add(totalPages);
+    for (let i = page - delta; i <= page + delta; i++) {
+      if (i >= 1 && i <= totalPages) set.add(i);
+    }
+    const sorted = [...set].sort((a, b) => a - b);
+    const out: Array<number | "gap"> = [];
+    let prev = 0;
+    for (const p of sorted) {
+      if (prev && p - prev > 1) out.push("gap");
+      out.push(p);
+      prev = p;
+    }
+    return out;
+  }
+
+  $: pageLinks = googlePageItems(Number(state.page) || 1, Number(state.totalPages) || 1);
 
   function updateSplitFromClientX(clientX: number) {
     const el = document.querySelector(".content");
@@ -476,7 +539,12 @@
   }}
 />
 
-<main class="app" class:app--extra-row={activeTab === "destinos" || activeTab === "organizar"}>
+<main
+  class="app"
+  class:app--layout-ruta={activeTab === "ruta"}
+  class:app--layout-destinos={activeTab === "destinos"}
+  class:app--layout-org={activeTab === "organizar"}
+>
   <header class="tabs-bar om-panel">
     <nav class="tabs__nav">
       <button type="button" class="om-btn om-btn--tab" class:om-btn--active={activeTab === "ruta"} on:click={() => (activeTab = "ruta")}>Ruta</button>
@@ -486,12 +554,19 @@
     <div class="grow"></div>
     <button
       type="button"
-      class="om-btn om-btn--ghost om-btn--icon"
+      class="om-btn om-btn--ghost om-btn--icon om-btn--settings"
       title="Ajustes"
       aria-label="Ajustes"
-      on:click={openSettingsModal}>⚙</button>
+      on:click={openSettingsModal}
+    >
+      <svg class="settings-gear" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
   </header>
 
+  {#if activeTab !== "destinos"}
   <section class="route om-panel">
     <div class="route__row">
       <input
@@ -539,92 +614,169 @@
       </div>
     {/if}
   </section>
+  {/if}
 
-  {#if activeTab === "destinos"}
-    <section class="om-panel actions">
-      <button type="button" class="om-btn om-btn--ghost" on:click={selectPage}>Seleccionar página</button>
-      <button type="button" class="om-btn om-btn--ghost" on:click={clearSelection}>Quitar selección</button>
-      <button type="button" class="om-btn om-btn--ghost" on:click={invertSelection}>Invertir</button>
-      <span class="pill">{state.selectedCount} seleccionadas</span>
-    </section>
-    <section class="dest-panel om-panel" aria-label="Carpetas destino">
-      <span class="field-label dest-panel__title">Carpetas destino</span>
-      <div class="dest-grid-wrap dest-grid-wrap--embedded">
-        {#each destinations as d}
-          <div
-            class="dest-card"
-            role="group"
-            aria-label="Destino {d.label}"
-            on:dragover|preventDefault
-            on:drop|preventDefault={() => moveToDest(d.path)}
-          >
-            <div class="dest-card__head">
-              <span class="dest-card__title">{d.label}</span>
-              <span class="dest-card__path">{d.path}</span>
-            </div>
-            <div class="dest-card__actions">
-              <button type="button" class="om-btn om-btn--primary" on:click={() => moveToDest(d.path)}>Mover aquí</button>
-              <button type="button" class="om-btn om-btn--ghost" on:click={() => openDestPreview(d.path)}>Ver carpeta</button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    </section>
-  {:else if activeTab === "organizar"}
+  {#if activeTab === "organizar"}
     <section class="om-panel org-tab-bar">
       <p class="org-tab-bar__text">Organización por lotes (comics, duplicados, etc.) en una ventana aparte.</p>
       <button type="button" class="om-btn om-btn--primary" on:click={() => (orgPanelOpen = true)}>Abrir panel de organización…</button>
     </section>
   {/if}
 
-  <section
-    class="content"
-    style={`grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`}
-  >
-    <article class="gallery om-panel om-panel--lift">
-      <div class="grid" style={`--cell:${gridCellPx}px`}>
-        {#each items as it (it.path)}
-          <button
-            type="button"
-            class="tile"
-            class:selected={it.selected && activeTab === "destinos"}
-            draggable={activeTab === "destinos" && it.kind === "image"}
-            on:dragstart={(e) => onTileDragStart(e, it)}
-            on:click={() => clickItem(it)}
-          >
-            {#if it.thumbDataUrl}
-              <img src={it.thumbDataUrl} alt="" loading="lazy" decoding="async" />
-            {:else}
-              <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
-            {/if}
-            <span class="tile__name">{it.name}</span>
-          </button>
-        {/each}
-      </div>
-    </article>
-
+  {#if activeTab === "destinos"}
     <div
-      class="splitter"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Arrastrar para repartir galería y vista previa"
-      on:pointerdown={beginSplitDrag}
-    ></div>
+      class="destinos-work"
+      class:destinos-work--drag={destSplitDrag}
+      style={`grid-template-rows: minmax(0,${(1 - destPanelRatio).toFixed(4)}fr) 10px minmax(0,${destPanelRatio.toFixed(4)}fr)`}
+    >
+      <div class="destinos-work__top">
+        <section
+          class="content"
+          style={`grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`}
+        >
+          <article class="gallery om-panel om-panel--lift gallery--with-float">
+            <div class="selection-float" role="toolbar" aria-label="Selección">
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
+              <span class="selection-float__count" title="Seleccionadas">{state.selectedCount}</span>
+            </div>
+            <div class="grid" style={`--cell:${gridCellPx}px`}>
+              {#each items as it (it.path)}
+                <button
+                  type="button"
+                  class="tile"
+                  class:selected={it.selected && activeTab === "destinos"}
+                  draggable={activeTab === "destinos" && it.kind === "image"}
+                  on:dragstart={(e) => onTileDragStart(e, it)}
+                  on:click={() => clickItem(it)}
+                >
+                  {#if it.thumbDataUrl}
+                    <img src={it.thumbDataUrl} alt="" loading="lazy" decoding="async" />
+                  {:else}
+                    <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
+                  {/if}
+                  <span class="tile__name">{it.name}</span>
+                </button>
+              {/each}
+            </div>
+          </article>
 
-    <aside class="preview om-panel">
-      {#if selectedPreview?.dataUrl}
-        <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
+          <div
+            class="splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Arrastrar para repartir galería y vista previa"
+            on:pointerdown={beginSplitDrag}
+          ></div>
+
+          <aside class="preview om-panel">
+            {#if selectedPreview?.dataUrl}
+              <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
+            {:else}
+              <div class="preview__empty">Selecciona una miniatura</div>
+            {/if}
+            <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
+          </aside>
+        </section>
+      </div>
+
+      <div
+        class="splitter splitter--h"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Arrastrar para tamaño del panel de destinos"
+        on:pointerdown={beginDestPanelDrag}
+      ></div>
+
+      <section class="dest-panel om-panel dest-panel--bottom" aria-label="Carpetas destino">
+        <span class="field-label dest-panel__title">Carpetas destino</span>
+        <div class="dest-grid-wrap dest-grid-wrap--embedded dest-grid-wrap--scroll">
+          {#each destinations as d}
+            <div
+              class="dest-card"
+              role="group"
+              aria-label="Destino {d.label}"
+              on:dragover|preventDefault
+              on:drop|preventDefault={() => moveToDest(d.path)}
+            >
+              <div class="dest-card__head">
+                <span class="dest-card__title">{d.label}</span>
+                <span class="dest-card__path">{d.path}</span>
+              </div>
+              <div class="dest-card__actions">
+                <button type="button" class="om-btn om-btn--primary" on:click={() => moveToDest(d.path)}>Mover aquí</button>
+                <button type="button" class="om-btn om-btn--ghost" on:click={() => openDestPreview(d.path)}>Ver carpeta</button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      </section>
+    </div>
+  {:else}
+    <section
+      class="content"
+      style={`grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`}
+    >
+      <article class="gallery om-panel om-panel--lift">
+        <div class="grid" style={`--cell:${gridCellPx}px`}>
+          {#each items as it (it.path)}
+            <button
+              type="button"
+              class="tile"
+              class:selected={it.selected && activeTab === "destinos"}
+              draggable={activeTab === "destinos" && it.kind === "image"}
+              on:dragstart={(e) => onTileDragStart(e, it)}
+              on:click={() => clickItem(it)}
+            >
+              {#if it.thumbDataUrl}
+                <img src={it.thumbDataUrl} alt="" loading="lazy" decoding="async" />
+              {:else}
+                <div class="folder-ph">{it.kind === "image" ? "Sin preview" : "📁"}</div>
+              {/if}
+              <span class="tile__name">{it.name}</span>
+            </button>
+          {/each}
+        </div>
+      </article>
+
+      <div
+        class="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Arrastrar para repartir galería y vista previa"
+        on:pointerdown={beginSplitDrag}
+      ></div>
+
+      <aside class="preview om-panel">
+        {#if selectedPreview?.dataUrl}
+          <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
+        {:else}
+          <div class="preview__empty">Selecciona una miniatura</div>
+        {/if}
+        <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
+      </aside>
+    </section>
+  {/if}
+
+  <footer class="pager om-panel pager--bar" aria-label="Paginación y estado">
+    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Primera página" on:click={() => goPage(1)}>|«</button>
+    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Anterior" on:click={() => goPage(Math.max(1, state.page - 1))}>‹</button>
+    {#each pageLinks as item}
+      {#if item === "gap"}
+        <span class="pager__gap" aria-hidden="true">…</span>
       {:else}
-        <div class="preview__empty">Selecciona una miniatura</div>
+        <button
+          type="button"
+          class="om-btn om-btn--ghost pager__num"
+          class:om-btn--primary={item === state.page}
+          title="Ir a la página {item}"
+          on:click={() => goPage(item)}>{item}</button>
       {/if}
-      <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
-    </aside>
-  </section>
-
-  <footer class="pager om-panel">
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(1)}>|«</button>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(Math.max(1, state.page - 1))}>‹</button>
-    <span class="pager__info">{state.total} imágenes · página</span>
+    {/each}
+    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Siguiente" on:click={() => goPage(Math.min(state.totalPages, state.page + 1))}>›</button>
+    <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Última página" on:click={() => goPage(state.totalPages)}>»|</button>
+    <span class="pager__google-line">{state.total} imágenes · página {state.page} de {state.totalPages}</span>
     <label class="pager__jump">
       <input
         class="om-input pager__jump-input"
@@ -636,8 +788,6 @@
       />
       <span class="pager__jump-total">/ {state.totalPages}</span>
     </label>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(Math.min(state.totalPages, state.page + 1))}>›</button>
-    <button type="button" class="om-btn om-btn--ghost om-btn--icon" on:click={() => goPage(state.totalPages)}>»|</button>
     <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
     <div class="grow"></div>
     <span class="status-line">{status}</span>
@@ -802,8 +952,8 @@
     height: 100%;
     display: grid;
     gap: var(--om-space-4);
-    /* tabs · ruta · [opcional] · galería · paginador */
-    grid-template-rows: auto auto 1fr auto;
+    /* tabs · área principal · paginador */
+    grid-template-rows: auto 1fr auto;
     padding: var(--om-space-4) var(--om-space-5);
     font-family: var(--om-font-sans);
     color: var(--om-text-primary);
@@ -811,9 +961,10 @@
     box-sizing: border-box;
   }
 
-  .app.app--extra-row {
-    /* Barra bajo ruta: acciones Destinos o panel Organizar */
-    grid-template-rows: auto auto auto 1fr auto;
+  /* Ruta u Organizar: barra extra bajo pestañas (ruta u org). */
+  .app.app--layout-ruta,
+  .app.app--layout-org {
+    grid-template-rows: auto auto 1fr auto;
   }
 
   .tabs-bar {
@@ -884,23 +1035,6 @@
     white-space: nowrap;
   }
 
-  .actions {
-    display: flex;
-    gap: var(--om-space-3);
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .pill {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    padding: var(--om-space-2) var(--om-space-4);
-    border-radius: 999px;
-    background: var(--om-accent-soft);
-    border: 1px solid rgb(124 140 255 / 0.25);
-    color: var(--om-text-primary);
-  }
-
   .content {
     display: grid;
     gap: 0;
@@ -923,6 +1057,124 @@
   .splitter:hover,
   .splitter:focus-visible {
     background: rgb(124 140 255 / 0.25);
+  }
+
+  .splitter--h {
+    cursor: row-resize;
+    height: 10px;
+    width: auto;
+    margin: -2px 0;
+    touch-action: none;
+    background: linear-gradient(90deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.02));
+  }
+
+  .destinos-work {
+    display: grid;
+    gap: 0;
+    min-height: 0;
+    align-items: stretch;
+  }
+
+  .destinos-work--drag .splitter--h {
+    background: rgb(124 140 255 / 0.35);
+  }
+
+  .destinos-work__top {
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .destinos-work__top > .content {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .dest-panel--bottom {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .dest-grid-wrap--scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .gallery--with-float {
+    position: relative;
+  }
+
+  .selection-float {
+    position: absolute;
+    top: var(--om-space-2);
+    right: var(--om-space-2);
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--om-space-1);
+    flex-wrap: wrap;
+    max-width: calc(100% - var(--om-space-4));
+    padding: var(--om-space-1) var(--om-space-2);
+    border-radius: var(--om-radius-md);
+    background: rgb(8 10 18 / 0.82);
+    border: 1px solid rgb(255 255 255 / 0.1);
+    box-shadow: var(--om-shadow-md);
+    backdrop-filter: blur(8px);
+  }
+
+  .selection-float__count {
+    font-size: 0.7rem;
+    font-weight: 700;
+    min-width: 1.25rem;
+    text-align: center;
+    padding: 0 var(--om-space-1);
+    color: var(--om-accent-2);
+  }
+
+  :global(.om-btn--mini) {
+    padding: var(--om-space-1) var(--om-space-2);
+    font-size: 0.7rem;
+    min-height: 1.5rem;
+    line-height: 1.2;
+  }
+
+  .om-btn--settings {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+  }
+
+  .settings-gear {
+    width: 22px;
+    height: 22px;
+    display: block;
+    flex-shrink: 0;
+  }
+
+  .pager__google-line {
+    font-size: 0.8125rem;
+    color: var(--om-text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .pager__gap {
+    padding: 0 var(--om-space-1);
+    color: var(--om-text-muted);
+    user-select: none;
+  }
+
+  .pager__num {
+    min-width: 2.25rem;
+    padding: var(--om-space-1) var(--om-space-2);
+    font-variant-numeric: tabular-nums;
   }
 
   .gallery {
@@ -1115,6 +1367,30 @@
     flex-wrap: wrap;
   }
 
+  /* Debe ir después de `.pager` para ganar la cascada. */
+  .pager.pager--bar {
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
+  }
+
+  .pager.pager--bar .grow {
+    flex: 1 1 48px;
+    min-width: 24px;
+  }
+
+  .pager.pager--bar .status-line {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: min(42vw, 520px);
+  }
+
   .pager__jump {
     display: inline-flex;
     align-items: center;
@@ -1140,13 +1416,8 @@
     font-size: 0.8125rem;
   }
 
-  .pager__info,
   .status-line {
     font-size: 0.8125rem;
-    color: var(--om-text-secondary);
-  }
-
-  .status-line {
     font-weight: 500;
     color: var(--om-accent-2);
   }

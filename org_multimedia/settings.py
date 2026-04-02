@@ -32,6 +32,7 @@ def load_app_settings() -> dict:
             "dest_preview_thumb_scale": 1.0,
             "dest_preview_geometry": "",
             "web_preview_ratio": 0.4,
+            "web_dest_panel_ratio": 0.26,
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
@@ -85,6 +86,11 @@ def load_app_settings() -> dict:
         else:
             vr = float(data["web_preview_ratio"])
             data["web_preview_ratio"] = max(0.14, min(0.68, vr))
+        if "web_dest_panel_ratio" not in data:
+            data["web_dest_panel_ratio"] = 0.26
+        else:
+            dr = float(data["web_dest_panel_ratio"])
+            data["web_dest_panel_ratio"] = max(0.12, min(0.55, dr))
         if "dest_preview_modal_w" not in data:
             data["dest_preview_modal_w"] = 0.9
         if "dest_preview_modal_h" not in data:
@@ -106,6 +112,7 @@ def load_app_settings() -> dict:
             "dest_preview_thumb_scale": 1.0,
             "dest_preview_geometry": "",
             "web_preview_ratio": 0.4,
+            "web_dest_panel_ratio": 0.26,
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
