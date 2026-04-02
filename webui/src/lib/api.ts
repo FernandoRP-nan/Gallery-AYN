@@ -23,6 +23,8 @@ const isDevBrowser = (): boolean =>
 const mockGalleryState = () => ({
   folder: "",
   total: 0,
+  totalElements: 0,
+  totalBytes: 0,
   page: 1,
   totalPages: 1,
   startIndex: 0,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   let pollTimer: number | null = null;
   import { bridge, type GalleryItem } from "./lib/api";
   import { galleryGridCellPx, destPreviewGridMinPx } from "./lib/thumbScale";
@@ -55,6 +55,7 @@
   let zoomMiniEl: HTMLDivElement | null = null;
   let galleryGridEl: HTMLDivElement | null = null;
   let galleryScrollEl: HTMLDivElement | null = null;
+  let galleryPlainEl: HTMLElement | null = null;
   let galleryGridObservedEl: HTMLDivElement | null = null;
   let galleryGridResizeObserver: ResizeObserver | null = null;
   let galleryGridWidth = 0;
@@ -350,6 +351,10 @@
     items = out.items;
     galleryThumbHydrationToken++;
     void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    if (thumbsPerPage === 0) {
+      await tick();
+      void maybeAutoLoadMoreForViewport();
+    }
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
     pageJumpDraft = out.state.page;
     folder = out.state?.folder ?? target;
@@ -451,6 +456,10 @@
     items = out.items;
     galleryThumbHydrationToken++;
     void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    if (thumbsPerPage === 0) {
+      await tick();
+      void maybeAutoLoadMoreForViewport();
+    }
   };
 
   const goPage = async (page: number) => {
@@ -468,6 +477,11 @@
     if (!el) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
     if (!nearBottom) return;
+    await loadMoreGalleryBatch();
+  }
+
+  async function loadMoreGalleryBatch() {
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMore) return;
     galleryLoadingMore = true;
     try {
       const out = await bridge.galleryLoadMore();
@@ -475,12 +489,28 @@
       const extra = Array.isArray(out?.items) ? out.items : [];
       if (extra.length > 0) {
         items = [...items, ...extra];
-        galleryThumbHydrationToken++;
+        // No incrementar token: evita cancelar hidración HQ en curso de tandas previas.
         void hydrateGalleryThumbsHq(extra, thumbScale, galleryThumbHydrationToken);
       }
     } finally {
       galleryLoadingMore = false;
     }
+  }
+
+  async function maybeAutoLoadMoreForViewport() {
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMore) return;
+    const el = galleryScrollEl ?? galleryPlainEl;
+    if (!el) return;
+    // Si aún no hay suficiente contenido para scrollear, precarga otra tanda.
+    if (el.scrollHeight <= el.clientHeight + 40) {
+      await loadMoreGalleryBatch();
+    }
+  }
+
+  $: if (thumbsPerPage === 0 && galleryHasMore && !galleryLoadingMore && items.length > 0 && (galleryScrollEl || galleryPlainEl)) {
+    setTimeout(() => {
+      void maybeAutoLoadMoreForViewport();
+    }, 0);
   }
 
   const jumpToPageDraft = async () => {
@@ -678,6 +708,19 @@
     return [1, "gap", page - 2, page - 1, page, page + 1, page + 2, "gap", totalPages];
   }
 
+  function formatBytes(size: number): string {
+    const n = Math.max(0, Number(size) || 0);
+    if (n < 1024) return `${n} B`;
+    const units = ["KB", "MB", "GB", "TB"];
+    let v = n / 1024;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
+  }
+
   $: pageLinks = googlePageItems(Number(galleryState.page) || 1, Number(galleryState.totalPages) || 1);
 
   function updateSplitFromClientX(clientX: number) {
@@ -822,7 +865,11 @@
 
   function openPreviewZoom(
     it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" },
-    opts?: { preserveCarousel?: boolean; navItems?: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> }
+    opts?: {
+      preserveCarousel?: boolean;
+      preserveMode?: boolean;
+      navItems?: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }>;
+    }
   ) {
     if (opts?.navItems) zoomNavItems = opts.navItems;
     previewZoomPath = it.path;
@@ -833,7 +880,7 @@
     previewZoomScale = 1;
     previewPanX = 0;
     previewPanY = 0;
-    previewZoomMode = "fit";
+    if (!opts?.preserveMode) previewZoomMode = "fit";
     previewZoomNaturalW = 1;
     previewZoomNaturalH = 1;
     previewZoomCarouselVisible = opts?.preserveCarousel ? previewZoomCarouselVisible : true;
@@ -1035,6 +1082,13 @@
     if (nextY !== previewPanY) previewPanY = nextY;
   }
 
+  function alignFillWidthToTop() {
+    if (previewZoomMode !== "fillWidth") return;
+    const limits = getPanLimits();
+    previewPanX = 0;
+    previewPanY = -limits.y;
+  }
+
   // Snap a "100%" usando el mismo redondeo que muestra la UI.
   // Así garantizamos que al ver "100%" el `pan` no quede desfasado y no haya recorte.
   $: if (previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100) {
@@ -1065,7 +1119,7 @@
     const next = (base + step + zoomNavItems.length) % zoomNavItems.length;
     const it = zoomNavItems[next];
     if (!it) return;
-    openPreviewZoom(it, { preserveCarousel: true, navItems: zoomNavItems });
+    openPreviewZoom(it, { preserveCarousel: true, preserveMode: true, navItems: zoomNavItems });
   }
 
   function beginPan(e: PointerEvent) {
@@ -1127,6 +1181,7 @@
     previewZoomNaturalW = Math.max(1, zoomImgEl.naturalWidth || 1);
     previewZoomNaturalH = Math.max(1, zoomImgEl.naturalHeight || 1);
     clampPanToStage();
+    alignFillWidthToTop();
   }
 
   function openZoomFromGallery(it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }) {
@@ -1765,7 +1820,7 @@
         ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
         : "grid-template-columns:minmax(0,1fr)"}
     >
-      <article class="gallery om-panel om-panel--lift" on:scroll={onGalleryScroll}>
+      <article class="gallery om-panel om-panel--lift" bind:this={galleryPlainEl} on:scroll={onGalleryScroll}>
         <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
           {#each items as it (it.path)}
             <button
@@ -1857,6 +1912,10 @@
         <span class="pager__jump-total">/ {galleryState.totalPages}</span>
       </label>
       <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
+    {:else}
+      <span class="pager__google-line">
+        Cargadas {Number(galleryState?.endIndex ?? 0)}/{Number(galleryState?.total ?? 0)} imágenes · {Number(galleryState?.totalElements ?? Number(galleryState?.total ?? 0) + Number(galleryState?.subfoldersCount ?? 0))} elementos · peso total {formatBytes(Number(galleryState?.totalBytes ?? 0))}
+      </span>
     {/if}
     <div class="grow"></div>
     <span class="status-line">{status}</span>
@@ -2026,6 +2085,7 @@
                 previewPanX = 0;
                 previewPanY = 0;
                 clampPanToStage();
+                if (previewZoomMode === "fillWidth") alignFillWidthToTop();
               }}
             >
               {previewZoomMode === "fit" ? "Completa" : "Rellenar ancho"}
@@ -2090,7 +2150,7 @@
               class="zoom-carousel__item"
               class:zoom-carousel__item--active={it.path === previewZoomPath}
               title={it.name}
-              on:click={() => openPreviewZoom(it, { preserveCarousel: true, navItems: zoomNavItems })}
+              on:click={() => openPreviewZoom(it, { preserveCarousel: true, preserveMode: true, navItems: zoomNavItems })}
             >
               {#if it.thumbDataUrl}
                 <img src={it.thumbDataUrl} alt={it.name} class:thumb--lq={it.thumbQuality === "lq"} />
@@ -3514,10 +3574,10 @@
   }
 
   .zoom-modal__img--fill-width {
-    width: auto;
-    height: 100%;
-    max-height: none;
+    width: 100%;
+    height: auto;
     max-width: none;
+    max-height: none;
   }
 
   .zoom-modal__img--pannable {
