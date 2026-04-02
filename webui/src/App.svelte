@@ -1757,14 +1757,13 @@
           title={pinnedFolders.includes(folder.trim()) ? "Quitar anclaje de esta ruta" : "Anclar esta ruta"}
           on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : pinFolder(folder))}
         >{pinnedFolders.includes(folder.trim()) ? "★" : "☆"}</button>
-        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Cargar ruta" on:click={loadFolder}>⏎</button>
+        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Recargar galería" on:click={reload}>↻</button>
         <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Explorar carpeta" on:click={pickGalleryFolder}>
           <svg class="route-folder-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path fill="currentColor" d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z" />
           </svg>
         </button>
       </div>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Recargar galería" on:click={reload}>↻</button>
     </div>
     <button
       type="button"
@@ -3900,6 +3899,17 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .zoom-modal__tools .om-btn {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .zoom-modal__tools .om-btn:hover {
+    background: rgb(255 255 255 / 0.1);
+    border-color: transparent;
   }
 
   .trash-ico {
