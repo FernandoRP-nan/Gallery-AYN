@@ -36,7 +36,15 @@ El objetivo es una **carpeta** `dist/GaleriaAYN/` con `GaleriaAYN.exe` y DLLs, q
 - **Windows 10/11** de 64 bits.
 - **WebView2** (Microsoft Edge WebView2 Runtime). En la mayoría de equipos ya está instalado; si la ventana no carga la interfaz, que instalen el runtime desde Microsoft: buscar “WebView2 Runtime Download”.
 
-Opcional: **Visual C++ Redistributable** si Windows avisa de DLLs faltantes (poco frecuente con builds recientes).
+Opcional: **Visual C++ Redistributable** (x64) si Windows avisa de DLLs faltantes: [VC++ Redistributable](https://learn.microsoft.com/es-es/cpp/windows/latest-supported-vc-redist).
+
+### «Failed to load Python DLL» / `python312.dll` / ruta con `Temp` y `.zip`
+
+Eso casi siempre significa **no** estar usando la carpeta descomprimida:
+
+1. **No abrir el `.exe` desde dentro del archivo `.zip`** (Explorador de archivos muestra el zip como carpeta, pero los archivos viven en una ruta temporal tipo `...\AppData\Local\Temp\..._GaleriaAYN.zip.ca6\...`). Ahí faltan DLLs o no cargan bien → `LoadLibrary: No se puede encontrar el módulo especificado`.
+2. **Solución:** clic derecho en el `.zip` → **Extraer todo…** → elegir por ejemplo `Escritorio\GaleriaAYN\` → entrar en esa carpeta y ejecutar **`GaleriaAYN.exe`**. Debe existir junto al `.exe` la carpeta **`_internal`** con las DLL.
+3. Si tras extraer bien sigue el error, instalar **Visual C++ Redistributable x64** (enlace arriba).
 
 ## Actualizar el portable después de cambios en el código
 
@@ -51,9 +59,15 @@ Opcional: **Visual C++ Redistributable** si Windows avisa de DLLs faltantes (poc
 
 ## «Se ve una versión vieja de la interfaz» (en quien recibe el .zip)
 
+La aplicación usa **solo** la interfaz web (Svelte). Si PyWebView no puede iniciar, verás un **mensaje de error** (ya no se abre en silencio la interfaz antigua en Tk).
+
 El `.exe` **no** descarga la UI desde internet: **incrusta una copia de `webui/dist` del momento en que ejecutaste PyInstaller**.
 
-Si tus amigos ven pantallas antiguas, casi siempre es porque:
+Si tus amigos ven pantallas antiguas en builds **anteriores**, a veces era porque:
+
+1. **Fallback a Tk:** en versiones viejas, si fallaba WebView se abría la UI clásica en Python; parecía otra versión. Con builds recientes solo hay ventana web o error explícito (y WebView2 suele figurar como «ya instalado» en Complementos de Windows; si aun así falla, revisar antivirus o el mensaje de error).
+
+Si tus amigos ven pantallas antiguas en el **mismo zip**, casi siempre es porque:
 
 1. **No se ejecutó `npm run build`** con el código actual **antes** de `pyinstaller`, o se compiló desde una carpeta sin los últimos cambios.
 2. Se subió un **.zip antiguo** (misma carpeta `dist/GaleriaAYN` de otro día).
