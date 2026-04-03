@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from .bundle_paths import project_root
 from .linux_gui_env import prepare_linux_gui_env
@@ -22,8 +24,26 @@ def _resolve_frontend_url() -> str:
     dist = base / "webui" / "dist" / "index.html"
     if dist.exists():
         # Ruta absoluta (no file://): con http_server=True pywebview sirve por http://127.0.0.1 — mejor GPU/WebKit
-        return str(dist.resolve())
-    # Fallback a dev server Vite por defecto.
+        # WebView2 puede cachear agresivamente entre versiones; ?v=mtime fuerza recarga al actualizar el .exe.
+        try:
+            v = str(int(dist.stat().st_mtime_ns))
+        except OSError:
+            v = "0"
+        uri = dist.resolve().as_uri()
+        parts = urlsplit(uri)
+        query = f"v={v}"
+        if parts.query:
+            query = f"{parts.query}&{query}"
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    # En ejecutable empaquetado no hay fallback a Vite: si falta dist/, otro proceso en :5173
+    # podría mostrar una UI antigua o ajena y parecer "versión incorrecta".
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "No se encontró la interfaz empaquetada (webui/dist/index.html). "
+            "Comprueba que el zip se descomprimió completo, que el antivirus no borró "
+            "carpetas dentro de _internal y que no falta el directorio webui/dist."
+        )
+    # Solo en desarrollo: servidor Vite por defecto.
     return "http://127.0.0.1:5173"
 
 

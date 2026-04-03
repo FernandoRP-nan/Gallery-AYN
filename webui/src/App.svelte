@@ -3002,6 +3002,7 @@
     {/if}
     <div class="grow"></div>
     <span class="status-line">{status}</span>
+    <span class="webui-build-tag" title="Compilación del interfaz (npm run build). Si no coincide con tu último build, el .exe lleva una UI antigua.">{__WEBUI_BUILD__.slice(0, 10)}</span>
     <button
       type="button"
       class="om-btn om-btn--ghost om-btn--compact"
@@ -4460,6 +4461,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: min(26vw, 320px);
+  }
+
+  .webui-build-tag {
+    flex-shrink: 0;
+    font-size: 0.62rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--om-text-muted);
+    opacity: 0.85;
+    user-select: none;
   }
 
   .pager__split-label,

@@ -17,6 +17,10 @@ if (-not (Test-Path "webui\dist\index.html")) {
   Write-Error "No se generó webui/dist. Revisa el build de npm."
 }
 
+# Evita mezclar un .exe nuevo con assets viejos en caché de PyInstaller
+if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+
 Write-Host "== PyInstaller ==" -ForegroundColor Cyan
 python -m pip install --upgrade pip
 pip install pyinstaller pillow pywebview
