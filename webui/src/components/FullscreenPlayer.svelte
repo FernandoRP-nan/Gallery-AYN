@@ -47,6 +47,7 @@
   export let movePan: (e: PointerEvent) => void;
   export let endPan: (e: PointerEvent) => void;
   export let onZoomStageClick: (e: MouseEvent) => void;
+  export let onZoomImageClick: (e: MouseEvent) => void;
   export let onZoomVideoMeta: () => void;
   export let onZoomImageLoad: () => void;
   export let onCropPointerDown: (e: PointerEvent) => void;
@@ -69,7 +70,7 @@
     role="button"
     tabindex="-1"
     aria-label={t("zoom.fullscreenCloseAria")}
-    on:click={() => (previewZoomOpen = false)}
+    on:click|self={() => (previewZoomOpen = false)}
     on:keydown={(e) => {
       if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
         e.preventDefault();
@@ -78,145 +79,30 @@
     }}
   >
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-      class="zoom-modal"
-      class:zoom-modal--carousel-hidden={!previewZoomCarouselVisible}
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      on:click|stopPropagation
-    >
-      <header class="zoom-modal__head">
-        <strong>{previewZoomName}</strong>
-        <div class="zoom-modal__tools">
-          <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.prevNavTitle")} on:click={() => moveZoomBy(-1)}>←</button>
-          <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.nextNavTitle")} on:click={() => moveZoomBy(1)}>→</button>
-          <button
-            type="button"
-            class="om-btn om-btn--ghost om-btn--compact"
-            title={t("zoom.toggleFitTitle")}
-            on:click={() => {
-              previewZoomMode = previewZoomMode === "fit" ? "fillWidth" : "fit";
-              previewPanX = 0;
-              previewPanY = 0;
-              clampPanToStage();
-              previewFillWidthAlignPending = previewZoomMode === "fillWidth";
-              if (previewZoomMode === "fillWidth") alignFillWidthToTop();
-            }}
-          >
-            {previewZoomMode === "fit" ? t("zoom.modeFit") : t("zoom.modeFillWidth")}
-          </button>
-          <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.zoomOutTitle")} on:click={() => zoomStep(-0.2)}>−</button>
-          <button
-            type="button"
-            class="om-btn om-btn--ghost om-btn--compact"
-            title={t("zoom.zoomResetTitle")}
-            on:click={() => {
-              previewZoomScale = 1;
-              if (previewZoomMode === "fit") {
-                previewPanX = 0;
-                previewPanY = 0;
-              }
-            }}
-          >{Math.round(previewZoomScale * 100)}%</button>
-          <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.zoomInTitle")} on:click={() => zoomStep(0.2)}>＋</button>
-          {#if previewZoomMediaType === "image"}
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--compact"
-              class:om-btn--active={zoomEditMode}
-              title={t("zoom.editToggle")}
-              on:click={() => {
-                const next = !zoomEditMode;
-                zoomEditMode = next;
-                if (!next) zoomCropMode = false;
-              }}
-            >✎</button>
-            {#if zoomEditMode}
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact"
-                title={t("zoom.rotateLeft")}
-                on:click={() => void applyZoomRotate(-90)}
-              >↺</button>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact"
-                title={t("zoom.rotateRight")}
-                on:click={() => void applyZoomRotate(90)}
-              >↻</button>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact"
-                class:om-btn--active={zoomCropMode}
-                title={t("zoom.cropToggle")}
-                on:click={() => (zoomCropMode = !zoomCropMode)}
-              >▢</button>
-            {/if}
-            {#if zoomCropMode}
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact"
-                title={t("zoom.applyCrop")}
-                on:click={() => void applyZoomCrop()}
-              >{t("zoom.applyCropBtn")}</button>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact"
-                title={t("zoom.cancelCrop")}
-                on:click={() => (zoomCropMode = false)}
-              >{t("zoom.cancelCropBtn")}</button>
-            {/if}
-          {/if}
-          <button
-            type="button"
-            class="om-btn om-btn--ghost om-btn--compact"
-            title={t("zoom.destinationsFullscreenTitle")}
-            on:click={() => (previewZoomDestMode = !previewZoomDestMode)}
-          >{t("zoom.destinationsBtn")}</button>
-          <button
-            type="button"
-            class="om-btn om-btn--ghost om-btn--compact zoom-trash-btn"
-            title={t("zoom.deleteCurrentTitle")}
-            on:click={() =>
-              openConfirmDelete(t("confirm.deleteImageTitle"), t("confirm.deleteImageDetail"), deleteCurrentZoomImage)}
-          >
-            <svg class="trash-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 6h18" />
-              <path d="M8 6V4h8v2" />
-              <path d="M6 6l1 14h10l1-14" />
-              <path d="M10 11v6" />
-              <path d="M14 11v6" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            class="om-btn om-btn--ghost om-btn--close"
-            aria-label={t("common.closeModalAria")}
-            title={t("common.close")}
-            on:click={() => (previewZoomOpen = false)}>✕</button
-          >
-        </div>
-      </header>
-      <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
-        {#if (previewZoomMediaType === "video" && previewZoomFileUrl) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomDataUrl}
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div
-            class="zoom-modal__stage"
-            role="application"
-            aria-label={t("zoom.stageAria")}
-            bind:this={zoomStageEl}
-            on:pointerdown={beginPan}
-            on:pointermove={movePan}
-            on:pointerup={endPan}
-            on:pointercancel={endPan}
-            on:click={onZoomStageClick}
-          >
+    <div class="zoom-fullscreen-root">
+      <!-- Capa 1: Backdrop (Clic para cerrar) -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div 
+        class="zoom-backdrop" 
+        on:click={onZoomStageClick}
+      ></div>
+
+      <!-- Capa 2: Contenido (Imagen/Video centrados) -->
+      <div class="zoom-content-layer" style="position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; display: flex !important; justify-content: center !important; align-items: center !important; pointer-events: none !important; z-index: 105 !important; background: transparent !important;" on:wheel={zoomWithWheel}>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div 
+          class="zoom-transform-wrapper"
+          style={`transform: ${zoomImgTransform}; transform-origin: center center !important; display: flex !important; justify-content: center !important; align-items: center !important; pointer-events: auto !important; will-change: transform;`}
+          on:click|stopPropagation={onZoomImageClick}
+        >
+          {#if (previewZoomMediaType === "video" && previewZoomFileUrl) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomDataUrl}
             {#if previewZoomMediaType === "video" && previewZoomFileUrl}
               <!-- svelte-ignore a11y_media_has_caption -->
               <video
                 class="zoom-modal__img"
+                style="flex: 0 0 auto !important; max-width: 95vw !important; max-height: 95vh !important; width: auto !important; height: auto !important; object-fit: contain !important;"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
                 bind:this={zoomVideoEl}
@@ -224,124 +110,108 @@
                 controls
                 playsinline
                 preload="metadata"
-                style={`transform: ${zoomImgTransform};`}
                 on:loadedmetadata={onZoomVideoMeta}
               ></video>
             {:else if previewZoomMediaType === "svg" && previewZoomFileUrl}
               <img
                 class="zoom-modal__img"
+                style="flex: 0 0 auto !important; max-width: 95vw !important; max-height: 95vh !important; width: auto !important; height: auto !important; object-fit: contain !important;"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
                 bind:this={zoomImgEl}
                 src={previewZoomFileUrl}
                 alt={previewZoomName}
-                style={`transform: ${zoomImgTransform};`}
                 on:load={onZoomImageLoad}
               />
             {:else if previewZoomDataUrl}
               <img
                 class="zoom-modal__img"
+                style="flex: 0 0 auto !important; max-width: 95vw !important; max-height: 95vh !important; width: auto !important; height: auto !important; object-fit: contain !important;"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
                 bind:this={zoomImgEl}
                 src={previewZoomDataUrl}
                 alt={previewZoomName}
-                style={`transform: ${zoomImgTransform};`}
                 on:load={onZoomImageLoad}
               />
             {/if}
-            {#if zoomHudVisible}
-              <div class="zoom-mini" bind:this={zoomMiniEl}>
-                <img
-                  src={previewZoomMediaType === "svg" ? previewZoomFileUrl : previewZoomDataUrl}
-                  alt=""
-                />
-                <div class="zoom-mini__rect" style={zoomMiniRect}></div>
-              </div>
-            {/if}
-            {#if zoomCropMode && previewZoomDataUrl}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div
-                class="zoom-crop-layer"
-                on:pointerdown={onCropPointerDown}
-                on:pointermove={onCropPointerMove}
-                on:pointerup={onCropPointerUp}
-                on:pointercancel={onCropPointerUp}
-                on:click|stopPropagation
-              >
-                {#if zoomCropMarqueeStyle}
-                  <div class="zoom-crop-marquee" style={zoomCropMarqueeStyle} aria-hidden="true"></div>
-                {/if}
-              </div>
-            {/if}
-            {#if previewZoomDestMode}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div
-                class="zoom-dest-chips"
-                class:zoom-dest-chips--carousel-hidden={!previewZoomCarouselVisible}
-                on:pointerdown|stopPropagation={() => undefined}
-                on:click|stopPropagation={() => undefined}
-              >
-                <button
-                  type="button"
-                  class="om-btn om-btn--ghost om-btn--compact zoom-dest-add"
-                  on:pointerdown|stopPropagation={() => undefined}
-                  on:click={openAddDestForm}
-                >+</button>
-                <button
-                  type="button"
-                  class="om-btn om-btn--ghost om-btn--compact"
-                  disabled={!previewZoomCanUndoMove}
-                  on:click={undoLastZoomMove}
-                >Deshacer</button>
-                {#each destRows as d, i (d.path + "\0zoom\0" + i)}
-                  <button
-                    type="button"
-                    class="zoom-dest-chip"
-                    class:zoom-dest-chip--dragging={draggedDestIdx === i}
-                    data-dest-path={d.path}
-                    title={d.path}
-                    draggable={true}
-                    on:click={() => requestMoveCurrentZoomToDestination(d.path)}
-                    on:contextmenu={(e) => onDestContextMenu(e, i, "fullscreen")}
-                    on:dragstart={(e) => onDestChipDragStart(e, i)}
-                    on:dragend={onDestChipDragEnd}
-                    on:dragenter|preventDefault
-                    on:dragover|preventDefault
-                    on:drop={(e) => onDestDrop(e, d.path)}
-                  >{d.label}</button>
-                {/each}
-              </div>
-            {/if}
+          {/if}
+        </div>
+      </div>
+
+      <!-- Capa 3: Interfaz (HUD) -->
+      {#if zoomHudVisible}
+        <header class="zoom-modal__head">
+          <div class="zoom-modal__info">
+            <strong>{previewZoomName}</strong>
           </div>
-        {:else}
-          <div class="preview__empty">{t("zoom.previewLoading")}</div>
+          <div class="zoom-modal__tools">
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={() => moveZoomBy(-1)}>←</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={() => moveZoomBy(1)}>→</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact"
+              on:click={() => {
+                previewZoomMode = previewZoomMode === "fit" ? "fillWidth" : "fit";
+                previewPanX = 0;
+                previewPanY = 0;
+                clampPanToStage();
+                if (previewZoomMode === "fillWidth") alignFillWidthToTop();
+              }}
+            >
+              {previewZoomMode === "fit" ? t("zoom.modeFit") : t("zoom.modeFillWidth")}
+            </button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={() => zoomStep(-0.2)}>−</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--compact"
+              on:click={() => (previewZoomScale = 1)}
+            >{Math.round(previewZoomScale * 100)}%</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={() => zoomStep(0.2)}>＋</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact zoom-trash-btn" on:click={() => openConfirmDelete(t("confirm.deleteImageTitle"), t("confirm.deleteImageDetail"), deleteCurrentZoomImage)}>
+              <i class="codicon codicon-trash"></i>
+            </button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--close" on:click={() => (previewZoomOpen = false)}>✕</button>
+          </div>
+        </header>
+
+        {#if previewZoomCarouselVisible}
+          <div class="zoom-modal__carousel" bind:this={zoomCarouselEl}>
+            {#each zoomNavItems as it}
+              <button
+                type="button"
+                class="zoom-carousel__item"
+                class:zoom-carousel__item--active={it.path === previewZoomPath}
+                on:click={() => openPreviewZoom(it, { preserveCarousel: true, preserveMode: true, navItems: zoomNavItems })}
+              >
+                {#if it.thumbDataUrl}
+                  <img src={it.thumbDataUrl} alt={it.name} />
+                {/if}
+              </button>
+            {/each}
+          </div>
         {/if}
-      </div>
-      <div
-        class="zoom-modal__carousel"
-        class:zoom-modal__carousel--hidden={!previewZoomCarouselVisible}
-        aria-label={t("zoom.carouselAria")}
-        bind:this={zoomCarouselEl}
-      >
-        {#each zoomNavItems as it}
-          <button
-            type="button"
-            class="zoom-carousel__item"
-            class:zoom-carousel__item--active={it.path === previewZoomPath}
-            title={it.name}
-            on:click={() => openPreviewZoom(it, { preserveCarousel: true, preserveMode: true, navItems: zoomNavItems })}
-          >
-            {#if it.thumbDataUrl}
-              <img src={it.thumbDataUrl} alt={it.name} class:thumb--lq={it.thumbQuality === "lq"} />
-            {:else if it.path.toLowerCase().endsWith(".svg")}
-              <span class="zoom-carousel__svg-ph" aria-hidden="true">SVG</span>
-            {:else if it.kind === "video"}
-              <span class="zoom-carousel__video-ph" aria-hidden="true">▶</span>
-            {/if}
-          </button>
-        {/each}
-      </div>
+
+        <div class="zoom-mini" bind:this={zoomMiniEl}>
+          <img
+            src={previewZoomMediaType === "svg" ? previewZoomFileUrl : previewZoomDataUrl}
+            alt="Mini"
+            loading="lazy"
+          />
+          <div class="zoom-mini__rect" style={zoomMiniRect}></div>
+        </div>
+
+        {#if previewZoomDestMode}
+          <div class="zoom-dest-chips" class:zoom-dest-chips--carousel-hidden={!previewZoomCarouselVisible}>
+            {#each destRows as dest}
+              <button class="zoom-dest-chip" on:click={() => requestMoveCurrentZoomToDestination(dest.path)}>
+                {dest.label}
+              </button>
+            {/each}
+            <button class="zoom-dest-chip zoom-dest-chip--add" on:click={openAddDestForm}>+</button>
+          </div>
+        {/if}
+      {/if}
     </div>
   </div>
 {/if}
@@ -369,31 +239,79 @@
     background: rgb(0 0 0 / 0.28);
     border-radius: var(--om-radius-sm);
   }
-.zoom-modal {
-    width: min(96vw, 1320px);
-    height: min(94vh, 980px);
-    height: min(94dvh, 980px);
-    max-height: 94vh;
-    max-height: 94dvh;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
-    gap: var(--om-space-3);
+.zoom-fullscreen-root {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
     overflow: hidden;
-    min-height: 0;
-    min-width: 0;
   }
-.zoom-modal--carousel-hidden {
-    gap: var(--om-space-2);
-    grid-template-rows: auto minmax(0, 1fr);
+  .zoom-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    cursor: zoom-out;
   }
-.zoom-modal__head {
+  .zoom-fullscreen-root {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    overflow: hidden;
+  }
+  .zoom-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 101;
+    background: transparent;
+    cursor: zoom-out;
+  }
+  .zoom-content-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 105;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    pointer-events: none;
+  }
+  .zoom-transform-wrapper {
+    pointer-events: auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    will-change: transform;
+  }
+  .zoom-modal__head {
+    position: absolute;
+    top: var(--om-space-4);
+    left: var(--om-space-4);
+    right: var(--om-space-4);
+    z-index: 130;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--om-space-3);
-    padding: 0 var(--om-space-2);
-    color: var(--om-text-primary);
-    overflow: visible;
+    padding: var(--om-space-2) var(--om-space-4);
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(12px);
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .zoom-modal__carousel {
+    position: absolute;
+    bottom: var(--om-space-4);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 130;
+    width: min(90vw, 1000px);
+    display: flex;
+    gap: var(--om-space-2);
+    padding: var(--om-space-2);
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(12px);
+    border-radius: var(--om-radius-lg);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow-x: auto;
   }
 .zoom-modal__tools {
     display: inline-flex;
@@ -432,28 +350,21 @@
     border-color: transparent;
   }
 .zoom-modal__body {
-    min-width: 0;
-    min-height: 0;
-    width: 100%;
-    height: 100%;
-    max-height: 100%;
-    min-height: 0;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    border-radius: var(--om-radius-lg);
-    background: radial-gradient(130% 100% at 50% 40%, rgb(124 140 255 / 0.08), transparent 65%);
+    position: absolute;
+    inset: 0;
+    z-index: 110; /* Capa 2: Imagen */
+    display: block;
+    background: radial-gradient(circle at 50% 50%, rgba(124, 140, 255, 0.1), transparent 80%);
   }
 .zoom-modal__stage {
     width: 100%;
     height: 100%;
-    min-height: 0;
-    min-width: 0;
-    display: grid;
-    place-items: center;
+    display: flex;
+    justify-content: center;
+    align-items: center;
     overflow: hidden;
-    cursor: default;
     position: relative;
+    background: transparent;
   }
 .zoom-crop-layer {
     position: absolute;
@@ -469,12 +380,66 @@
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45) inset;
     pointer-events: none;
   }
+  .zoom-fullscreen-root {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    overflow: hidden;
+    background: transparent;
+  }
+  .zoom-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 101;
+    background: transparent;
+    cursor: zoom-out;
+  }
+  .zoom-content-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 105;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    pointer-events: none;
+  }
+  .zoom-transform-wrapper {
+    pointer-events: auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    will-change: transform;
+    transform-origin: center center;
+  }
+  .zoom-modal__img {
+    flex: 0 0 auto;
+    max-width: 95vw;
+    max-height: 95vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: var(--om-radius-md);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.2);
+  }
+  .zoom-modal__img--fill-width {
+    max-width: none;
+    max-height: none;
+    width: 100vw;
+    height: auto;
+  }
+  .zoom-modal__img--pannable {
+    cursor: grab;
+  }
+  .zoom-modal__img--pannable:active {
+    cursor: grabbing;
+  }
 .zoom-dest-chips {
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
     bottom: var(--om-space-3);
-    z-index: 7;
+    z-index: 120;
     display: flex;
     gap: var(--om-space-1);
     align-items: center;
@@ -510,47 +475,22 @@
     background: rgb(124 140 255 / 0.16);
     color: var(--om-text-primary);
   }
-.zoom-modal__img {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: auto;
-    height: auto;
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    border-radius: var(--om-radius-md);
-    box-shadow: 0 16px 42px rgb(0 0 0 / 0.55);
-    background: rgb(0 0 0 / 0.22);
-    transform-origin: center center;
-    transition: transform 0.08s linear;
-    user-select: none;
-    -webkit-user-drag: none;
-  }
-.zoom-modal__img--fill-width {
-    width: 100%;
-    height: auto;
-    max-width: none;
-    max-height: none;
-    top: 0;
-  }
-.zoom-modal__img--pannable {
-    cursor: grab;
-  }
-.zoom-modal__img--pannable:active {
-    cursor: grabbing;
-  }
 .zoom-modal__carousel {
+    position: absolute;
+    bottom: var(--om-space-4);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 120; /* Capa 3: Interfaz */
+    width: min(90vw, 1000px);
     display: flex;
     gap: var(--om-space-2);
     overflow-x: auto;
     overflow-y: hidden;
-    padding: var(--om-space-1) var(--om-space-2);
-    border-radius: var(--om-radius-md);
-    background: rgb(255 255 255 / 0.04);
-    flex: 0 0 auto;
-    position: relative;
-    z-index: 5;
+    padding: var(--om-space-2);
+    border-radius: var(--om-radius-lg);
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
   }
 .zoom-modal__body {
     position: relative;
@@ -587,6 +527,7 @@
     position: absolute;
     right: 12px;
     bottom: 12px;
+    z-index: 120; /* Capa 3: Interfaz */
     width: 130px;
     height: 88px;
     border-radius: var(--om-radius-sm);

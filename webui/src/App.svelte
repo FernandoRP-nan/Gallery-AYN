@@ -1608,7 +1608,7 @@
     previewZoomNaturalW = 1;
     previewZoomNaturalH = 1;
     previewZoomCarouselVisible = opts?.preserveCarousel ? previewZoomCarouselVisible : true;
-    zoomHudVisible = false;
+    zoomHudVisible = true;
     zoomEditMode = false;
     zoomCropMode = false;
     zoomCropDrag = false;
@@ -1918,10 +1918,10 @@
 
   $: zoomImgTransform =
     previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100
-      ? "translate(-50%, -50%)"
+      ? "translate(0px, 0px)"
       : previewZoomMode === "fillWidth"
-        ? `translate(-50%, 0%) translate(0px, ${previewPanY}px) scale(${previewZoomScale})`
-      : `translate(-50%, -50%) translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
+        ? `translate(0px, ${previewPanY}px) scale(${previewZoomScale})`
+      : `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
 
   function zoomWithWheel(e: WheelEvent) {
     if (previewZoomMediaType === "video") {
@@ -2116,23 +2116,35 @@
   }
 
   function onZoomStageClick(e: MouseEvent) {
-    if (zoomCropMode) return;
     if (previewPanMoved) {
       previewPanMoved = false;
       return;
     }
-    // Click en fondo del stage (blur): cerrar fullscreen.
-    if (e.target === e.currentTarget) {
-      if (previewZoomMode === "fillWidth") {
-        toggleZoomCarousel();
-        return;
-      }
-      previewZoomOpen = false;
+    // Con |self en el componente, este handler solo se dispara en el fondo.
+    previewZoomOpen = false;
+  }
+
+  function onZoomImageClick(e: MouseEvent) {
+    if (previewPanMoved) {
+      previewPanMoved = false;
       return;
     }
+    if (zoomCropMode) return;
+
+    // Si hay zoom (manual o fillWidth), reseteamos a vista encajada.
+    if (previewZoomScale > 1.05 || previewZoomMode === "fillWidth") {
+      previewZoomScale = 1;
+      previewZoomMode = "fit";
+      previewPanX = 0;
+      previewPanY = 0;
+      return;
+    }
+
+    // Si no hay zoom, alternamos la visibilidad de toda la interfaz.
     previewPanX = 0;
     previewPanY = 0;
-    toggleZoomCarousel();
+    zoomHudVisible = !zoomHudVisible;
+    previewZoomCarouselVisible = zoomHudVisible;
   }
 
   async function moveCurrentZoomToDestination(destPath: string) {
@@ -2258,9 +2270,7 @@
   function touchZoomHud() {
     zoomHudVisible = true;
     if (zoomHudTimer) clearTimeout(zoomHudTimer);
-    zoomHudTimer = setTimeout(() => {
-      zoomHudVisible = false;
-    }, 1200);
+    // Ya no ocultamos automáticamente por tiempo, el usuario decide cuándo ocultar/mostrar con un clic.
   }
 
   $: zoomMiniRect = (() => {
@@ -3417,6 +3427,7 @@
       on:change={flushThumbScaleOnRelease}
     />
   </footer>
+</main>
 
   {#if previewOpen}
     <div
@@ -3889,6 +3900,7 @@
     {movePan}
     {endPan}
     {onZoomStageClick}
+    {onZoomImageClick}
     {onZoomVideoMeta}
     {onZoomImageLoad}
     {onCropPointerDown}
@@ -3903,5 +3915,4 @@
     {onDestDrop}
     {openPreviewZoom}
   />
-</main>
 
