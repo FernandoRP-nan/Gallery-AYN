@@ -1,0 +1,185 @@
+/* Estilos del modal de ajustes; selectores acotados a .sm-dialog / .sm-backdrop. */
+
+.sm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(4 6 14 / 0.72);
+  display: grid;
+  place-items: center;
+  z-index: 45;
+}
+
+.sm-dialog.modal {
+  width: min(760px, 96vw);
+  max-height: min(92vh, 780px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--om-space-3);
+  padding: var(--om-space-4);
+  box-sizing: border-box;
+  overflow: hidden;
+  border-radius: var(--thumb-tile-radius, var(--om-radius-md));
+  min-height: 0;
+  z-index: 41;
+}
+
+.sm-dialog .modal__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--om-space-3);
+}
+
+.sm-dialog .om-btn--close {
+  min-width: 2rem;
+  padding-inline: 0.45rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.sm-dialog .settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--om-space-3);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.sm-dialog .settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--om-space-2);
+  padding: var(--om-space-2);
+  border: 1px solid color-mix(in oklab, var(--om-border-default) 78%, transparent);
+  border-radius: var(--om-radius-md);
+  background: color-mix(in oklab, var(--om-surface-2) 86%, transparent);
+}
+
+.sm-dialog .settings-group__title {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--om-text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.sm-dialog .field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--om-text-secondary);
+  white-space: nowrap;
+}
+
+.sm-dialog .settings-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--om-text-muted);
+  line-height: 1.4;
+}
+
+.sm-dialog .settings-hint--warn {
+  color: color-mix(in oklab, #ffbf66 78%, var(--om-text-primary));
+}
+
+.sm-dialog .settings-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--om-space-1);
+}
+
+.sm-dialog .settings-preset-chip {
+  min-height: 1.65rem;
+}
+
+.sm-dialog .check {
+  font-size: 0.875rem;
+  color: var(--om-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+}
+
+.sm-dialog .settings-thumb-preview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(var(--cell, 140px), var(--cell, 140px)));
+  gap: var(--thumb-gap, var(--om-space-2));
+  justify-content: start;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 2px 0;
+}
+
+.sm-dialog .set-tile {
+  touch-action: manipulation;
+  position: relative;
+  box-sizing: border-box;
+  user-select: none;
+  background: linear-gradient(180deg, var(--om-surface-3) 0%, var(--om-surface-2) 100%);
+  border: 1px solid var(--om-border-default);
+  border-radius: var(--thumb-tile-radius, var(--om-radius-md));
+  color: var(--om-text-primary);
+  text-align: left;
+  padding: var(--om-space-2);
+  box-shadow: var(--om-shadow-sm);
+  overflow: hidden;
+}
+
+.sm-dialog .settings-thumb-preview--flat .set-tile {
+  background: var(--om-surface-2);
+  box-shadow: none;
+  border-color: color-mix(in oklab, var(--om-border-default) 85%, transparent);
+}
+
+.sm-dialog .settings-thumb-preview--outlined .set-tile {
+  background: transparent;
+  box-shadow: none;
+  border-color: color-mix(in oklab, var(--om-accent) 48%, var(--om-border-default));
+}
+
+.sm-dialog .settings-thumb-preview--no-frame .set-tile {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.sm-dialog .set-folder-ph {
+  width: 100%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.25);
+  border-radius: var(--thumb-image-radius, var(--om-radius-sm));
+  font-size: 0.75rem;
+  color: var(--om-text-muted);
+}
+
+.sm-dialog .set-tile__name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 20%;
+  min-height: 1.6rem;
+  max-height: 2.4rem;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--om-space-2);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: var(--om-text-primary);
+  background: linear-gradient(180deg, rgb(7 8 14 / 0.2) 0%, rgb(7 8 14 / 0.74) 100%);
+  backdrop-filter: blur(6px);
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sm-dialog .settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--om-space-2);
+  flex-wrap: wrap;
+}

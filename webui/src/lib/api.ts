@@ -1,7 +1,13 @@
 export type GalleryItem = {
-  kind: "image" | "folder" | "folder_up";
+  kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break";
   name: string;
   path: string;
+  /** Carpeta destino de la sección (solo kind === "section"). */
+  sectionFolder?: string;
+  /** Fecha del archivo YYYY-MM-DD (vista línea de tiempo). */
+  mtimeIso?: string;
+  /** Tinte de fondo (#rrggbb) según color medio de la sección (agrupar por carpeta). */
+  sectionTintHex?: string;
   thumbDataUrl?: string | null;
   thumbQuality?: "lq" | "hq";
   selected?: boolean;
@@ -42,6 +48,7 @@ const mockGalleryPayload = () => ({
 const devMockApi: WebApi = {
   get_initial_state: async () => ({
     settings: {
+      web_ui_theme: "midnight",
       gallery_thumb_scale: 1,
       dest_preview_thumb_scale: 1,
       web_preview_ratio: 0.4,
@@ -50,6 +57,11 @@ const devMockApi: WebApi = {
       dest_preview_modal_h: 0.8,
       gallery_recent_folders: [] as string[],
       gallery_thumbs_per_page: 48,
+      gallery_include_subfolders: false,
+      gallery_sort_mode: "name",
+      gallery_group_by_folder: false,
+      gallery_timeline_view: false,
+      gallery_section_dominant_color: true,
     },
     gallery: mockGalleryState(),
     destinations: [],
@@ -67,7 +79,19 @@ const devMockApi: WebApi = {
   gallery_select_page: async () => mockGalleryPayload(),
   gallery_clear_selection: async () => mockGalleryPayload(),
   gallery_invert_selection: async () => mockGalleryPayload(),
-  gallery_preview: async () => ({ path: "", name: "", dataUrl: null }),
+  gallery_preview: async () => ({
+    path: "",
+    name: "",
+    dataUrl: null,
+    mediaType: "image" as const,
+    fileUrl: null as string | null,
+  }),
+  gallery_file_stat: async () => ({
+    path: "",
+    name: "",
+    sizeBytes: 0,
+    mtimeIso: "",
+  }),
   destination_move_selected: async () => ({
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
@@ -96,6 +120,8 @@ const devMockApi: WebApi = {
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
   }),
+  gallery_image_rotate: async () => mockGalleryPayload(),
+  gallery_image_crop_normalized: async () => mockGalleryPayload(),
   gallery_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
   destination_preview: async () => ({ items: [], cols: 4 }),
   destination_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
@@ -151,6 +177,7 @@ export const bridge = {
   galleryInvertSelection: () => call<any>("gallery_invert_selection"),
   galleryPreview: (path: string, width: number, height: number) =>
     call<any>("gallery_preview", path, width, height),
+  galleryFileStat: (path: string) => call<any>("gallery_file_stat", path),
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMovePaths: (paths: string[], destPath: string) =>
     call<any>("destination_move_paths", paths, destPath),
@@ -159,6 +186,9 @@ export const bridge = {
   galleryDeletePaths: (paths: string[]) => call<any>("gallery_delete_paths", paths),
   galleryMovePath: (srcPath: string, destPath: string) => call<any>("gallery_move_path", srcPath, destPath),
   galleryUndoLastMove: () => call<any>("gallery_undo_last_move"),
+  galleryImageRotate: (path: string, degrees: number) => call<any>("gallery_image_rotate", path, degrees),
+  galleryImageCropNormalized: (path: string, left: number, top: number, width: number, height: number) =>
+    call<any>("gallery_image_crop_normalized", path, left, top, width, height),
   galleryThumbHq: (path: string, scale: number) => call<any>("gallery_thumb_hq", path, scale),
   destinationPreview: (path: string, scale: number, width: number) =>
     call<any>("destination_preview", path, scale, width),

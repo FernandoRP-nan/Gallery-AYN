@@ -39,5 +39,8 @@
   --om-shadow-lg: 0 12px 40px rgb(0 0 0 / 0.55), 0 0 0 1px var(--om-border-subtle);
   --om-shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.06);
 
+  /* Mancha superior del fondo (radial en .app); varía por tema */
+  --om-bg-spot: rgb(124 140 255 / 0.12);
+
   --om-transition: 0.18s ease;
 }

@@ -1,0 +1,110 @@
+<script lang="ts">
+  import { t } from "../../lib/i18n";
+
+  export let settingsThumbPresetIdx: number;
+  export let settingsThumbScaleDraft: number;
+  export let thumbGapPx: number;
+  export let thumbImageRadiusPx: number;
+  export let thumbTileRadiusPx: number;
+
+  const thumbScalePresets = [
+    { id: "compacto", labelKey: "settings.thumbPresetCompact", value: 0.62 },
+    { id: "medio", labelKey: "settings.thumbPresetMedium", value: 1.0 },
+    { id: "comodo", labelKey: "settings.thumbPresetComfort", value: 1.18 },
+    { id: "grande", labelKey: "settings.thumbPresetLarge", value: 1.45 },
+    { id: "xgrande", labelKey: "settings.thumbPresetXL", value: 1.8 }
+  ] as const;
+</script>
+
+<div class="settings-group">
+  <h3 class="settings-group__title">{t("settings.sectionThumbs")}</h3>
+  <label class="field-label" for="set-thumb-preset">{t("settings.thumbSizePreset")}</label>
+  <input
+    id="set-thumb-preset"
+    class="om-range"
+    type="range"
+    min="0"
+    max={thumbScalePresets.length - 1}
+    step="1"
+    bind:value={settingsThumbPresetIdx}
+    on:input={() => {
+      const p = thumbScalePresets[Math.max(0, Math.min(thumbScalePresets.length - 1, Number(settingsThumbPresetIdx) || 0))];
+      settingsThumbScaleDraft = p.value;
+    }}
+  />
+  <div class="settings-preset-row">
+    {#each thumbScalePresets as p, i}
+      <button
+        type="button"
+        class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
+        class:om-btn--primary={i === settingsThumbPresetIdx}
+        on:click={() => {
+          settingsThumbPresetIdx = i;
+          settingsThumbScaleDraft = p.value;
+        }}
+      >{t(p.labelKey)}</button>
+    {/each}
+  </div>
+  <label class="field-label" for="set-thumb-scale"
+    >{t("settings.fineTune")} {Math.round(settingsThumbScaleDraft * 100)}%</label
+  >
+  <input
+    id="set-thumb-scale"
+    class="om-range"
+    type="range"
+    min="0.01"
+    max="2.25"
+    step="0.01"
+    bind:value={settingsThumbScaleDraft}
+  />
+  <label class="field-label" for="set-thumb-gap"
+    >{t("settings.thumbGap")} {Math.round(thumbGapPx)}px</label
+  >
+  <input
+    id="set-thumb-gap"
+    class="om-range"
+    type="range"
+    min="0"
+    max="20"
+    step="1"
+    bind:value={thumbGapPx}
+  />
+  <label class="field-label" for="set-thumb-radius"
+    >{t("settings.thumbImageRadius")} {Math.round(thumbImageRadiusPx)}px</label
+  >
+  <input
+    id="set-thumb-radius"
+    class="om-range"
+    type="range"
+    min="0"
+    max="18"
+    step="1"
+    bind:value={thumbImageRadiusPx}
+  />
+  <label class="field-label" for="set-tile-radius"
+    >{t("settings.thumbTileRadius")} {Math.round(thumbTileRadiusPx)}px</label
+  >
+  <input
+    id="set-tile-radius"
+    class="om-range"
+    type="range"
+    min="0"
+    max="28"
+    step="1"
+    bind:value={thumbTileRadiusPx}
+  />
+  <div class="settings-preset-row">
+    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 0)}
+      >{t("settings.tileRadiusNone")}</button
+    >
+    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 6)}
+      >{t("settings.tileRadiusSoft")}</button
+    >
+    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 12)}
+      >{t("settings.tileRadiusMedium")}</button
+    >
+    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 18)}
+      >{t("settings.tileRadiusHigh")}</button
+    >
+  </div>
+</div>

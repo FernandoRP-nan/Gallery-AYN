@@ -46,6 +46,11 @@ def load_app_settings() -> dict:
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
+            "gallery_include_subfolders": False,
+            "gallery_sort_mode": "name",
+            "gallery_group_by_folder": False,
+            "gallery_timeline_view": False,
+            "gallery_section_dominant_color": True,
         }
     try:
         with path.open(encoding="utf-8") as f:
@@ -127,6 +132,27 @@ def load_app_settings() -> dict:
             data["dest_preview_modal_h"] = 0.8
         if "window_start_maximized" not in data:
             data["window_start_maximized"] = True
+        if "gallery_include_subfolders" not in data:
+            data["gallery_include_subfolders"] = False
+        else:
+            data["gallery_include_subfolders"] = bool(data["gallery_include_subfolders"])
+        if "gallery_sort_mode" not in data:
+            data["gallery_sort_mode"] = "name"
+        else:
+            sm = str(data["gallery_sort_mode"]).lower()
+            data["gallery_sort_mode"] = sm if sm in ("name", "mtime") else "name"
+        if "gallery_group_by_folder" not in data:
+            data["gallery_group_by_folder"] = False
+        else:
+            data["gallery_group_by_folder"] = bool(data["gallery_group_by_folder"])
+        if "gallery_timeline_view" not in data:
+            data["gallery_timeline_view"] = False
+        else:
+            data["gallery_timeline_view"] = bool(data["gallery_timeline_view"])
+        if "gallery_section_dominant_color" not in data:
+            data["gallery_section_dominant_color"] = True
+        else:
+            data["gallery_section_dominant_color"] = bool(data["gallery_section_dominant_color"])
         return data
     except (OSError, json.JSONDecodeError):
         return {
@@ -156,6 +182,11 @@ def load_app_settings() -> dict:
             "dest_preview_modal_w": 0.9,
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
+            "gallery_include_subfolders": False,
+            "gallery_sort_mode": "name",
+            "gallery_group_by_folder": False,
+            "gallery_timeline_view": False,
+            "gallery_section_dominant_color": True,
         }
 
 

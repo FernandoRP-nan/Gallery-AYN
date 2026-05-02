@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import datetime
 import io
 import os
 import shutil
@@ -13,7 +14,31 @@ from pathlib import Path
 
 from .fs_utils import ensure_unique_destination
 from .gallery_images import make_thumbnail_photoimage
-from .gallery_paths import list_subdirs, scan_images_flat
+from .gallery_paths import (
+    list_subdirs,
+    scan_images_flat,
+    scan_media_flat,
+    scan_media_recursive,
+    sort_image_paths,
+)
+from .section_color import accent_hex_from_paths
+
+# Meses en español para cabeceras de línea de tiempo (índice 1–12).
+_MONTH_NAMES_ES = (
+    "",
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
 from .media_organizer import MediaOrganizer
 from .settings import load_app_settings, save_app_settings
 
@@ -22,6 +47,28 @@ try:
 except Exception:  # pragma: no cover
     Image = None
     ImageOps = None
+
+
+def _save_pil_to_path(im: Image.Image, path: Path) -> None:
+    """Guarda una imagen PIL respetando el tipo de archivo cuando es posible."""
+    if Image is None:
+        raise RuntimeError("Pillow no disponible")
+    ext = path.suffix.lower()
+    if ext in (".jpg", ".jpeg"):
+        rgb = im.convert("RGB") if im.mode in ("RGBA", "P", "LA") else im
+        rgb.save(path, format="JPEG", quality=95, optimize=True)
+    elif ext == ".png":
+        im.save(path, format="PNG", optimize=True)
+    elif ext == ".webp":
+        im.save(path, format="WEBP", quality=90, method=4)
+    elif ext in (".bmp",):
+        im.convert("RGB").save(path, format="BMP")
+    elif ext in (".gif",):
+        im.save(path, format="GIF", save_all=True)
+    elif ext in (".tif", ".tiff"):
+        im.save(path, format="TIFF", compression="tiff_lzw")
+    else:
+        im.save(path)
 
 
 def _thumb_px_from_gallery_scale(scale: float) -> int:
@@ -130,6 +177,16 @@ class WebApi:
         self._last_gallery_move: tuple[Path, Path] | None = None
         # Caché (ruta, tamaño, perfil) -> (mtime, data_url)
         self._thumb_cache: dict[tuple[str, int, str], tuple[float, str | None]] = {}
+        # [start, end), ruta de carpeta de sección, etiqueta (solo modo agrupar por carpeta).
+        self._gallery_section_spans: list[tuple[int, int, str, str]] = []
+        # [start, end), clave YYYY-MM, etiqueta visible (solo modo línea de tiempo).
+        self._gallery_timeline_spans: list[tuple[int, int, str, str]] = []
+
+    def _is_grouped_mode(self) -> bool:
+        return bool(self.settings.get("gallery_group_by_folder", False))
+
+    def _is_timeline_mode(self) -> bool:
+        return bool(self.settings.get("gallery_timeline_view", False))
 
     def _is_unlimited_mode(self) -> bool:
         return int(self.settings.get("gallery_thumbs_per_page", 48)) <= 0
@@ -150,6 +207,11 @@ class WebApi:
             hit = self._thumb_cache.get(key)
             if hit is not None and hit[0] == mtime:
                 return hit[1]
+        if path.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS:
+            return None
+        # Pillow no rasteriza SVG de forma fiable; la UI usa `file://` en vista previa.
+        if path.suffix.lower() == ".svg":
+            return None
         if profile == "lq":
             # Fase 1: miniatura rápida (menos calidad) para pintar la rejilla antes.
             data = _thumb_jpeg_data_url_square(path, max(48, int(thumb_px * 0.55)), quality=40)
@@ -234,6 +296,8 @@ class WebApi:
         threading.Thread(target=worker, daemon=True).start()
 
     def _total_pages(self) -> int:
+        if self._is_grouped_mode() or self._is_timeline_mode():
+            return 1
         total = len(self.ordered_paths)
         if total == 0:
             return 1
@@ -247,6 +311,9 @@ class WebApi:
         self.gallery_page = max(0, min(self.gallery_page, tp - 1))
 
     def _slice(self) -> tuple[int, int]:
+        if self._is_grouped_mode() or self._is_timeline_mode():
+            total = len(self.ordered_paths)
+            return 0, total
         if self._is_unlimited_mode():
             total = len(self.ordered_paths)
             if total <= 0:
@@ -262,22 +329,107 @@ class WebApi:
         e = min(len(self.ordered_paths), s + ps)
         return s, e
 
-    def _build_image_items(self, slice_paths: list[Path], thumb_px: int, selected_frozenset: frozenset[Path]) -> list[dict]:
+    @staticmethod
+    def _path_mtime_iso(p: Path) -> str:
+        try:
+            ts = p.stat().st_mtime
+            return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _path_year_month(p: Path) -> tuple[int, int]:
+        try:
+            ts = p.stat().st_mtime
+            dt = datetime.datetime.fromtimestamp(ts)
+            return (dt.year, dt.month)
+        except OSError:
+            return (1970, 1)
+
+    def _compute_timeline_spans(self, ordered: list[Path]) -> list[tuple[int, int, str, str]]:
+        """Rangos por (año, mes) sobre una lista ya ordenada por fecha de modificación."""
+        if not ordered:
+            return []
+        spans: list[tuple[int, int, str, str]] = []
+        i = 0
+        while i < len(ordered):
+            y, m = self._path_year_month(ordered[i])
+            j = i + 1
+            while j < len(ordered) and self._path_year_month(ordered[j]) == (y, m):
+                j += 1
+            key = f"{y}-{m:02d}"
+            label = f"{_MONTH_NAMES_ES[m]} {y}"
+            spans.append((i, j, key, label))
+            i = j
+        return spans
+
+    def _build_image_items(
+        self,
+        slice_paths: list[Path],
+        thumb_px: int,
+        selected_frozenset: frozenset[Path],
+        *,
+        timeline_meta: bool = False,
+    ) -> list[dict]:
         def _one_image_item(p: Path) -> dict:
-            return {
-                "kind": "image",
+            ext = p.suffix.lower()
+            is_video = ext in MediaOrganizer.VIDEO_EXTENSIONS
+            d: dict = {
+                "kind": "video" if is_video else "image",
                 "name": p.name,
                 "path": str(p),
                 "selected": p in selected_frozenset,
-                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
+                "thumbDataUrl": None if is_video else self._thumb_data_url_cached(p, thumb_px, "lq"),
                 "thumbQuality": "lq",
             }
+            if timeline_meta:
+                d["mtimeIso"] = self._path_mtime_iso(p)
+            return d
 
         if not slice_paths:
             return []
         max_workers = min(8, max(1, len(slice_paths)))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(_one_image_item, slice_paths))
+
+    def _compute_grouped_paths(self, root: Path) -> tuple[list[Path], list[tuple[int, int, str, str]]]:
+        """Una sección por la carpeta actual (archivos directos) y por cada subcarpeta inmediata."""
+        mode = str(self.settings.get("gallery_sort_mode", "name"))
+        ordered: list[Path] = []
+        spans: list[tuple[int, int, str, str]] = []
+        idx = 0
+        root_files = sort_image_paths(scan_media_flat(root), mode)
+        spans.append((idx, idx + len(root_files), str(root), "(esta carpeta)"))
+        ordered.extend(root_files)
+        idx += len(root_files)
+        for sub in list_subdirs(root):
+            files = sort_image_paths(scan_media_flat(sub), mode)
+            spans.append((idx, idx + len(files), str(sub), sub.name))
+            ordered.extend(files)
+            idx += len(files)
+        return ordered, spans
+
+    def _scan_ordered_paths(self, folder: Path) -> list[Path]:
+        """Lista de imágenes según ajustes de recursión, agrupación u orden."""
+        self._gallery_section_spans = []
+        self._gallery_timeline_spans = []
+        if self._is_grouped_mode():
+            ordered, spans = self._compute_grouped_paths(folder)
+            self._gallery_section_spans = spans
+            return ordered
+        if self._is_timeline_mode():
+            include = bool(self.settings.get("gallery_include_subfolders", False))
+            raw = scan_media_recursive(folder) if include else scan_media_flat(folder)
+            ordered = sort_image_paths(raw, "mtime")
+            self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
+            return ordered
+        include = bool(self.settings.get("gallery_include_subfolders", False))
+        if include:
+            raw = scan_media_recursive(folder)
+        else:
+            raw = scan_media_flat(folder)
+        sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
+        return sort_image_paths(raw, sort_mode)
 
     def _gallery_state(self) -> dict:
         total = len(self.ordered_paths)
@@ -297,7 +449,58 @@ class WebApi:
             "subfoldersCount": len(self.subfolders),
         }
 
+    def _build_gallery_items_grouped(self) -> list[dict]:
+        items: list[dict] = []
+        thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+        selected_frozenset = frozenset(self.selected)
+        use_tint = bool(self.settings.get("gallery_section_dominant_color", True))
+        for start, end, folder_path, label in self._gallery_section_spans:
+            slice_paths = self.ordered_paths[start:end]
+            sec: dict = {
+                "kind": "section",
+                "name": label,
+                "path": f"section:{folder_path}",
+                "sectionFolder": folder_path,
+                "thumbDataUrl": None,
+            }
+            if use_tint and slice_paths:
+                img_only = [
+                    p
+                    for p in slice_paths
+                    if p.suffix.lower() in MediaOrganizer.IMAGE_EXTENSIONS and p.suffix.lower() != ".svg"
+                ]
+                th = accent_hex_from_paths(img_only, max_samples=3) if img_only else None
+                if th:
+                    sec["sectionTintHex"] = th
+            items.append(sec)
+            items.extend(self._build_image_items(slice_paths, thumb_px, selected_frozenset))
+        return items
+
+    def _build_gallery_items_timeline(self) -> list[dict]:
+        items: list[dict] = []
+        thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+        selected_frozenset = frozenset(self.selected)
+        for start, end, key, label in self._gallery_timeline_spans:
+            items.append(
+                {
+                    "kind": "section",
+                    "name": label,
+                    "path": f"section:timeline:{key}",
+                    "sectionFolder": "",
+                    "thumbDataUrl": None,
+                }
+            )
+            slice_paths = self.ordered_paths[start:end]
+            items.extend(
+                self._build_image_items(slice_paths, thumb_px, selected_frozenset, timeline_meta=True)
+            )
+        return items
+
     def _build_gallery_items(self) -> list[dict]:
+        if self._is_grouped_mode():
+            return self._build_gallery_items_grouped()
+        if self._is_timeline_mode():
+            return self._build_gallery_items_timeline()
         s, e = self._slice()
         items: list[dict] = []
         if self.gallery_page == 0 and self.gallery_folder is not None:
@@ -320,13 +523,15 @@ class WebApi:
             self._merge_recent_folder(str(folder))
             save_app_settings(self.settings)
             self.subfolders = list_subdirs(folder)
-            self.ordered_paths = scan_images_flat(folder)
+            self.ordered_paths = self._scan_ordered_paths(folder)
             self._schedule_gallery_total_bytes_recompute()
             self.selected.clear()
             self.gallery_page = 0
             self.gallery_unlimited_loaded = (
                 min(len(self.ordered_paths), self._unlimited_batch_size()) if self._is_unlimited_mode() else 0
             )
+            if (self._is_grouped_mode() or self._is_timeline_mode()) and self._is_unlimited_mode():
+                self.gallery_unlimited_loaded = len(self.ordered_paths)
             return {
                 "state": self._gallery_state(),
                 "items": self._build_gallery_items(),
@@ -341,11 +546,14 @@ class WebApi:
             self._clear_thumb_cache()
             folder = self.gallery_folder
             self.subfolders = list_subdirs(folder)
-            self.ordered_paths = scan_images_flat(folder)
+            self.ordered_paths = self._scan_ordered_paths(folder)
             self._schedule_gallery_total_bytes_recompute()
             self._clamp_page()
             if self._is_unlimited_mode():
-                self.gallery_unlimited_loaded = min(len(self.ordered_paths), self._unlimited_batch_size())
+                if self._is_grouped_mode() or self._is_timeline_mode():
+                    self.gallery_unlimited_loaded = len(self.ordered_paths)
+                else:
+                    self.gallery_unlimited_loaded = min(len(self.ordered_paths), self._unlimited_batch_size())
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
 
     def gallery_refresh_items(self) -> dict:
@@ -367,6 +575,8 @@ class WebApi:
     def gallery_load_more(self) -> dict:
         with self.lock:
             if not self.gallery_folder:
+                return {"state": self._gallery_state(), "items": [], "hasMore": False}
+            if self._is_grouped_mode() or self._is_timeline_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
             if not self._is_unlimited_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
@@ -431,9 +641,57 @@ class WebApi:
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
 
     def gallery_preview(self, path: str, width: int, height: int) -> dict:
-        p = Path(path)
+        p = Path(path).expanduser().resolve()
+        if not p.is_file():
+            return {
+                "path": str(p),
+                "name": p.name,
+                "dataUrl": None,
+                "mediaType": "image",
+                "fileUrl": None,
+            }
+        ext = p.suffix.lower()
+        if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            return {
+                "path": str(p),
+                "name": p.name,
+                "dataUrl": None,
+                "mediaType": "video",
+                "fileUrl": p.as_uri(),
+            }
+        if ext == ".svg":
+            return {
+                "path": str(p),
+                "name": p.name,
+                "dataUrl": None,
+                "mediaType": "svg",
+                "fileUrl": p.as_uri(),
+            }
         data_url = _img_to_data_url_contain(p, max(80, int(width)), max(80, int(height)))
-        return {"path": str(p), "name": p.name, "dataUrl": data_url}
+        return {
+            "path": str(p),
+            "name": p.name,
+            "dataUrl": data_url,
+            "mediaType": "image",
+            "fileUrl": None,
+        }
+
+    def gallery_file_stat(self, path: str) -> dict:
+        """Metadatos básicos para el menú contextual (tamaño, fecha de modificación local)."""
+        p = Path(path).expanduser().resolve()
+        if not p.is_file():
+            raise ValueError("Archivo no encontrado.")
+        try:
+            st = p.stat()
+        except OSError as exc:
+            raise ValueError(f"No se pudo leer el archivo: {exc}") from exc
+        mtime = datetime.datetime.fromtimestamp(st.st_mtime)
+        return {
+            "path": str(p),
+            "name": p.name,
+            "sizeBytes": int(st.st_size),
+            "mtimeIso": mtime.strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     def destination_move_selected(self, dest_path: str) -> dict:
         dest_dir = Path(dest_path).expanduser().resolve()
@@ -701,6 +959,70 @@ class WebApi:
         dests.insert(to_idx, item)
         save_app_settings(self.settings)
         return self.destinations_get()
+
+    def gallery_image_rotate(self, path: str, degrees: int) -> dict:
+        """Rota la imagen en disco (±90° o 180°)."""
+        if Image is None or ImageOps is None:
+            raise ValueError("Pillow no está disponible.")
+        d = int(degrees)
+        if d not in (-180, -90, 90, 180):
+            raise ValueError("Solo rotaciones de ±90° o 180°.")
+        p = Path(path).expanduser().resolve()
+        if not p.is_file():
+            raise ValueError("Archivo no encontrado.")
+        if p.suffix.lower() not in MediaOrganizer.IMAGE_EXTENSIONS:
+            raise ValueError("Formato no soportado para edición.")
+        if p.suffix.lower() == ".svg":
+            raise ValueError("SVG no se puede rotar desde aquí (usa un editor vectorial).")
+        with self.lock:
+            self._clear_thumb_cache()
+            try:
+                with Image.open(p) as im:
+                    im = ImageOps.exif_transpose(im)
+                    im = im.rotate(-d, expand=True, resample=Image.Resampling.BICUBIC)
+                    _save_pil_to_path(im, p)
+            except Exception as exc:
+                raise ValueError(f"No se pudo rotar: {exc}") from exc
+        return self.gallery_reload()
+
+    def gallery_image_crop_normalized(self, path: str, left: float, top: float, width: float, height: float) -> dict:
+        """Recorte con coordenadas 0–1 respecto al bitmap tras orientación EXIF."""
+        if Image is None or ImageOps is None:
+            raise ValueError("Pillow no está disponible.")
+        p = Path(path).expanduser().resolve()
+        if not p.is_file():
+            raise ValueError("Archivo no encontrado.")
+        if p.suffix.lower() not in MediaOrganizer.IMAGE_EXTENSIONS:
+            raise ValueError("Formato no soportado para edición.")
+        if p.suffix.lower() == ".svg":
+            raise ValueError("SVG no se puede recortar desde aquí (usa un editor vectorial).")
+        l = max(0.0, min(1.0, float(left)))
+        t = max(0.0, min(1.0, float(top)))
+        w = max(0.0, min(1.0, float(width)))
+        h = max(0.0, min(1.0, float(height)))
+        if w < 0.02 or h < 0.02:
+            raise ValueError("El recorte es demasiado pequeño.")
+        if l + w > 1.0 + 1e-6:
+            w = 1.0 - l
+        if t + h > 1.0 + 1e-6:
+            h = 1.0 - t
+        with self.lock:
+            self._clear_thumb_cache()
+            try:
+                with Image.open(p) as im:
+                    im = ImageOps.exif_transpose(im)
+                    W, H = im.size
+                    x0 = int(round(l * W))
+                    y0 = int(round(t * H))
+                    x1 = int(round((l + w) * W))
+                    y1 = int(round((t + h) * H))
+                    x1 = max(x0 + 1, min(W, x1))
+                    y1 = max(y0 + 1, min(H, y1))
+                    im = im.crop((x0, y0, x1, y1))
+                    _save_pil_to_path(im, p)
+            except Exception as exc:
+                raise ValueError(f"No se pudo recortar: {exc}") from exc
+        return self.gallery_reload()
 
     def settings_patch(self, data: dict) -> dict:
         self.settings.update(data)

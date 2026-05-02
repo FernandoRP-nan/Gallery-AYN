@@ -1,0 +1,72 @@
+/* Overrides por `data-om-theme` en <html> (import global desde main.ts, fuera del scope de Svelte). */
+/* Medianoche = :root en design-tokens.css (sin atributo o tras quitar data-om-theme). */
+[data-om-theme="ocean"] {
+  --om-bg-base: #06121c;
+  --om-bg-elevated: #0c1a2a;
+  --om-surface-1: #122536;
+  --om-surface-2: #183044;
+  --om-surface-3: #1e3c56;
+  --om-text-primary: #e8f4ff;
+  --om-text-secondary: #9ec8e8;
+  --om-text-muted: #5a7a9a;
+  --om-accent: #38b8e8;
+  --om-accent-soft: rgb(56 184 232 / 0.2);
+  --om-accent-glow: rgb(56 184 232 / 0.38);
+  --om-accent-2: #5ee4d4;
+  --om-bg-spot: rgb(56 184 232 / 0.14);
+}
+
+[data-om-theme="ember"] {
+  --om-bg-base: #100b0a;
+  --om-bg-elevated: #1a1210;
+  --om-surface-1: #241a16;
+  --om-surface-2: #2e221c;
+  --om-surface-3: #3a2a22;
+  --om-text-primary: #fff5f0;
+  --om-text-secondary: #d8c4b8;
+  --om-text-muted: #9a8578;
+  --om-accent: #ff8a65;
+  --om-accent-soft: rgb(255 138 101 / 0.2);
+  --om-accent-glow: rgb(255 138 101 / 0.35);
+  --om-accent-2: #ffd54f;
+  --om-bg-spot: rgb(255 138 101 / 0.12);
+}
+
+[data-om-theme="forest"] {
+  --om-bg-base: #080f0c;
+  --om-bg-elevated: #0d1612;
+  --om-surface-1: #14221c;
+  --om-surface-2: #1a2e26;
+  --om-surface-3: #224032;
+  --om-text-primary: #eef7f2;
+  --om-text-secondary: #a8c9b8;
+  --om-text-muted: #6a9080;
+  --om-accent: #5ecf8a;
+  --om-accent-soft: rgb(94 207 138 / 0.2);
+  --om-accent-glow: rgb(94 207 138 / 0.35);
+  --om-accent-2: #7dd3c0;
+  --om-bg-spot: rgb(94 207 138 / 0.12);
+}
+
+[data-om-theme="paper"] {
+  --om-bg-base: #eef0f6;
+  --om-bg-elevated: #ffffff;
+  --om-surface-1: #e4e8f2;
+  --om-surface-2: #dce2ef;
+  --om-surface-3: #d0d8ea;
+  --om-border-subtle: rgb(0 0 0 / 0.06);
+  --om-border-default: rgb(0 0 0 / 0.1);
+  --om-border-strong: rgb(0 0 0 / 0.14);
+  --om-text-primary: #1a1d2e;
+  --om-text-secondary: #4a5068;
+  --om-text-muted: #7a8199;
+  --om-accent: #4c5dff;
+  --om-accent-soft: rgb(76 93 255 / 0.16);
+  --om-accent-glow: rgb(76 93 255 / 0.28);
+  --om-accent-2: #0891b2;
+  --om-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.08);
+  --om-shadow-md: 0 4px 12px rgb(0 0 0 / 0.1), 0 0 0 1px var(--om-border-subtle);
+  --om-shadow-lg: 0 12px 40px rgb(0 0 0 / 0.14), 0 0 0 1px var(--om-border-subtle);
+  --om-shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.9);
+  --om-bg-spot: rgb(76 93 255 / 0.08);
+}

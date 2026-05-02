@@ -2,7 +2,17 @@
   import { onDestroy, onMount, tick } from "svelte";
   let pollTimer: number | null = null;
   import { bridge, type GalleryItem } from "./lib/api";
+  import ConfirmDeleteModal from "./components/ConfirmDeleteModal.svelte";
+  import LoadOverlay from "./components/LoadOverlay.svelte";
+  import SettingsModal from "./components/SettingsModal.svelte";
+  import { t } from "./lib/i18n";
   import { galleryGridCellPx } from "./lib/thumbScale";
+  import {
+    applyUiThemeToDocument,
+    normalizeUiTheme,
+    readCachedUiTheme,
+    type UiThemeId,
+  } from "./lib/uiTheme";
 
   const BLANK_DRAG_IMG =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -12,8 +22,14 @@
   let items: GalleryItem[] = [];
   /** Carpetas destino (mismo patrón reactivo que `items`: `let` + asignación tras el API). */
   let destRows: Array<{ label: string; path: string }> = [];
-  let selectedPreview: { path: string; name: string; dataUrl: string | null } | null = null;
-  let status = "Listo";
+  let selectedPreview: {
+    path: string;
+    name: string;
+    dataUrl: string | null;
+    mediaType?: "image" | "video" | "svg";
+    fileUrl?: string | null;
+  } | null = null;
+  let status = t("status.ready");
   let thumbScale = 1;
   let previewOpen = false;
   let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
@@ -69,6 +85,9 @@
   let zoomStageEl: HTMLDivElement | null = null;
   let zoomCarouselEl: HTMLDivElement | null = null;
   let zoomImgEl: HTMLImageElement | null = null;
+  let zoomVideoEl: HTMLVideoElement | null = null;
+  let previewZoomMediaType: "image" | "video" | "svg" = "image";
+  let previewZoomFileUrl: string | null = null;
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
@@ -80,7 +99,21 @@
   let galleryGridResizeObserver: ResizeObserver | null = null;
   let galleryGridWidth = 0;
   const GALLERY_GRID_EDGE_PAD_PX = 8;
-  let zoomNavItems: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
+  let zoomNavItems: Array<{
+    path: string;
+    name: string;
+    thumbDataUrl?: string | null;
+    thumbQuality?: "lq" | "hq";
+    kind?: GalleryItem["kind"];
+  }> = [];
+  /** Modo edición fullscreen: rotación y recorte (persisten en disco vía backend). */
+  let zoomEditMode = false;
+  let zoomCropMode = false;
+  let zoomCropDrag = false;
+  let zoomCropStartX = 0;
+  let zoomCropStartY = 0;
+  let zoomCropCurX = 0;
+  let zoomCropCurY = 0;
   let deferredZoomMoveRefresh: { state: any; items: GalleryItem[] } | null = null;
   let galleryThumbHydrationToken = 0;
   let galleryLoadingMore = false;
@@ -95,6 +128,17 @@
   let folderForwardStack: string[] = [];
   /** Panel organizador en ventana flotante (tarea por lotes). */
   let orgPanelOpen = false;
+  /** Menú Vista (subcarpetas, orden, futuro agrupar). */
+  let viewMenuOpen = false;
+  let includeSubfolders = false;
+  let groupByFolder = false;
+  /** Tinte de cabecera según color medio de imágenes (solo vista agrupada por carpeta). */
+  let sectionDominantColor = true;
+  /** Vista calendario: secciones por mes; marcas por día según zoom (solo cliente). */
+  let timelineView = false;
+  let gallerySortMode: "name" | "mtime" = "name";
+  /** Resaltado al arrastrar sobre encabezado de sección (agrupar por carpeta). */
+  let dragOverSectionPath: string | null = null;
   let settingsOpen = false;
   let thumbsPerPage = 48;
   let thumbsPerPageBackup = 48;
@@ -120,12 +164,27 @@
   };
   let keyboardShortcuts = { ...defaultKeyboardShortcuts };
   let keyboardShortcutsBackup = { ...defaultKeyboardShortcuts };
+  let uiTheme: UiThemeId = readCachedUiTheme();
+  let uiThemeBackup: UiThemeId = "midnight";
+
+  const themeNameLabel = (id: UiThemeId): string =>
+    t(
+      (
+        {
+          midnight: "settings.themeNames.midnight",
+          ocean: "settings.themeNames.ocean",
+          ember: "settings.themeNames.ember",
+          forest: "settings.themeNames.forest",
+          paper: "settings.themeNames.paper",
+        } as const
+      )[id]
+    );
   const thumbScalePresets = [
-    { id: "compacto", label: "Compacto", value: 0.62 },
-    { id: "medio", label: "Medio", value: 1.0 },
-    { id: "comodo", label: "Cómodo", value: 1.18 },
-    { id: "grande", label: "Grande", value: 1.45 },
-    { id: "xgrande", label: "XL", value: 1.8 }
+    { id: "compacto", labelKey: "settings.thumbPresetCompact", value: 0.62 },
+    { id: "medio", labelKey: "settings.thumbPresetMedium", value: 1.0 },
+    { id: "comodo", labelKey: "settings.thumbPresetComfort", value: 1.18 },
+    { id: "grande", labelKey: "settings.thumbPresetLarge", value: 1.45 },
+    { id: "xgrande", labelKey: "settings.thumbPresetXL", value: 1.8 }
   ] as const;
   let settingsThumbPresetIdx = 1;
   let pageJumpDraft = 1;
@@ -137,7 +196,7 @@
   const DEST_MODAL_FRAC = 0.8;
   let orgPath = "";
   let orgRunning = false;
-  let orgDetail = "Sin tarea";
+  let orgDetail = t("status.orgDetailIdle");
   let orgProgress = "0/0";
   let orgOptions = {
     includeOrganized: false,
@@ -264,12 +323,16 @@
     return opts.some((x) => token === x || token.toLowerCase() === x.toLowerCase());
   }
 
+  function isGalleryMediaKind(kind: GalleryItem["kind"]): boolean {
+    return kind === "image" || kind === "video";
+  }
+
   function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: GalleryItem[]): GalleryItem[] {
     const prevByPath = new Map(prevItems.map((x) => [x.path, x] as const));
     return nextItems.map((it) => {
-      if (it.kind !== "image") return it;
+      if (!isGalleryMediaKind(it.kind)) return it;
       const prev = prevByPath.get(it.path);
-      if (!prev || prev.kind !== "image") return it;
+      if (!prev || !isGalleryMediaKind(prev.kind)) return it;
       const prevQ = prev.thumbQuality ?? (prev.thumbDataUrl ? "hq" : undefined);
       const nextQ = it.thumbQuality ?? (it.thumbDataUrl ? "hq" : undefined);
       const prevScore = prevQ === "hq" ? 2 : prevQ === "lq" ? 1 : 0;
@@ -361,7 +424,13 @@
           previewItems = previewItems.map((x) =>
             x.path === it.path ? { ...x, thumbDataUrl: out.thumbDataUrl, thumbQuality: "hq" } : x
           );
-          if (previewZoomOpen && previewZoomPath === it.path) previewZoomDataUrl = out.thumbDataUrl;
+          if (
+            previewZoomOpen &&
+            previewZoomPath === it.path &&
+            previewZoomMediaType !== "video" &&
+            previewZoomMediaType !== "svg"
+          )
+            previewZoomDataUrl = out.thumbDataUrl;
         } catch {
           /* ignore: se queda LQ */
         }
@@ -409,6 +478,7 @@
       zoomNext: normalizeShortcutValue(persistedShortcuts?.zoomNext, defaultKeyboardShortcuts.zoomNext),
       escape: normalizeShortcutValue(persistedShortcuts?.escape, defaultKeyboardShortcuts.escape),
     };
+    uiTheme = normalizeUiTheme(data.settings?.web_ui_theme);
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
@@ -429,10 +499,76 @@
     const perPageRaw = Number.isFinite(initialPerPage) ? Math.round(initialPerPage) : 48;
     thumbsPerPage = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     pageJumpDraft = Number(data.gallery?.page ?? 1);
+    includeSubfolders = Boolean(data.settings?.gallery_include_subfolders ?? false);
+    groupByFolder = Boolean(data.settings?.gallery_group_by_folder ?? false);
+    sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
+    timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
+    {
+      const sm = String(data.settings?.gallery_sort_mode ?? "name").toLowerCase();
+      gallerySortMode = sm === "mtime" ? "mtime" : "name";
+    }
     await syncDestinationsFromApi();
   };
 
+  $: applyUiThemeToDocument(uiTheme);
+
+  async function persistViewAndReload() {
+    try {
+      await trackLoad(
+        bridge.settingsPatch({
+          gallery_include_subfolders: includeSubfolders,
+          gallery_sort_mode: gallerySortMode === "mtime" ? "mtime" : "name",
+          gallery_group_by_folder: groupByFolder,
+          gallery_timeline_view: timelineView,
+          gallery_section_dominant_color: sectionDominantColor,
+        })
+      );
+      await reload();
+      status = t("status.viewUpdated");
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("status.viewApplyError");
+    }
+  }
+
+  async function onIncludeSubfoldersChange(checked: boolean) {
+    includeSubfolders = checked;
+    if (checked) groupByFolder = false;
+    await persistViewAndReload();
+  }
+
+  async function onGroupByFolderChange(checked: boolean) {
+    groupByFolder = checked;
+    if (checked) {
+      includeSubfolders = false;
+      timelineView = false;
+    }
+    await persistViewAndReload();
+  }
+
+  async function onSectionDominantColorChange(checked: boolean) {
+    sectionDominantColor = checked;
+    await persistViewAndReload();
+  }
+
+  async function onTimelineViewChange(checked: boolean) {
+    timelineView = checked;
+    if (checked) {
+      groupByFolder = false;
+      gallerySortMode = "mtime";
+    }
+    await persistViewAndReload();
+  }
+
+  async function onGallerySortChange(mode: "name" | "mtime") {
+    gallerySortMode = mode;
+    if (mode === "name" && timelineView) {
+      timelineView = false;
+    }
+    await persistViewAndReload();
+  }
+
   async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
+    closeGalleryItemCtxMenu();
     const target = path.trim();
     if (!target) return;
     const current = String(galleryState?.folder ?? folder ?? "").trim();
@@ -454,7 +590,7 @@
     pageJumpDraft = out.state.page;
     folder = out.state?.folder ?? target;
     orgPath = folder || orgPath;
-    status = `Cargada carpeta: ${folder}`;
+    status = t("status.folderLoaded").replace("{path}", folder);
   }
 
   const loadFolder = async (closePicker = true) => {
@@ -505,9 +641,9 @@
     try {
       const out = await bridge.galleryPinFolder(path);
       pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders;
-      status = "Ruta anclada";
+      status = t("status.routePinned");
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo anclar la ruta";
+      status = e instanceof Error ? e.message : t("status.routePinError");
     }
   };
 
@@ -521,9 +657,9 @@
         pinnedFolderLabels = next;
         await bridge.settingsPatch({ web_pinned_folder_labels: next });
       }
-      status = "Ruta desanclada";
+      status = t("status.routeUnpinned");
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo quitar el anclaje";
+      status = e instanceof Error ? e.message : t("status.routeUnpinError");
     }
   };
 
@@ -536,7 +672,7 @@
       await loadFolder();
       routePickerOpen = false;
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo abrir el selector de carpeta";
+      status = e instanceof Error ? e.message : t("status.folderPickerError");
     }
   };
 
@@ -546,9 +682,9 @@
       if (out.hint) status = String(out.hint);
       if (out.cancelled || !out.path) return;
       orgPath = out.path;
-      status = `Ruta organizador: ${orgPath}`;
+      status = t("status.orgPathSet").replace("{path}", orgPath);
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo abrir el selector de carpeta";
+      status = e instanceof Error ? e.message : t("status.folderPickerError");
     }
   };
 
@@ -641,6 +777,7 @@
   };
 
   const openSettingsModal = () => {
+    uiThemeBackup = uiTheme;
     thumbsPerPageBackup = thumbsPerPage;
     thumbGapPxBackup = thumbGapPx;
     showThumbLabelsBackup = showThumbLabels;
@@ -664,6 +801,7 @@
   };
 
   const cancelSettingsModal = () => {
+    uiTheme = uiThemeBackup;
     thumbsPerPage = thumbsPerPageBackup;
     thumbGapPx = thumbGapPxBackup;
     showThumbLabels = showThumbLabelsBackup;
@@ -692,6 +830,7 @@
     await bridge.settingsPatch({
       gallery_thumbs_per_page: n, // 0 = sin límite
       gallery_thumb_scale: Number(ts.toFixed(3)),
+      web_ui_theme: uiTheme,
       web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
       web_show_thumb_labels: Boolean(showThumbLabels),
       web_thumb_card_style: thumbCardStyle,
@@ -717,9 +856,9 @@
   ) {
     confirmDeleteTitle = title;
     confirmDeleteDetail = detail;
-    confirmDeleteConfirmLabel = opts?.confirmLabel ?? "Eliminar";
+    confirmDeleteConfirmLabel = opts?.confirmLabel ?? t("common.delete");
     confirmDeleteBypassEnabled = Boolean(opts?.bypassEnabled);
-    confirmDeleteBypassLabel = opts?.bypassLabel ?? "No volver a preguntar por ahora";
+    confirmDeleteBypassLabel = opts?.bypassLabel ?? t("confirm.bypassOnce");
     confirmDeleteBypassChecked = false;
     confirmDeleteBypassSetter = opts?.bypassSetter ?? null;
     confirmDeleteAction = action;
@@ -746,11 +885,11 @@
 
   async function deleteSelectedGalleryItems() {
     const selectedPaths = items
-      .filter((x) => x.kind === "image" && Boolean(x.selected))
+      .filter((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))
       .map((x) => x.path);
     if (selectedPaths.length === 0) return;
     const selectedSet = new Set(selectedPaths);
-    items = items.filter((x) => !(x.kind === "image" && selectedSet.has(x.path)));
+    items = items.filter((x) => !(isGalleryMediaKind(x.kind) && selectedSet.has(x.path)));
     galleryState = {
       ...galleryState,
       total: Math.max(0, Number(galleryState?.total ?? 0) - selectedPaths.length),
@@ -758,7 +897,7 @@
       endIndex: Math.max(0, Number(galleryState?.endIndex ?? 0) - selectedPaths.length),
     };
     enqueueDeletePaths(selectedPaths);
-    status = `Eliminación en cola (${selectedPaths.length})`;
+    status = t("status.deleteQueued").replace("{n}", String(selectedPaths.length));
   }
 
   async function deleteCurrentZoomImage() {
@@ -766,7 +905,7 @@
     const curPath = previewZoomPath;
     const curIdx = zoomNavItems.findIndex((x) => x.path === curPath);
     const remainingNav = zoomNavItems.filter((x) => x.path !== curPath);
-    items = items.filter((x) => !(x.kind === "image" && x.path === curPath));
+    items = items.filter((x) => !(isGalleryMediaKind(x.kind) && x.path === curPath));
     if (remainingNav.length > 0) {
       const nextIdx = curIdx >= 0 ? Math.min(curIdx, remainingNav.length - 1) : 0;
       const nextItem = remainingNav[nextIdx];
@@ -776,7 +915,7 @@
       previewZoomOpen = false;
     }
     enqueueDeletePaths([curPath]);
-    status = "Imagen en cola de eliminación";
+    status = t("status.deleteImageQueued");
   }
 
   const clickItem = async (it: GalleryItem) => {
@@ -788,6 +927,12 @@
     if (galleryActionBusy) return;
     galleryActionBusy = true;
     try {
+      if (it.kind === "section") {
+        return;
+      }
+      if (it.kind === "day_break") {
+        return;
+      }
       if (it.kind === "folder" || it.kind === "folder_up") {
         await navigateToFolder(it.path, { pushHistory: true });
         return;
@@ -813,7 +958,7 @@
         });
         galleryCursorPath = it.path;
       } else {
-        if (!previewVisible && it.kind === "image") {
+        if (!previewVisible && isGalleryMediaKind(it.kind)) {
           openZoomFromGallery(it);
           return;
         }
@@ -841,7 +986,7 @@
   function setSelectedPreviewFromPath(path: string | null | undefined) {
     const p = String(path ?? "").trim();
     if (!p) return;
-    const row = items.find((x) => x.kind === "image" && x.path === p) as GalleryItem | undefined;
+    const row = items.find((x) => isGalleryMediaKind(x.kind) && x.path === p) as GalleryItem | undefined;
     if (!row) return;
     selectedPreview = {
       path: row.path,
@@ -859,7 +1004,7 @@
   }
 
   function getGalleryNavigablePaths(): string[] {
-    return items.filter((x) => x.kind === "image").map((x) => x.path);
+    return items.filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path);
   }
 
   function getOrInitGalleryCursorPath(): string | null {
@@ -876,7 +1021,7 @@
         const path = String(el.dataset?.itemPath ?? "");
         if (!path) return null;
         const it = items.find((x) => x.path === path);
-        if (!it || it.kind !== "image") return null;
+        if (!it || !isGalleryMediaKind(it.kind)) return null;
         const r = el.getBoundingClientRect();
         return { path, cx: r.left + r.width / 2, top: Math.round(r.top) };
       })
@@ -962,7 +1107,7 @@
     const hi = Math.max(a, b);
     const target = new Set<string>();
     for (let i = lo; i <= hi; i++) target.add(imagePaths[i]);
-    const current = new Set(items.filter((x) => x.kind === "image" && Boolean(x.selected)).map((x) => x.path));
+    const current = new Set(items.filter((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected)).map((x) => x.path));
     const addPaths = [...target].filter((p) => !current.has(p));
     if (addPaths.length === 0) return;
     const prevItems = items;
@@ -977,7 +1122,7 @@
     galleryState = out.state;
     items = mergeItemsKeepingBestThumb(prevItems, out.items);
     if (destinationsMode) {
-      const last = [...items].reverse().find((x) => x.kind === "image" && Boolean(x.selected));
+      const last = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
       setSelectedPreviewFromPath(last?.path);
     }
   };
@@ -993,7 +1138,7 @@
     galleryState = out.state;
     items = mergeItemsKeepingBestThumb(prevItems, out.items);
     if (destinationsMode) {
-      const last = [...items].reverse().find((x) => x.kind === "image" && Boolean(x.selected));
+      const last = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
       setSelectedPreviewFromPath(last?.path);
     }
   };
@@ -1011,9 +1156,12 @@
           items = mergeItemsKeepingBestThumb(items, out.items);
           galleryThumbHydrationToken++;
           void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-          status = `Movidas ${out.moveResult?.moved ?? 0} · errores ${out.moveResult?.errors ?? 0} · cola ${galleryMoveQueue.length}`;
+          status = t("status.moveBatchLine")
+            .replace("{moved}", String(out.moveResult?.moved ?? 0))
+            .replace("{errors}", String(out.moveResult?.errors ?? 0))
+            .replace("{queue}", String(galleryMoveQueue.length));
         } catch (e: unknown) {
-          status = e instanceof Error ? e.message : "Error al procesar cola de movimientos";
+          status = e instanceof Error ? e.message : t("status.moveQueueError");
         }
       }
     } finally {
@@ -1022,41 +1170,43 @@
   }
 
   function getSelectedGalleryPaths(): string[] {
-    return items.filter((x) => x.kind === "image" && x.selected).map((x) => x.path);
+    return items.filter((x) => isGalleryMediaKind(x.kind) && x.selected).map((x) => x.path);
   }
 
   function askConfirmMoveSelected(destPath: string) {
     const selectedPaths = getSelectedGalleryPaths();
     if (selectedPaths.length === 0) {
-      status = "No hay imágenes seleccionadas para mover";
+      status = t("status.noImagesToMove");
       return;
     }
     openConfirmDelete(
-      "Mover selección",
-      `¿Mover ${selectedPaths.length} imágenes al destino seleccionado?`,
+      t("confirm.moveSelectionTitle"),
+      t("confirm.moveSelectionDetail").replace("{count}", String(selectedPaths.length)),
       async () => {
         await moveToDest(destPath);
       },
-      { confirmLabel: "Mover" }
+      { confirmLabel: t("common.move") }
     );
   }
 
   const moveToDest = async (path: string) => {
     const selectedPaths = getSelectedGalleryPaths();
     if (selectedPaths.length === 0) {
-      status = "No hay imágenes seleccionadas para mover";
+      status = t("status.noImagesToMove");
       return;
     }
     const selectedSet = new Set(selectedPaths);
     items = items.map((it) =>
-      it.kind === "image" && selectedSet.has(it.path) ? { ...it, selected: false } : it
+      isGalleryMediaKind(it.kind) && selectedSet.has(it.path) ? { ...it, selected: false } : it
     );
     galleryState = {
       ...galleryState,
       selectedCount: Math.max(0, Number(galleryState?.selectedCount ?? 0) - selectedPaths.length),
     };
     galleryMoveQueue = [...galleryMoveQueue, { srcPaths: selectedPaths, destPath: path }];
-    status = `Encoladas ${selectedPaths.length} imágenes · cola ${galleryMoveQueue.length}`;
+    status = t("status.imagesEnqueued")
+      .replace("{n}", String(selectedPaths.length))
+      .replace("{queue}", String(galleryMoveQueue.length));
     if (!galleryMoveWorkerRunning) {
       void processGalleryMoveQueue();
     }
@@ -1169,7 +1319,7 @@
       await bridge.settingsPatch({ gallery_thumb_scale: Number(thumbScale.toFixed(3)) });
       await reload({ silent: true });
     } catch {
-      status = "No se pudo aplicar el tamaño de miniaturas";
+      status = t("status.thumbScaleError");
     }
   }
 
@@ -1209,7 +1359,7 @@
     const s = String(path ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
     const i = s.lastIndexOf("/");
     const base = i >= 0 ? s.slice(i + 1) : s;
-    return base || s || "Marcador";
+    return base || s || t("pinMarker.defaultName");
   }
 
   function markerLabelForPath(path: string): string {
@@ -1232,7 +1382,7 @@
   async function savePinMarkerModal() {
     const path = pinMarkerPath.trim();
     if (!path) {
-      status = "Ruta inválida para marcador";
+      status = t("status.markerInvalidPath");
       return;
     }
     const label = pinMarkerName.trim() || defaultMarkerNameForPath(path);
@@ -1241,7 +1391,7 @@
     pinnedFolderLabels = next;
     await bridge.settingsPatch({ web_pinned_folder_labels: next });
     pinMarkerOpen = false;
-    status = "Marcador guardado";
+    status = t("pinMarker.saved");
   }
 
   async function toggleDestinationsModePreserveScroll() {
@@ -1341,11 +1491,11 @@
 
   async function movePreviewSelectionToCurrentRoute() {
     if (previewSelectedPaths.length === 0) {
-      status = "Selecciona elementos del modal primero";
+      status = t("status.selectModalFirst");
       return;
     }
     if (!folder.trim()) {
-      status = "Carga una carpeta en Ruta para recibir los archivos";
+      status = t("status.loadFolderForDrop");
       return;
     }
     try {
@@ -1356,11 +1506,13 @@
       void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
       const moved = Number(out.moveResult?.moved ?? 0);
       const errors = Number(out.moveResult?.errors ?? 0);
-      status = `Movidos ${moved} del modal a la ruta actual${errors ? ` · errores ${errors}` : ""}`;
+      status =
+        t("status.previewMoved").replace("{moved}", String(moved)) +
+        (errors ? t("status.previewMovedErrors").replace("{errors}", String(errors)) : "");
       previewSelectedPaths = [];
       await refreshDestPreview();
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudieron mover los elementos seleccionados";
+      status = e instanceof Error ? e.message : t("status.previewMoveError");
     }
   }
 
@@ -1371,7 +1523,7 @@
     previewItems = previewItems.filter((x) => !delSet.has(x.path));
     previewSelectedPaths = [];
     enqueueDeletePaths(deleting);
-    status = `Eliminación en cola (${deleting.length})`;
+    status = t("status.deleteQueued").replace("{n}", String(deleting.length));
   }
 
   function enqueueDeletePaths(paths: string[]) {
@@ -1395,15 +1547,20 @@
           galleryThumbHydrationToken++;
           void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
           if (previewOpen) {
-            const valid = new Set((out.items ?? []).filter((x: GalleryItem) => x.kind === "image").map((x: GalleryItem) => x.path));
+            const valid = new Set(
+              (out.items ?? []).filter((x: GalleryItem) => isGalleryMediaKind(x.kind)).map((x: GalleryItem) => x.path)
+            );
             previewItems = previewItems.filter((x) => valid.has(x.path));
             previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
           }
           const deleted = Number(out.deleteResult?.deleted ?? 0);
           const errors = Number(out.deleteResult?.errors ?? 0);
-          status = `Eliminadas ${deleted} imágenes${errors ? ` · errores ${errors}` : ""} · cola ${galleryDeleteQueue.length}`;
+          status = t("status.deleteBatchLine")
+            .replace("{deleted}", String(deleted))
+            .replace("{errPart}", errors ? t("status.deleteErrorsPart").replace("{errors}", String(errors)) : "")
+            .replace("{queue}", String(galleryDeleteQueue.length));
         } catch (e: unknown) {
-          status = e instanceof Error ? e.message : "Error en cola de eliminación";
+          status = e instanceof Error ? e.message : t("status.deleteQueueError");
         }
       }
     } finally {
@@ -1412,11 +1569,23 @@
   }
 
   function openPreviewZoom(
-    it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" },
+    it: {
+      path: string;
+      name: string;
+      thumbDataUrl?: string | null;
+      thumbQuality?: "lq" | "hq";
+      kind?: GalleryItem["kind"];
+    },
     opts?: {
       preserveCarousel?: boolean;
       preserveMode?: boolean;
-      navItems?: Array<{ path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }>;
+      navItems?: Array<{
+        path: string;
+        name: string;
+        thumbDataUrl?: string | null;
+        thumbQuality?: "lq" | "hq";
+        kind?: GalleryItem["kind"];
+      }>;
     }
   ) {
     if (opts?.navItems) zoomNavItems = opts.navItems;
@@ -1425,6 +1594,9 @@
     // Importante: no mostrar el thumbnail "cuadrado" (recortado) como si fuera la imagen completa.
     // La vista principal debe venir de `galleryPreview` (contain) para garantizar que en "Completa" se vea 100% sin recortes.
     previewZoomDataUrl = null;
+    previewZoomMediaType =
+      it.kind === "video" ? "video" : it.path.toLowerCase().endsWith(".svg") ? "svg" : "image";
+    previewZoomFileUrl = null;
     previewZoomScale = 1;
     previewPanX = 0;
     previewPanY = 0;
@@ -1434,11 +1606,19 @@
     previewZoomNaturalH = 1;
     previewZoomCarouselVisible = opts?.preserveCarousel ? previewZoomCarouselVisible : true;
     zoomHudVisible = false;
+    zoomEditMode = false;
+    zoomCropMode = false;
+    zoomCropDrag = false;
     previewZoomOpen = true;
     bridge
       .galleryPreview(it.path, 2200, 1600)
       .then((pr) => {
-        if (previewZoomOpen && previewZoomPath === it.path) previewZoomDataUrl = pr.dataUrl ?? null;
+        if (previewZoomOpen && previewZoomPath === it.path) {
+          const mt = String(pr.mediaType ?? "image");
+          previewZoomMediaType = mt === "video" ? "video" : mt === "svg" ? "svg" : "image";
+          previewZoomFileUrl = pr.fileUrl ?? null;
+          previewZoomDataUrl = pr.dataUrl ?? null;
+        }
       })
       .catch(() => undefined);
   }
@@ -1534,7 +1714,7 @@
     // Mantener el mismo patrón que en galería: arrastre solo con Ctrl sostenido.
     if (!(e as DragEvent).ctrlKey) {
       e.preventDefault();
-      status = "Para arrastrar desde vista previa, mantén Ctrl sostenido";
+      status = t("status.ctrlDragHint");
       return;
     }
     if (!previewSelectedPaths.includes(it.path)) {
@@ -1552,17 +1732,17 @@
     previewDragActive = false;
   }
 
-  function getVisibleGalleryImagePaths(): string[] {
-    return items.filter((x) => x.kind === "image").map((x) => x.path);
+  function getVisibleGalleryMediaPaths(): string[] {
+    return items.filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path);
   }
 
   function isGalleryTileSelected(it: GalleryItem): boolean {
-    if (!destinationsMode || it.kind !== "image") return false;
+    if (!destinationsMode || !isGalleryMediaKind(it.kind)) return false;
     return Boolean(it.selected);
   }
 
   function applyGalleryRangeSelection(fromPath: string, toPath: string, mode: "select" | "deselect") {
-    const imagePaths = getVisibleGalleryImagePaths();
+    const imagePaths = getVisibleGalleryMediaPaths();
     const a = imagePaths.indexOf(fromPath);
     const b = imagePaths.indexOf(toPath);
     if (a < 0 || b < 0) return;
@@ -1581,7 +1761,7 @@
     galleryRangeCurrentPath = toPath;
     // Reflejo en vivo: actualizar selección visible sin esperar el commit backend.
     items = items.map((it) =>
-      it.kind === "image"
+      isGalleryMediaKind(it.kind)
         ? { ...it, selected: galleryRangeDraftSelectedSet?.has(it.path) ?? Boolean(it.selected) }
         : it
     );
@@ -1602,12 +1782,12 @@
   }
 
   function onGalleryTilePointerDown(e: PointerEvent, it: GalleryItem) {
-    if (!destinationsMode || it.kind !== "image") return;
+    if (!destinationsMode || !isGalleryMediaKind(it.kind)) return;
     // Por defecto: selección por rango. Con Ctrl: modo arrastre.
     if (e.ctrlKey) return;
     e.preventDefault();
     const baseSelected = items
-      .filter((x) => x.kind === "image" && x.selected)
+      .filter((x) => isGalleryMediaKind(x.kind) && x.selected)
       .map((x) => x.path);
     galleryRangeBaseSelectedPaths = baseSelected;
     galleryRangeBaseSelectedSet = new Set(baseSelected);
@@ -1661,9 +1841,9 @@
       items = mergeItemsKeepingBestThumb(prevItems, out.items);
       if (destinationsMode) {
         const preferred = [...addPaths].reverse().find((p) =>
-          items.some((x) => x.kind === "image" && x.path === p && Boolean(x.selected))
+          items.some((x) => isGalleryMediaKind(x.kind) && x.path === p && Boolean(x.selected))
         );
-        const fallback = [...items].reverse().find((x) => x.kind === "image" && Boolean(x.selected))?.path;
+        const fallback = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))?.path;
         setSelectedPreviewFromPath(preferred ?? fallback);
       }
     } catch {
@@ -1676,6 +1856,7 @@
 
 
   function zoomStep(delta: number) {
+    if (previewZoomMediaType === "video") return;
     // Permite alejar más allá de 100% para que, si el stage efectivo es menor
     // (por carrusel/cabecera), siempre puedas ver la imagen completa.
     previewZoomScale = Math.min(4, Math.max(0.5, Number((previewZoomScale + delta).toFixed(2))));
@@ -1687,9 +1868,10 @@
   }
 
   function getPanLimits() {
-    if (!zoomStageEl || !zoomImgEl) return { x: 0, y: 0 };
+    const media = previewZoomMediaType === "video" ? zoomVideoEl : zoomImgEl;
+    if (!zoomStageEl || !media) return { x: 0, y: 0 };
     const sr = zoomStageEl.getBoundingClientRect();
-    const ir = zoomImgEl.getBoundingClientRect();
+    const ir = media.getBoundingClientRect();
     const stageW = Math.max(1, sr.width);
     const stageH = Math.max(1, sr.height);
     const overflowX = (ir.width - stageW) / 2;
@@ -1724,7 +1906,7 @@
   }
 
   // Siempre mantenemos pan dentro de los límites reales del DOM (overflow vs stage).
-  $: if (previewZoomOpen && zoomStageEl && zoomImgEl) {
+  $: if (previewZoomOpen && zoomStageEl && (zoomImgEl || zoomVideoEl)) {
     clampPanToStage();
     if (previewFillWidthAlignPending) {
       alignFillWidthToTop();
@@ -1739,6 +1921,10 @@
       : `translate(-50%, -50%) translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
 
   function zoomWithWheel(e: WheelEvent) {
+    if (previewZoomMediaType === "video") {
+      e.preventDefault();
+      return;
+    }
     e.preventDefault();
     zoomStep(e.deltaY < 0 ? 0.14 : -0.14);
   }
@@ -1753,7 +1939,136 @@
     openPreviewZoom(it, { preserveCarousel: true, preserveMode: true, navItems: zoomNavItems });
   }
 
+  /** Desplaza el carrusel solo si el thumb activo queda cortado (sin animación suave en cada flecha). */
+  function ensureZoomCarouselActiveVisible() {
+    if (!previewZoomOpen || !previewZoomCarouselVisible || !zoomCarouselEl || !previewZoomPath) return;
+    const active = zoomCarouselEl.querySelector<HTMLElement>(".zoom-carousel__item--active");
+    if (!active) return;
+    const cr = zoomCarouselEl.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    const margin = 8;
+    if (ar.left < cr.left + margin || ar.right > cr.right - margin) {
+      active.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+    }
+  }
+
+  function syncZoomNavThumbsFromItems(nextItems: GalleryItem[]) {
+    const byPath = new Map(nextItems.filter((x) => isGalleryMediaKind(x.kind)).map((x) => [x.path, x]));
+    zoomNavItems = zoomNavItems.map((z) => {
+      const row = byPath.get(z.path);
+      return row
+        ? { ...z, thumbDataUrl: row.thumbDataUrl, thumbQuality: row.thumbQuality }
+        : z;
+    });
+  }
+
+  function normalizedCropFromClientRect(): { l: number; t: number; w: number; h: number } | null {
+    if (!zoomImgEl) return null;
+    const ir = zoomImgEl.getBoundingClientRect();
+    const x1 = Math.min(zoomCropStartX, zoomCropCurX);
+    const x2 = Math.max(zoomCropStartX, zoomCropCurX);
+    const y1 = Math.min(zoomCropStartY, zoomCropCurY);
+    const y2 = Math.max(zoomCropStartY, zoomCropCurY);
+    const ix1 = Math.max(x1, ir.left);
+    const iy1 = Math.max(y1, ir.top);
+    const ix2 = Math.min(x2, ir.right);
+    const iy2 = Math.min(y2, ir.bottom);
+    const w = ix2 - ix1;
+    const h = iy2 - iy1;
+    if (w < ir.width * 0.02 || h < ir.height * 0.02) return null;
+    return {
+      l: (ix1 - ir.left) / ir.width,
+      t: (iy1 - ir.top) / ir.height,
+      w: w / ir.width,
+      h: h / ir.height,
+    };
+  }
+
+  async function applyZoomRotate(deg: number) {
+    if (previewZoomMediaType === "video" || previewZoomMediaType === "svg") return;
+    if (!previewZoomPath) return;
+    try {
+      const out = await trackLoad(bridge.galleryImageRotate(previewZoomPath, deg));
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      syncZoomNavThumbsFromItems(out.items);
+      const pr = await trackLoad(bridge.galleryPreview(previewZoomPath, 2200, 1600));
+      if (previewZoomOpen && previewZoomPath === pr.path) previewZoomDataUrl = pr.dataUrl ?? null;
+      previewPanX = 0;
+      previewPanY = 0;
+      previewZoomScale = 1;
+    } catch {
+      status = t("zoom.rotateError");
+    }
+  }
+
+  async function applyZoomCrop() {
+    if (previewZoomMediaType === "video" || previewZoomMediaType === "svg") return;
+    if (!previewZoomPath || !zoomImgEl) return;
+    const norm = normalizedCropFromClientRect();
+    if (!norm) {
+      status = t("zoom.cropTooSmall");
+      return;
+    }
+    try {
+      const out = await trackLoad(
+        bridge.galleryImageCropNormalized(previewZoomPath, norm.l, norm.t, norm.w, norm.h)
+      );
+      galleryState = out.state;
+      items = out.items;
+      galleryThumbHydrationToken++;
+      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      syncZoomNavThumbsFromItems(out.items);
+      zoomCropMode = false;
+      const pr = await trackLoad(bridge.galleryPreview(previewZoomPath, 2200, 1600));
+      if (previewZoomOpen && previewZoomPath === pr.path) previewZoomDataUrl = pr.dataUrl ?? null;
+      previewPanX = 0;
+      previewPanY = 0;
+      previewZoomScale = 1;
+    } catch {
+      status = t("zoom.cropError");
+    }
+  }
+
+  function onCropPointerDown(e: PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    zoomCropDrag = true;
+    zoomCropStartX = zoomCropCurX = e.clientX;
+    zoomCropStartY = zoomCropCurY = e.clientY;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+
+  function onCropPointerMove(e: PointerEvent) {
+    if (!zoomCropDrag) return;
+    e.preventDefault();
+    zoomCropCurX = e.clientX;
+    zoomCropCurY = e.clientY;
+  }
+
+  function onCropPointerUp(e: PointerEvent) {
+    if (!zoomCropDrag) return;
+    zoomCropDrag = false;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+  }
+
+  $: zoomCropMarqueeStyle =
+    zoomCropMode && zoomStageEl && zoomCropDrag
+      ? (() => {
+          const r = zoomStageEl!.getBoundingClientRect();
+          const x1 = Math.min(zoomCropStartX, zoomCropCurX) - r.left;
+          const y1 = Math.min(zoomCropStartY, zoomCropCurY) - r.top;
+          const w = Math.abs(zoomCropCurX - zoomCropStartX);
+          const h = Math.abs(zoomCropCurY - zoomCropStartY);
+          return `left:${x1}px;top:${y1}px;width:${w}px;height:${h}px`;
+        })()
+      : "";
+
   function beginPan(e: PointerEvent) {
+    if (previewZoomMediaType === "video") return;
+    if (zoomCropMode) return;
     // Si la imagen no desborda el stage, no hay nada que “panear”.
     const limits = getPanLimits();
     if (limits.x <= 0.5 && limits.y <= 0.5) return;
@@ -1798,6 +2113,7 @@
   }
 
   function onZoomStageClick(e: MouseEvent) {
+    if (zoomCropMode) return;
     if (previewPanMoved) {
       previewPanMoved = false;
       return;
@@ -1833,7 +2149,7 @@
       previewZoomOpen = false;
     }
     zoomMoveQueue = [...zoomMoveQueue, { srcPath: currentPath, destPath }];
-    status = `Imagen en cola de movimiento (${zoomMoveQueue.length})`;
+    status = t("status.zoomMoveQueued").replace("{n}", String(zoomMoveQueue.length));
     if (!zoomMoveWorkerRunning) {
       void processZoomMoveQueue();
     }
@@ -1846,15 +2162,15 @@
       return;
     }
     openConfirmDelete(
-      "Mover imagen",
-      "¿Mover la imagen actual al destino seleccionado?",
+      t("confirm.moveImageTitle"),
+      t("confirm.moveImageDetail"),
       async () => {
         await moveCurrentZoomToDestination(destPath);
       },
       {
-        confirmLabel: "Mover",
+        confirmLabel: t("common.move"),
         bypassEnabled: true,
-        bypassLabel: "No volver a preguntar en esta sesión de fullscreen",
+        bypassLabel: t("confirm.bypassMoveFullscreen"),
         bypassSetter: (enabled: boolean) => {
           previewZoomSkipMoveConfirm = enabled;
         },
@@ -1881,10 +2197,10 @@
           const errors = Number(out.moveResult?.errors ?? 0);
           previewZoomCanUndoMove = moved > 0;
           status = moved > 0
-            ? `Imagen movida (${zoomMoveQueue.length} en cola)`
-            : `No se movió la imagen${errors ? " · con errores" : ""}`;
+            ? t("status.zoomMoveOk").replace("{queue}", String(zoomMoveQueue.length))
+            : t("status.zoomMoveNone") + (errors ? t("status.zoomMoveNoneErrors") : "");
         } catch (e: unknown) {
-          status = e instanceof Error ? e.message : "Error en cola de movimientos";
+          status = e instanceof Error ? e.message : t("status.moveQueueError");
         }
       }
     } finally {
@@ -1901,9 +2217,9 @@
       void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
       const moved = Number(out.moveResult?.moved ?? 0);
       previewZoomCanUndoMove = false;
-      status = moved > 0 ? "Movimiento revertido" : "No hay movimiento para deshacer";
+      status = moved > 0 ? t("status.undoMoved") : t("status.undoNone");
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo deshacer el movimiento";
+      status = e instanceof Error ? e.message : t("status.undoError");
     }
   }
 
@@ -1915,10 +2231,24 @@
     alignFillWidthToTop();
   }
 
-  function openZoomFromGallery(it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }) {
+  function onZoomVideoMeta() {
+    if (!zoomVideoEl) return;
+    previewZoomNaturalW = Math.max(1, zoomVideoEl.videoWidth || 1);
+    previewZoomNaturalH = Math.max(1, zoomVideoEl.videoHeight || 1);
+    clampPanToStage();
+    alignFillWidthToTop();
+  }
+
+  function openZoomFromGallery(it: GalleryItem) {
     const nav = items
-      .filter((x) => x.kind === "image")
-      .map((x) => ({ path: x.path, name: x.name, thumbDataUrl: x.thumbDataUrl, thumbQuality: x.thumbQuality }));
+      .filter((x) => isGalleryMediaKind(x.kind))
+      .map((x) => ({
+        path: x.path,
+        name: x.name,
+        thumbDataUrl: x.thumbDataUrl,
+        thumbQuality: x.thumbQuality,
+        kind: x.kind,
+      }));
     openPreviewZoom(it, { navItems: nav });
   }
 
@@ -1973,11 +2303,11 @@
   const startOrganizer = async () => {
     const out = await bridge.organizerStart(orgPath, orgOptions);
     if (!out.ok) {
-      status = out.error ?? "No se pudo iniciar";
+      status = out.error ?? t("status.organizerStartError");
       return;
     }
     orgRunning = true;
-    status = "Galería AYN iniciada";
+    status = t("status.organizerStarted");
   };
 
   const cancelOrganizer = async () => {
@@ -1987,13 +2317,16 @@
   const pollOrganizer = async () => {
     const out = await bridge.organizerStatus();
     orgRunning = Boolean(out.running);
-    orgDetail = out.progress?.detail ?? "Sin tarea";
+    orgDetail = out.progress?.detail ?? t("status.orgDetailIdle");
     orgProgress = `${out.progress?.current ?? 0}/${out.progress?.total ?? 0}`;
     if (!orgRunning && out.done) {
       const stats = out.done.stats ?? {};
       status = out.done.error
-        ? `Error: ${out.done.error}`
-        : `Finalizado · movidas ${stats.moved_media ?? 0}, cbz ${stats.moved_cbz ?? 0}, otros ${stats.moved_other ?? 0}`;
+        ? t("status.organizerDoneError").replace("{msg}", String(out.done.error))
+        : t("status.organizerDoneOk")
+            .replace("{moved}", String(stats.moved_media ?? 0))
+            .replace("{cbz}", String(stats.moved_cbz ?? 0))
+            .replace("{other}", String(stats.moved_other ?? 0));
     }
   };
 
@@ -2027,6 +2360,15 @@
   let destCtxMenu: { x: number; y: number; idx: number; source: "gallery" | "fullscreen" } | null = null;
   /** Menú contextual (clic derecho) en marcador anclado del modal de rutas. */
   let pinnedCtxMenu: { x: number; y: number; path: string } | null = null;
+  /** Menú contextual en miniaturas de la galería (imagen / vídeo). */
+  let galleryItemCtxMenu: {
+    x: number;
+    y: number;
+    path: string;
+    name: string;
+    thumbDataUrl?: string | null;
+  } | null = null;
+  let galleryFileInfoModal: { path: string; name: string; sizeBytes: number; mtimeIso: string } | null = null;
   let draggedDestIdx: number | null = null;
   let previewZoomSkipMoveConfirm = false;
 
@@ -2045,6 +2387,7 @@
   function endDragSession() {
     ghostVisible = false;
     dragOverDestPath = null;
+    dragOverSectionPath = null;
     document.body.classList.remove("om-dragging");
     clearGhostListeners();
   }
@@ -2055,7 +2398,7 @@
   }
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
-    if (!destinationsMode || it.kind !== "image") return;
+    if (!destinationsMode || !isGalleryMediaKind(it.kind)) return;
     // Interacción: solo permitir arrastre cuando Ctrl está presionado.
     if (galleryRangeSelecting || !(e as DragEvent).ctrlKey) {
       e.preventDefault();
@@ -2087,12 +2430,24 @@
       const el = document.elementFromPoint(ev.clientX, ev.clientY);
       const card = el?.closest?.("[data-dest-path]") as HTMLElement | null;
       dragOverDestPath = card?.dataset?.destPath ?? null;
+      const sec = el?.closest?.("[data-section-folder]") as HTMLElement | null;
+      dragOverSectionPath = sec?.dataset?.sectionFolder ?? null;
     };
     dragWinEnd = () => {
       endDragSessionAfterGesture();
     };
     document.addEventListener("dragover", dragWinMove, dragOpts);
     document.addEventListener("dragend", dragWinEnd, dragOpts);
+  }
+
+  function onSectionFolderDrop(e: DragEvent, folderPath: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    ignoreDestCardClickUntil = Date.now() + 450;
+    endDragSessionAfterGesture();
+    const fp = String(folderPath ?? "").trim();
+    if (!fp) return;
+    askConfirmMoveSelected(fp);
   }
 
   function onDestDrop(e: DragEvent, destPath: string) {
@@ -2131,9 +2486,9 @@
     try {
       const out = await trackLoad(bridge.destinationsReorder(fromIdx, toIdx));
       destRows = normalizeDestinationsFromPayload(out);
-      status = "Destinos reordenados";
+      status = t("status.destReorderOk");
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudieron reordenar los destinos";
+      status = e instanceof Error ? e.message : t("status.destReorderError");
     } finally {
       draggedDestIdx = null;
     }
@@ -2158,6 +2513,120 @@
 
   function closePinnedCtxMenu() {
     pinnedCtxMenu = null;
+  }
+
+  function closeGalleryItemCtxMenu() {
+    galleryItemCtxMenu = null;
+  }
+
+  function formatFileSizeBytes(n: number): string {
+    const x = Math.max(0, Number(n) || 0);
+    if (x < 1024) return `${x} B`;
+    if (x < 1024 * 1024) return `${(x / 1024).toFixed(1)} KB`;
+    if (x < 1024 * 1024 * 1024) return `${(x / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(x / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
+  function onGalleryItemContextMenu(e: MouseEvent, it: GalleryItem) {
+    if (!isGalleryMediaKind(it.kind)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pad = 8;
+    const mw = 240;
+    const mh = Math.min(420, 56 + Math.max(0, destRows.length) * 34 + 120);
+    let x = e.clientX;
+    let y = e.clientY;
+    x = Math.min(x, window.innerWidth - mw - pad);
+    y = Math.min(y, window.innerHeight - mh - pad);
+    x = Math.max(pad, x);
+    y = Math.max(pad, y);
+    closeDestCtxMenu();
+    closePinnedCtxMenu();
+    galleryItemCtxMenu = {
+      x,
+      y,
+      path: it.path,
+      name: it.name,
+      thumbDataUrl: it.thumbDataUrl ?? null,
+    };
+  }
+
+  async function copyGalleryCtxPath() {
+    if (!galleryItemCtxMenu) return;
+    const p = galleryItemCtxMenu.path;
+    try {
+      await navigator.clipboard.writeText(p);
+      status = t("contextGallery.copyPathOk");
+    } catch {
+      status = t("contextGallery.copyError");
+    }
+    closeGalleryItemCtxMenu();
+  }
+
+  async function copyGalleryCtxThumb() {
+    if (!galleryItemCtxMenu) return;
+    const u = galleryItemCtxMenu.thumbDataUrl;
+    if (!u || !String(u).startsWith("data:")) {
+      status = t("contextGallery.copyThumbUnavailable");
+      closeGalleryItemCtxMenu();
+      return;
+    }
+    try {
+      const res = await fetch(u);
+      const blob = await res.blob();
+      const type = blob.type && blob.type !== "" ? blob.type : "image/png";
+      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+      status = t("contextGallery.copyThumbOk");
+    } catch {
+      status = t("contextGallery.copyError");
+    }
+    closeGalleryItemCtxMenu();
+  }
+
+  function askDeleteGalleryItemFromCtx() {
+    if (!galleryItemCtxMenu) return;
+    const p = galleryItemCtxMenu.path;
+    const label = galleryItemCtxMenu.name;
+    closeGalleryItemCtxMenu();
+    openConfirmDelete(
+      t("contextGallery.deleteTitle"),
+      t("confirm.deleteFileDetail").replace("{name}", label),
+      async () => {
+        enqueueDeletePaths([p]);
+      },
+      { confirmLabel: t("contextGallery.confirmDeleteBtn") }
+    );
+  }
+
+  async function moveGalleryItemFromCtxTo(destPath: string) {
+    if (!galleryItemCtxMenu) return;
+    const src = galleryItemCtxMenu.path;
+    closeGalleryItemCtxMenu();
+    try {
+      const out = await trackLoad(bridge.galleryMovePath(src, destPath));
+      applyGalleryRefreshFromMove(out.state, out.items);
+      const moved = Number(out.moveResult?.moved ?? 0);
+      status = moved > 0 ? t("contextGallery.movedOk") : t("contextGallery.moveFailed");
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("contextGallery.moveFailed");
+    }
+  }
+
+  async function openGalleryFileInfoFromCtx() {
+    if (!galleryItemCtxMenu) return;
+    const path = galleryItemCtxMenu.path;
+    closeGalleryItemCtxMenu();
+    try {
+      const st = await trackLoad(bridge.galleryFileStat(path));
+      galleryFileInfoModal = {
+        path: String(st.path ?? path),
+        name: String(st.name ?? ""),
+        sizeBytes: Number(st.sizeBytes ?? 0),
+        mtimeIso: String(st.mtimeIso ?? ""),
+      };
+    } catch {
+      status = t("contextGallery.metadataError");
+    }
   }
 
   function onDestContextMenu(e: MouseEvent, idx: number, source: "gallery" | "fullscreen" = "gallery") {
@@ -2205,12 +2674,12 @@
     const label = markerLabelForPath(p);
     closePinnedCtxMenu();
     openConfirmDelete(
-      "Desanclar marcador",
-      `¿Desanclar "${label}"?`,
+      t("confirm.unpinTitle"),
+      t("confirm.unpinDetail").replace("{label}", label),
       async () => {
         await unpinFolder(p);
       },
-      { confirmLabel: "Desanclar" }
+      { confirmLabel: t("confirm.unpinConfirm") }
     );
   }
 
@@ -2239,7 +2708,7 @@
         destFormLabel = j >= 0 ? s.slice(j + 1) || s : s;
       }
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo abrir el selector de carpeta";
+      status = e instanceof Error ? e.message : t("status.folderPickerError");
     }
   }
 
@@ -2247,22 +2716,22 @@
     const label = destFormLabel.trim();
     const path = destFormPath.trim();
     if (!path) {
-      status = "Indica una ruta de carpeta";
+      status = t("status.destPathRequired");
       return;
     }
     try {
       if (destFormMode === "add") {
         await trackLoad(bridge.destinationsAdd(label, path));
         await syncDestinationsFromApi();
-        status = "Carpeta destino añadida";
+        status = t("status.destAdded");
       } else if (destFormIdx !== null) {
         await trackLoad(bridge.destinationsEdit(destFormIdx, label, path));
         await syncDestinationsFromApi();
-        status = "Destino actualizado";
+        status = t("status.destUpdated");
       }
       destFormOpen = false;
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo guardar el destino";
+      status = e instanceof Error ? e.message : t("status.destSaveError");
     }
   }
 
@@ -2295,9 +2764,9 @@
     try {
       await trackLoad(bridge.destinationsRemove(i));
       await syncDestinationsFromApi();
-      status = "Destino eliminado";
+      status = t("status.destRemoved");
     } catch (e: unknown) {
-      status = e instanceof Error ? e.message : "No se pudo eliminar";
+      status = e instanceof Error ? e.message : t("status.destDeleteError");
     }
   }
 
@@ -2305,7 +2774,43 @@
   // de ancho y evita hueco fijo en el borde derecho.
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
   $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
-  $: settingsPreviewCellPx = galleryGridCellPx(settingsThumbScaleDraft);
+  /** Umbral de tamaño de celda para mostrar separadores por día (solo vista línea de tiempo). */
+  const TIMELINE_DAY_MIN_PX = 130;
+
+  function expandTimelineDayBreaks(raw: GalleryItem[], timeline: boolean, cellPx: number): GalleryItem[] {
+    if (!timeline || cellPx < TIMELINE_DAY_MIN_PX) return raw;
+    const out: GalleryItem[] = [];
+    let lastDay: string | null = null;
+    for (const it of raw) {
+      if (it.kind === "section") {
+        lastDay = null;
+        out.push(it);
+        continue;
+      }
+      if (!isGalleryMediaKind(it.kind)) {
+        out.push(it);
+        continue;
+      }
+      const iso = it.mtimeIso?.trim();
+      if (iso && iso.length >= 10) {
+        const day = iso.slice(0, 10);
+        if (lastDay !== null && day !== lastDay) {
+          const dayNum = iso.slice(8, 10);
+          out.push({
+            kind: "day_break",
+            name: dayNum,
+            path: `daybreak:${day}`,
+            thumbDataUrl: null,
+          });
+        }
+        lastDay = day;
+      }
+      out.push(it);
+    }
+    return out;
+  }
+
+  $: galleryGridItems = expandTimelineDayBreaks(items, timelineView, gridCellPx);
 
   /** Contenedor con scroll: modo Edición (`galleryScrollEl`) o modo base (`galleryPlainEl`). */
   $: galleryScrollContainer = galleryScrollEl ?? galleryPlainEl;
@@ -2359,17 +2864,14 @@
   }
 
   $: if (previewZoomOpen && previewZoomCarouselVisible && zoomCarouselEl && previewZoomPath) {
-    const active = zoomCarouselEl.querySelector<HTMLElement>(".zoom-carousel__item--active");
-    if (active) {
-      active.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-    }
+    void tick().then(() => ensureZoomCarouselActiveVisible());
   }
 
   onMount(async () => {
     try {
       await waitForPywebviewApi();
     } catch {
-      status = "API de escritorio no disponible. Reabre la app o usa npm run dev.";
+      status = t("status.apiUnavailable");
       return;
     }
     await loadInitial();
@@ -2377,7 +2879,7 @@
       try {
         await loadFolder(false);
       } catch {
-        status = "No se pudo restaurar la última carpeta; revisa la ruta o selecciónala en el modal.";
+        status = t("status.restoreFolderError");
       }
     }
     pollTimer = window.setInterval(() => {
@@ -2425,6 +2927,36 @@
         closeConfirmDelete();
         return;
       }
+      // Evita que flechas, Supr, espacio u otros atajos actúen sobre la galería/vistas detrás del diálogo.
+      return;
+    }
+    if (pinMarkerOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closePinMarkerModal();
+        return;
+      }
+      // Mismo criterio: no propagar atajos globales mientras el modal de marcador está abierto.
+      return;
+    }
+    if (galleryItemCtxMenu) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeGalleryItemCtxMenu();
+        return;
+      }
+      return;
+    }
+    if (galleryFileInfoModal) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        galleryFileInfoModal = null;
+        return;
+      }
+      return;
     }
     const activeEl = (document.activeElement as HTMLElement | null) ?? null;
     const activeInputType = (activeEl as HTMLInputElement | null)?.type?.toLowerCase?.() ?? "";
@@ -2446,15 +2978,15 @@
       e.preventDefault();
       if (previewZoomOpen) {
         previewZoomDestMode = !previewZoomDestMode;
-        status = previewZoomDestMode ? "Edición activado (fullscreen)" : "Edición desactivado (fullscreen)";
+        status = previewZoomDestMode ? t("status.editionOnFs") : t("status.editionOffFs");
       } else if (previewOpen) {
         previewSelectionMode = !previewSelectionMode;
         if (!previewSelectionMode) previewSelectedPaths = [];
-        status = previewSelectionMode ? "Selección activada (vista previa)" : "Selección desactivada (vista previa)";
+        status = previewSelectionMode ? t("status.selectionOnPreview") : t("status.selectionOffPreview");
       } else {
         const nextMode = !destinationsMode;
         void toggleDestinationsModePreserveScroll();
-        status = nextMode ? "Modo Edición activado" : "Modo Edición desactivado";
+        status = nextMode ? t("status.editionOn") : t("status.editionOff");
       }
       return;
     }
@@ -2478,6 +3010,7 @@
       !isTypingEl &&
       !previewOpen &&
       !previewZoomOpen &&
+      !viewMenuOpen &&
       !settingsOpen &&
       !orgPanelOpen &&
       !destFormOpen &&
@@ -2506,6 +3039,7 @@
       !isTypingEl &&
       !previewOpen &&
       !previewZoomOpen &&
+      !viewMenuOpen &&
       !settingsOpen &&
       !orgPanelOpen &&
       !destFormOpen &&
@@ -2521,21 +3055,17 @@
     if (!isTypingEl && shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.deleteAction)) {
       const hasPreviewSelectionForDelete = previewOpen && previewSelectedPaths.length > 0;
       const hasGallerySelectionForDelete =
-        Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => x.kind === "image" && Boolean(x.selected));
+        Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
       if (previewZoomOpen && previewZoomPath) {
         e.preventDefault();
-        openConfirmDelete(
-          "Eliminar imagen",
-          "¿Eliminar la imagen actual? Esta acción no se puede deshacer.",
-          deleteCurrentZoomImage
-        );
+        openConfirmDelete(t("confirm.deleteImageTitle"), t("confirm.deleteImageDetail"), deleteCurrentZoomImage);
         return;
       }
       if (hasPreviewSelectionForDelete) {
         e.preventDefault();
         openConfirmDelete(
-          "Eliminar selección",
-          `¿Eliminar ${previewSelectedPaths.length} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+          t("confirm.deleteSelectionTitle"),
+          t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelectedPaths.length)),
           deletePreviewSelectedItems
         );
         return;
@@ -2543,8 +3073,8 @@
       if (hasGallerySelectionForDelete) {
         e.preventDefault();
         openConfirmDelete(
-          "Eliminar selección",
-          `¿Eliminar ${galleryState.selectedCount} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+          t("confirm.deleteSelectionTitle"),
+          t("confirm.deleteSelectionDetail").replace("{count}", String(galleryState.selectedCount)),
           deleteSelectedGalleryItems
         );
         return;
@@ -2553,7 +3083,7 @@
     if (!shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.escape)) return;
     const hasPreviewSelection = previewSelectedPaths.length > 0 || previewRangeSelecting;
     const hasGallerySelection =
-      Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => x.kind === "image" && Boolean(x.selected));
+      Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
     if (hasPreviewSelection || hasGallerySelection) {
       e.preventDefault();
       if (hasPreviewSelection) {
@@ -2564,14 +3094,24 @@
       if (hasGallerySelection) {
         void clearSelection();
       }
-      status = "Selección limpiada";
+      status = t("status.selectionCleared");
       return;
     }
     if (pinnedCtxMenu) closePinnedCtxMenu();
+    else if (galleryItemCtxMenu) closeGalleryItemCtxMenu();
+    else if (galleryFileInfoModal) galleryFileInfoModal = null;
     else if (destCtxMenu) closeDestCtxMenu();
     else if (destFormOpen) closeDestForm();
+    else if (viewMenuOpen) viewMenuOpen = false;
     else if (settingsOpen) settingsOpen = false;
-    else if (previewZoomOpen) previewZoomOpen = false;
+    else if (previewZoomOpen && zoomCropMode) {
+      e.preventDefault();
+      zoomCropMode = false;
+    } else if (previewZoomOpen && zoomEditMode) {
+      e.preventDefault();
+      zoomEditMode = false;
+      zoomCropMode = false;
+    } else if (previewZoomOpen) previewZoomOpen = false;
     else if (previewOpen) previewOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
   }}
@@ -2586,6 +3126,10 @@
   class:app--tile-no-frame={!thumbFrameVisible}
   style={`--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
 >
+  {#if viewMenuOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="view-menu-backdrop" role="presentation" on:click={() => (viewMenuOpen = false)}></div>
+  {/if}
   <header class="tabs-bar om-panel">
     <nav class="tabs__nav">
       <button
@@ -2594,7 +3138,83 @@
         class:om-btn--active={destinationsMode}
         on:click={() => void toggleDestinationsModePreserveScroll()}
         title="Activa/desactiva modo selección y panel de destinos"
-      >Edición</button>
+      >{t("tabs.edition")}</button>
+      <div class="view-menu-wrap">
+        <button
+          type="button"
+          class="om-btn om-btn--tab"
+          class:om-btn--active={viewMenuOpen}
+          aria-expanded={viewMenuOpen}
+          aria-haspopup="true"
+          on:click={() => (viewMenuOpen = !viewMenuOpen)}
+        >{t("view.title")}</button>
+        {#if viewMenuOpen}
+          <div
+            class="view-menu om-panel om-panel--lift"
+            role="menu"
+            tabindex="-1"
+            on:click|stopPropagation={() => undefined}
+            on:keydown|stopPropagation={() => undefined}
+          >
+            <label class="view-menu__row">
+              <input
+                type="checkbox"
+                checked={includeSubfolders}
+                on:change={(e) =>
+                  void onIncludeSubfoldersChange((e.currentTarget as HTMLInputElement).checked)}
+              />
+              <span>{t("view.includeSubfolders")}</span>
+            </label>
+            <label class="view-menu__row" title={t("view.groupByFolderHint")}>
+              <input
+                type="checkbox"
+                checked={groupByFolder}
+                on:change={(e) => void onGroupByFolderChange((e.currentTarget as HTMLInputElement).checked)}
+              />
+              <span>{t("view.groupByFolder")}</span>
+            </label>
+            <label class="view-menu__row" title={t("view.sectionDominantColorHint")}>
+              <input
+                type="checkbox"
+                checked={sectionDominantColor}
+                on:change={(e) =>
+                  void onSectionDominantColorChange((e.currentTarget as HTMLInputElement).checked)}
+              />
+              <span>{t("view.sectionDominantColor")}</span>
+            </label>
+            <label class="view-menu__row" title={t("view.timelineViewHint")}>
+              <input
+                type="checkbox"
+                checked={timelineView}
+                on:change={(e) => void onTimelineViewChange((e.currentTarget as HTMLInputElement).checked)}
+              />
+              <span>{t("view.timelineView")}</span>
+            </label>
+            <fieldset class="view-menu__fieldset">
+              <div class="view-menu__legend">{t("view.sortLabel")}</div>
+              <label class="view-menu__row">
+                <input
+                  type="radio"
+                  name="gallery-sort"
+                  checked={gallerySortMode === "name"}
+                  on:change={() => void onGallerySortChange("name")}
+                />
+                <span>{t("view.sortName")}</span>
+              </label>
+              <label class="view-menu__row">
+                <input
+                  type="radio"
+                  name="gallery-sort"
+                  checked={gallerySortMode === "mtime"}
+                  on:change={() => void onGallerySortChange("mtime")}
+                />
+                <span>{t("view.sortDate")}</span>
+              </label>
+            </fieldset>
+            <p class="view-menu__hint">{t("view.timelineHint")}</p>
+          </div>
+        {/if}
+      </div>
       <button
         type="button"
         class="om-btn om-btn--tab"
@@ -2602,12 +3222,12 @@
           orgPath = folder || orgPath;
           orgPanelOpen = true;
         }}
-      >Organizar</button>
+      >{t("tabs.organize")}</button>
     </nav>
     <div class="route__row route__row--inline">
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Retroceder" on:click={goBackFolder} disabled={folderBackStack.length === 0}>←</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Avanzar" on:click={goForwardFolder} disabled={folderForwardStack.length === 0}>→</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Carpeta superior" on:click={goUpFolder}>↑</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("route.back")} on:click={goBackFolder} disabled={folderBackStack.length === 0}>←</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("route.forward")} on:click={goForwardFolder} disabled={folderForwardStack.length === 0}>→</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("route.up")} on:click={goUpFolder}>↑</button>
       <div class="route__path-wrap">
         <input
           id="gallery-folder-input"
@@ -2615,18 +3235,18 @@
           type="text"
           bind:this={routePathEl}
           bind:value={folder}
-          placeholder="Ruta de carpeta…"
-          title="Pega la ruta o pulsa el icono de carpeta"
+          placeholder={t("route.pathPlaceholder")}
+          title={t("route.pathInputTitle")}
           on:focus={() => (routePickerOpen = true)}
         />
         <button
           type="button"
           class="om-btn om-btn--ghost om-btn--icon route__path-action"
-          title={pinnedFolders.includes(folder.trim()) ? "Quitar anclaje de esta ruta" : "Anclar esta ruta"}
+          title={pinnedFolders.includes(folder.trim()) ? t("route.pinRemove") : t("route.pinAdd")}
           on:click={() => (pinnedFolders.includes(folder.trim()) ? unpinFolder(folder) : openPinMarkerModal(folder))}
         >{pinnedFolders.includes(folder.trim()) ? "★" : "☆"}</button>
-        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Recargar galería" on:click={reload}>↻</button>
-        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title="Explorar carpeta" on:click={pickGalleryFolder}>
+        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title={t("route.reloadGallery")} on:click={reload}>↻</button>
+        <button type="button" class="om-btn om-btn--ghost om-btn--icon route__path-action" title={t("route.browseFolder")} on:click={pickGalleryFolder}>
           <svg class="route-folder-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path fill="currentColor" d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z" />
           </svg>
@@ -2636,8 +3256,8 @@
     <button
       type="button"
       class="om-btn om-btn--ghost om-btn--icon om-btn--settings"
-      title="Ajustes"
-      aria-label="Ajustes"
+      title={t("route.settingsTitle")}
+      aria-label={t("route.settingsAria")}
       on:click={openSettingsModal}
     >
       <svg class="settings-gear" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2659,22 +3279,28 @@
         on:click|stopPropagation={() => undefined}
       >
         <header class="modal__head">
-          <strong id="route-picker-title">Elegir ruta de galería</strong>
-          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (routePickerOpen = false)}>✕</button>
+          <strong id="route-picker-title">{t("routePicker.title")}</strong>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("common.closeModalAria")}
+            title={t("common.close")}
+            on:click={() => (routePickerOpen = false)}>✕</button
+          >
         </header>
         <section class="route-picker__body">
           <div class="route-picker__input-row">
-            <input class="om-input route-picker__input" bind:value={folder} placeholder="Ruta de carpeta…" />
-            <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Explorar carpeta" on:click={pickGalleryFolder}>
+            <input class="om-input route-picker__input" bind:value={folder} placeholder={t("route.pathPlaceholder")} />
+            <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("route.browseFolder")} on:click={pickGalleryFolder}>
               <svg class="route-folder-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path fill="currentColor" d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z" />
               </svg>
             </button>
-            <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>Abrir</button>
+            <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>{t("routePicker.open")}</button>
           </div>
           {#if pinnedFolders.length > 0}
             <div class="recent-folders__head">
-              <span class="field-label">Rutas ancladas</span>
+              <span class="field-label">{t("routePicker.pinnedHead")}</span>
             </div>
             <div class="recent-folders__list">
               {#each pinnedFolders as p}
@@ -2692,7 +3318,7 @@
           {/if}
           {#if recentUnpinnedFolders.length > 0}
             <div class="recent-folders__head">
-              <span class="field-label">Rutas recientes</span>
+              <span class="field-label">{t("routePicker.recentHead")}</span>
             </div>
             <div class="recent-folders__list">
               {#each recentUnpinnedFolders as p}
@@ -2700,7 +3326,7 @@
                   <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
                     {pathTailLabel(p)}
                   </button>
-                  <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title="Crear marcador" on:click={() => openPinMarkerModal(p)}>☆</button>
+                  <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title={t("routePicker.createMarkerTitle")} on:click={() => openPinMarkerModal(p)}>☆</button>
                 </div>
               {/each}
             </div>
@@ -2722,18 +3348,24 @@
         on:click|stopPropagation={() => undefined}
       >
         <header class="modal__head">
-          <strong id="pin-marker-title">Guardar marcador</strong>
-          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={closePinMarkerModal}>✕</button>
+          <strong id="pin-marker-title">{t("pinMarker.title")}</strong>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("common.closeModalAria")}
+            title={t("common.close")}
+            on:click={closePinMarkerModal}>✕</button
+          >
         </header>
         <section class="dest-form-body">
-          <label class="field-label" for="pin-marker-name">Nombre</label>
-          <input id="pin-marker-name" class="om-input" type="text" bind:value={pinMarkerName} placeholder="Nombre corto del marcador" />
-          <label class="field-label" for="pin-marker-path">Ruta</label>
-          <input id="pin-marker-path" class="om-input" type="text" bind:value={pinMarkerPath} placeholder="Ruta de carpeta" />
+          <label class="field-label" for="pin-marker-name">{t("destinations.nameLabel")}</label>
+          <input id="pin-marker-name" class="om-input" type="text" bind:value={pinMarkerName} placeholder={t("pinMarker.namePlaceholder")} />
+          <label class="field-label" for="pin-marker-path">{t("destinations.pathLabel")}</label>
+          <input id="pin-marker-path" class="om-input" type="text" bind:value={pinMarkerPath} placeholder={t("pinMarker.pathPlaceholder")} />
         </section>
         <div class="settings-actions">
-          <button type="button" class="om-btn om-btn--ghost" on:click={closePinMarkerModal}>Cancelar</button>
-          <button type="button" class="om-btn om-btn--primary" on:click={savePinMarkerModal}>Guardar</button>
+          <button type="button" class="om-btn om-btn--ghost" on:click={closePinMarkerModal}>{t("common.cancel")}</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={savePinMarkerModal}>{t("common.save")}</button>
         </div>
       </div>
     </div>
@@ -2757,7 +3389,36 @@
           <article class="gallery om-panel om-panel--lift gallery--with-float">
             <div class="gallery__scroll" bind:this={galleryScrollEl} on:scroll={onGalleryScroll}>
               <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
-              {#each items as it (it.path)}
+              {#each galleryGridItems as it (it.path)}
+                {#if it.kind === "section"}
+                  <div
+                    class="gallery-section-head"
+                    class:gallery-section-head--timeline={it.path.includes("section:timeline:")}
+                    class:gallery-section-head--tinted={Boolean(it.sectionTintHex)}
+                    class:gallery-section-head--drop={Boolean(it.sectionFolder) && dragOverSectionPath === it.sectionFolder}
+                    role="separator"
+                    data-section-folder={it.sectionFolder ?? ""}
+                    data-item-path={it.path}
+                    style={it.sectionTintHex ? `--section-tint: ${it.sectionTintHex}` : ""}
+                    on:dragover|preventDefault={(e) => {
+                      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                    }}
+                    on:drop={(e) => onSectionFolderDrop(e, it.sectionFolder ?? "")}
+                    on:dblclick|stopPropagation={() => {
+                      const p = String(it.sectionFolder ?? "").trim();
+                      if (p) void navigateToFolder(p, { pushHistory: true });
+                    }}
+                  >
+                    <span class="gallery-section-head__title">{it.name}</span>
+                    {#if it.sectionFolder}
+                      <span class="gallery-section-head__path">{it.sectionFolder}</span>
+                    {/if}
+                  </div>
+                {:else if it.kind === "day_break"}
+                  <div class="timeline-day-break" aria-hidden="true">
+                    <span class="timeline-day-break__n">{it.name}</span>
+                  </div>
+                {:else}
                 <!-- div: en WebEngine <button>+drag y <img draggable> nativo suelen bloquear el DnD. -->
                 <div
                   role="button"
@@ -2766,7 +3427,7 @@
                   class:tile--active={galleryKeyboardNavHintActive && galleryCursorPath === it.path}
                   data-item-path={it.path}
                   class:selected={isGalleryTileSelected(it)}
-                  draggable={it.kind === "image" && !galleryRangeSelecting}
+                  draggable={isGalleryMediaKind(it.kind) && !galleryRangeSelecting}
                   on:pointerdown={(e) => onGalleryTilePointerDown(e, it)}
                   on:pointerenter={() => onGalleryTilePointerEnter(it.path)}
                   on:dragstart={(e) => onTileDragStart(e, it)}
@@ -2775,7 +3436,7 @@
                     clickItem(it);
                   }}
                   on:dblclick={() => {
-                    if (it.kind === "image") openZoomFromGallery(it);
+                    if (isGalleryMediaKind(it.kind)) openZoomFromGallery(it);
                   }}
                   on:keydown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -2783,6 +3444,7 @@
                       clickItem(it);
                     }
                   }}
+                  on:contextmenu={(e) => onGalleryItemContextMenu(e, it)}
                 >
                   {#if it.thumbDataUrl}
                     <img
@@ -2794,9 +3456,13 @@
                       decoding="async"
                     />
                   {:else}
-                    <div class="folder-ph" class:folder-ph--folder={it.kind !== "image"}>
-                      {#if it.kind === "image"}
+                    <div class="folder-ph" class:folder-ph--folder={!isGalleryMediaKind(it.kind)}>
+                      {#if it.kind === "image" && it.path.toLowerCase().endsWith(".svg")}
+                        <span class="tile-svg-ph" aria-hidden="true">SVG</span>
+                      {:else if it.kind === "image"}
                         Sin preview
+                      {:else if it.kind === "video"}
+                        <span class="tile-video-ph" aria-hidden="true">▶</span>
                       {:else if it.kind === "folder_up"}
                         <span class="folder-ph__icon" aria-hidden="true">↩</span>
                         <span class="folder-ph__label">Subir</span>
@@ -2810,37 +3476,38 @@
                       {/if}
                     </div>
                   {/if}
-                  {#if showThumbLabels || it.kind !== "image"}<span class="tile__name" class:tile__name--folder={it.kind !== "image"}>{it.name}</span>{/if}
+                  {#if showThumbLabels || !isGalleryMediaKind(it.kind)}<span class="tile__name" class:tile__name--folder={!isGalleryMediaKind(it.kind)}>{it.name}</span>{/if}
                 </div>
+                {/if}
               {/each}
               <div class="grid-end-spacer" aria-hidden="true"></div>
               </div>
               {#if galleryScrollAtTop}
-                <div class="selection-float selection-float--gallery-tr" role="toolbar" aria-label="Selección">
-                  <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>Pág.</button>
-                  <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>Quitar</button>
+                <div class="selection-float selection-float--gallery-tr" role="toolbar" aria-label={t("selection.toolbarGalleryAria")}>
+                  <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>{t("selection.page")}</button>
+                  <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>{t("selection.remove")}</button>
                   <button
                     type="button"
                     class="om-btn om-btn--ghost om-btn--mini"
                     disabled={Number(galleryState.selectedCount || 0) === 0}
                     on:click={() =>
                       openConfirmDelete(
-                        "Eliminar selección",
-                        `¿Eliminar ${galleryState.selectedCount} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+                        t("confirm.deleteSelectionTitle"),
+                        t("confirm.deleteSelectionDetail").replace("{count}", String(galleryState.selectedCount)),
                         deleteSelectedGalleryItems
                       )}
-                  >Eliminar</button>
-                  <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>Invertir</button>
-                  <span class="selection-float__count" title="Seleccionadas">{galleryState.selectedCount}</span>
+                  >{t("selection.delete")}</button>
+                  <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>{t("selection.invert")}</button>
+                  <span class="selection-float__count" title={t("selection.selectedTitle")}>{galleryState.selectedCount}</span>
                 </div>
               {/if}
             </div>
-            <div class="dest-float-chips" aria-label="Carpetas destino">
+            <div class="dest-float-chips" aria-label={t("selection.destBarAria")}>
               <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
                 +
               </button>
               {#if destRows.length === 0}
-                <span class="dest-float-empty">No hay carpetas destino</span>
+                <span class="dest-float-empty">{t("selection.noDestFolders")}</span>
               {/if}
               {#each destRows as d, i (d.path + "\0" + i)}
                 <div
@@ -2882,10 +3549,25 @@
             ></div>
 
             <aside class="preview om-panel">
-              {#if selectedPreview?.dataUrl}
+              {#if selectedPreview?.mediaType === "video" && selectedPreview?.fileUrl}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video
+                  class="preview__img preview__video"
+                  src={selectedPreview.fileUrl}
+                  controls
+                  playsinline
+                  preload="metadata"
+                ></video>
+              {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
+                <img
+                  class="preview__img preview__svg"
+                  src={selectedPreview.fileUrl}
+                  alt={selectedPreview.name}
+                />
+              {:else if selectedPreview?.dataUrl}
                 <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
               {:else}
-                <div class="preview__empty">Selecciona una miniatura</div>
+                <div class="preview__empty">{t("preview.emptySelect")}</div>
               {/if}
               <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
             </aside>
@@ -2903,26 +3585,60 @@
       <article class="gallery om-panel om-panel--lift">
         <div class="gallery__scroll" bind:this={galleryPlainEl} on:scroll={onGalleryScroll}>
         <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
-          {#each items as it (it.path)}
+          {#each galleryGridItems as it (it.path)}
+            {#if it.kind === "section"}
+              <div
+                class="gallery-section-head"
+                class:gallery-section-head--timeline={it.path.includes("section:timeline:")}
+                class:gallery-section-head--tinted={Boolean(it.sectionTintHex)}
+                class:gallery-section-head--drop={Boolean(it.sectionFolder) && dragOverSectionPath === it.sectionFolder}
+                role="separator"
+                data-section-folder={it.sectionFolder ?? ""}
+                data-item-path={it.path}
+                style={it.sectionTintHex ? `--section-tint: ${it.sectionTintHex}` : ""}
+                on:dragover|preventDefault={(e) => {
+                  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                }}
+                on:drop={(e) => onSectionFolderDrop(e, it.sectionFolder ?? "")}
+                on:dblclick|stopPropagation={() => {
+                  const p = String(it.sectionFolder ?? "").trim();
+                  if (p) void navigateToFolder(p, { pushHistory: true });
+                }}
+              >
+                <span class="gallery-section-head__title">{it.name}</span>
+                {#if it.sectionFolder}
+                  <span class="gallery-section-head__path">{it.sectionFolder}</span>
+                {/if}
+              </div>
+            {:else if it.kind === "day_break"}
+              <div class="timeline-day-break" aria-hidden="true">
+                <span class="timeline-day-break__n">{it.name}</span>
+              </div>
+            {:else}
             <button
               type="button"
               class="tile"
               class:tile--active={galleryKeyboardNavHintActive && galleryCursorPath === it.path}
               data-item-path={it.path}
               class:selected={it.selected && destinationsMode}
-              draggable={destinationsMode && it.kind === "image"}
+              draggable={destinationsMode && isGalleryMediaKind(it.kind)}
               on:dragstart={(e) => onTileDragStart(e, it)}
               on:click={() => clickItem(it)}
               on:dblclick={() => {
-                if (it.kind === "image") openZoomFromGallery(it);
+                if (isGalleryMediaKind(it.kind)) openZoomFromGallery(it);
               }}
+              on:contextmenu={(e) => onGalleryItemContextMenu(e, it)}
             >
               {#if it.thumbDataUrl}
                 <img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} loading="lazy" decoding="async" />
               {:else}
-                <div class="folder-ph" class:folder-ph--folder={it.kind !== "image"}>
-                  {#if it.kind === "image"}
+                <div class="folder-ph" class:folder-ph--folder={!isGalleryMediaKind(it.kind)}>
+                  {#if it.kind === "image" && it.path.toLowerCase().endsWith(".svg")}
+                    <span class="tile-svg-ph" aria-hidden="true">SVG</span>
+                  {:else if it.kind === "image"}
                     Sin preview
+                  {:else if it.kind === "video"}
+                    <span class="tile-video-ph" aria-hidden="true">▶</span>
                   {:else if it.kind === "folder_up"}
                     <span class="folder-ph__icon" aria-hidden="true">↩</span>
                     <span class="folder-ph__label">Subir</span>
@@ -2936,8 +3652,9 @@
                   {/if}
                 </div>
               {/if}
-              {#if showThumbLabels || it.kind !== "image"}<span class="tile__name" class:tile__name--folder={it.kind !== "image"}>{it.name}</span>{/if}
+              {#if showThumbLabels || !isGalleryMediaKind(it.kind)}<span class="tile__name" class:tile__name--folder={!isGalleryMediaKind(it.kind)}>{it.name}</span>{/if}
             </button>
+            {/if}
           {/each}
         </div>
         </div>
@@ -2953,10 +3670,25 @@
         ></div>
 
         <aside class="preview om-panel">
-          {#if selectedPreview?.dataUrl}
+          {#if selectedPreview?.mediaType === "video" && selectedPreview?.fileUrl}
+            <!-- svelte-ignore a11y_media_has_caption -->
+            <video
+              class="preview__img preview__video"
+              src={selectedPreview.fileUrl}
+              controls
+              playsinline
+              preload="metadata"
+            ></video>
+          {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
+            <img
+              class="preview__img preview__svg"
+              src={selectedPreview.fileUrl}
+              alt={selectedPreview.name}
+            />
+          {:else if selectedPreview?.dataUrl}
             <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
           {:else}
-            <div class="preview__empty">Selecciona una miniatura</div>
+            <div class="preview__empty">{t("preview.emptySelect")}</div>
           {/if}
           <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
         </aside>
@@ -2964,10 +3696,10 @@
     </section>
   {/if}
 
-  <footer class="pager om-panel pager--bar" aria-label="Paginación y estado">
+  <footer class="pager om-panel pager--bar" aria-label={t("pager.footerAria")}>
     {#if thumbsPerPage !== 0}
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Primera página" on:click={() => goPage(1)}>|«</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Anterior" on:click={() => goPage(Math.max(1, galleryState.page - 1))}>‹</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.firstPage")} on:click={() => goPage(1)}>|«</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.prevPage")} on:click={() => goPage(Math.max(1, galleryState.page - 1))}>‹</button>
       {#each pageLinks as item}
         {#if item === "gap"}
           <span class="pager__gap" aria-hidden="true">…</span>
@@ -2976,13 +3708,18 @@
             type="button"
             class="om-btn om-btn--ghost pager__num"
             class:om-btn--primary={item === galleryState.page}
-            title="Ir a la página {item}"
+            title={t("pager.goPageTitle").replace("{n}", String(item))}
             on:click={() => goPage(item)}>{item}</button>
         {/if}
       {/each}
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Siguiente" on:click={() => goPage(Math.min(galleryState.totalPages, galleryState.page + 1))}>›</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title="Última página" on:click={() => goPage(galleryState.totalPages)}>»|</button>
-      <span class="pager__google-line">{galleryState.total} imágenes · página {galleryState.page} de {galleryState.totalPages}</span>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.nextPage")} on:click={() => goPage(Math.min(galleryState.totalPages, galleryState.page + 1))}>›</button>
+      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.lastPage")} on:click={() => goPage(galleryState.totalPages)}>»|</button>
+      <span class="pager__google-line"
+        >{galleryState.total}
+        {t("pager.imagesWord")} · {t("pager.pageWord")}
+        {galleryState.page}
+        {t("pager.ofWord")}
+        {galleryState.totalPages}</span>
       <label class="pager__jump">
         <input
           class="om-input pager__jump-input"
@@ -2994,26 +3731,30 @@
         />
         <span class="pager__jump-total">/ {galleryState.totalPages}</span>
       </label>
-      <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>Ir</button>
+      <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>{t("pager.goJump")}</button>
     {:else}
       <span class="pager__google-line">
-        Cargadas {Number(galleryState?.endIndex ?? 0)}/{Number(galleryState?.total ?? 0)} imágenes · {Number(galleryState?.totalElements ?? Number(galleryState?.total ?? 0) + Number(galleryState?.subfoldersCount ?? 0))} elementos · peso total {Number(galleryState?.totalBytes ?? -1) < 0 ? "calculando…" : formatBytes(Number(galleryState?.totalBytes ?? 0))}
+        {t("pager.loadedPrefix")}
+        {Number(galleryState?.endIndex ?? 0)}/{Number(galleryState?.total ?? 0)}
+        {t("pager.imagesWord")} ·
+        {Number(galleryState?.totalElements ?? Number(galleryState?.total ?? 0) + Number(galleryState?.subfoldersCount ?? 0))}
+        {t("pager.elementsWord")} · {t("pager.totalWeight")}
+        {Number(galleryState?.totalBytes ?? -1) < 0 ? t("pager.calculating") : formatBytes(Number(galleryState?.totalBytes ?? 0))}
       </span>
     {/if}
     <div class="grow"></div>
     <span class="status-line">{status}</span>
-    <span class="webui-build-tag" title="Compilación del interfaz (npm run build). Si no coincide con tu último build, el .exe lleva una UI antigua.">{__WEBUI_BUILD__.slice(0, 10)}</span>
+    <span class="webui-build-tag" title={t("pager.buildTagTitle")}>{__WEBUI_BUILD__.slice(0, 10)}</span>
     <button
       type="button"
       class="om-btn om-btn--ghost om-btn--compact"
-      title={previewVisible ? "Ocultar vista previa" : "Mostrar vista previa"}
+      title={previewVisible ? t("pager.previewHide") : t("pager.previewShow")}
       on:click={togglePreviewVisible}
-    >{previewVisible ? "👁 Vista previa" : "🙈 Sin preview"}</button>
-    <span
-      class="field-label pager__split-label"
-      title="Arrastra la barra entre galería y vista previa para el ancho del panel"
-      >Panel derecho ~{Math.round(previewRatio * 100)}%</span>
-    <label class="field-label pager__thumb-label" for="route-thumb-scale-footer">Miniaturas {Math.round(thumbScale * 100)}%</label>
+    >{previewVisible ? t("pager.previewOn") : t("pager.previewOff")}</button>
+    <span class="field-label pager__split-label" title={t("pager.splitHint")}
+      >{t("preview.panelRight")} ~{Math.round(previewRatio * 100)}%</span>
+    <label class="field-label pager__thumb-label" for="route-thumb-scale-footer"
+      >{t("pager.thumbsLabel")} {Math.round(thumbScale * 100)}%</label>
     <input
       id="route-thumb-scale-footer"
       class="om-range pager__thumb-range"
@@ -3032,7 +3773,7 @@
       class="overlay"
       role="button"
       tabindex="-1"
-      aria-label="Cerrar vista previa del destino"
+      aria-label={t("preview.closeDestAria")}
       on:dragover|preventDefault
       on:drop={(e) => {
         const t = e.target as HTMLElement | null;
@@ -3070,30 +3811,39 @@
         <header class="modal__head">
           <strong id="dest-preview-title">{previewDestPath}</strong>
           <div class="modal__head-actions">
-            <div class="selection-float preview-selection-float" role="toolbar" aria-label="Selección del modal de destino">
+            <div class="selection-float preview-selection-float" role="toolbar" aria-label={t("selection.previewToolbarAria")}>
               <button
                 type="button"
                 class="om-btn om-btn--ghost om-btn--mini"
                 on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
-                title={previewSelectionMode ? "Desactivar modo selección" : "Activar modo selección"}
-              >{previewSelectionMode ? "Desactivar" : "Activar"}</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}>Todo</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}>Deseleccionar</button>
+                title={previewSelectionMode ? t("selection.deactivateMode") : t("selection.activateMode")}
+              >{previewSelectionMode ? t("selection.deactivate") : t("selection.activate")}</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}
+                >{t("selection.selectAll")}</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}
+                >{t("selection.clearSelection")}</button>
               <button
                 type="button"
                 class="om-btn om-btn--ghost om-btn--mini"
                 disabled={previewSelectedPaths.length === 0}
                 on:click={() =>
                   openConfirmDelete(
-                    "Eliminar selección",
-                    `¿Eliminar ${previewSelectedPaths.length} imágenes seleccionadas? Esta acción no se puede deshacer.`,
+                    t("confirm.deleteSelectionTitle"),
+                    t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelectedPaths.length)),
                     deletePreviewSelectedItems
                   )}
-              >Eliminar</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertPreviewSelection}>Invertir</button>
-              <span class="selection-float__count" title="Seleccionadas">{previewSelectedPaths.length}</span>
+              >{t("selection.delete")}</button>
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertPreviewSelection}
+                >{t("selection.invert")}</button>
+              <span class="selection-float__count" title={t("selection.selectedTitle")}>{previewSelectedPaths.length}</span>
             </div>
-            <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewOpen = false)}>✕</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--close"
+              aria-label={t("common.closeModalAria")}
+              title={t("common.close")}
+              on:click={() => (previewOpen = false)}>✕</button
+            >
           </div>
         </header>
         <div class="modal__scroll">
@@ -3139,7 +3889,7 @@
       class="overlay overlay--zoom"
       role="button"
       tabindex="-1"
-      aria-label="Cerrar vista previa ampliada"
+      aria-label={t("zoom.fullscreenCloseAria")}
       on:click={() => (previewZoomOpen = false)}
       on:keydown={(e) => {
         if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
@@ -3160,12 +3910,12 @@
         <header class="zoom-modal__head">
           <strong>{previewZoomName}</strong>
           <div class="zoom-modal__tools">
-            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Anterior (A/W/←/↑)" on:click={() => moveZoomBy(-1)}>←</button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Siguiente (D/S/→/↓)" on:click={() => moveZoomBy(1)}>→</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.prevNavTitle")} on:click={() => moveZoomBy(-1)}>←</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.nextNavTitle")} on:click={() => moveZoomBy(1)}>→</button>
             <button
               type="button"
               class="om-btn om-btn--ghost om-btn--compact"
-              title="Alternar entre ver completa y rellenar ancho"
+              title={t("zoom.toggleFitTitle")}
               on:click={() => {
                 previewZoomMode = previewZoomMode === "fit" ? "fillWidth" : "fit";
                 previewPanX = 0;
@@ -3175,13 +3925,13 @@
                 if (previewZoomMode === "fillWidth") alignFillWidthToTop();
               }}
             >
-              {previewZoomMode === "fit" ? "Completa" : "Rellenar ancho"}
+              {previewZoomMode === "fit" ? t("zoom.modeFit") : t("zoom.modeFillWidth")}
             </button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Alejar" on:click={() => zoomStep(-0.2)}>−</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.zoomOutTitle")} on:click={() => zoomStep(-0.2)}>−</button>
             <button
               type="button"
               class="om-btn om-btn--ghost om-btn--compact"
-              title="Restablecer zoom"
+              title={t("zoom.zoomResetTitle")}
               on:click={() => {
                 previewZoomScale = 1;
                 if (previewZoomMode === "fit") {
@@ -3190,23 +3940,67 @@
                 }
               }}
             >{Math.round(previewZoomScale * 100)}%</button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title="Acercar" on:click={() => zoomStep(0.2)}>＋</button>
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.zoomInTitle")} on:click={() => zoomStep(0.2)}>＋</button>
+            {#if previewZoomMediaType === "image"}
+              <button
+                type="button"
+                class="om-btn om-btn--ghost om-btn--compact"
+                class:om-btn--active={zoomEditMode}
+                title={t("zoom.editToggle")}
+                on:click={() => {
+                  const next = !zoomEditMode;
+                  zoomEditMode = next;
+                  if (!next) zoomCropMode = false;
+                }}
+              >✎</button>
+              {#if zoomEditMode}
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--compact"
+                  title={t("zoom.rotateLeft")}
+                  on:click={() => void applyZoomRotate(-90)}
+                >↺</button>
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--compact"
+                  title={t("zoom.rotateRight")}
+                  on:click={() => void applyZoomRotate(90)}
+                >↻</button>
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--compact"
+                  class:om-btn--active={zoomCropMode}
+                  title={t("zoom.cropToggle")}
+                  on:click={() => (zoomCropMode = !zoomCropMode)}
+                >▢</button>
+              {/if}
+              {#if zoomCropMode}
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--compact"
+                  title={t("zoom.applyCrop")}
+                  on:click={() => void applyZoomCrop()}
+                >{t("zoom.applyCropBtn")}</button>
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost om-btn--compact"
+                  title={t("zoom.cancelCrop")}
+                  on:click={() => (zoomCropMode = false)}
+                >{t("zoom.cancelCropBtn")}</button>
+              {/if}
+            {/if}
             <button
               type="button"
               class="om-btn om-btn--ghost om-btn--compact"
-              title="Mostrar destinos en fullscreen"
+              title={t("zoom.destinationsFullscreenTitle")}
               on:click={() => (previewZoomDestMode = !previewZoomDestMode)}
-            >Destinos</button>
+            >{t("zoom.destinationsBtn")}</button>
             <button
               type="button"
               class="om-btn om-btn--ghost om-btn--compact zoom-trash-btn"
-              title="Eliminar imagen actual"
+              title={t("zoom.deleteCurrentTitle")}
               on:click={() =>
-                openConfirmDelete(
-                  "Eliminar imagen",
-                  "¿Eliminar la imagen actual? Esta acción no se puede deshacer.",
-                  deleteCurrentZoomImage
-                )}
+                openConfirmDelete(t("confirm.deleteImageTitle"), t("confirm.deleteImageDetail"), deleteCurrentZoomImage)}
             >
               <svg class="trash-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 6h18" />
@@ -3216,17 +4010,23 @@
                 <path d="M14 11v6" />
               </svg>
             </button>
-            <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (previewZoomOpen = false)}>✕</button>
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--close"
+              aria-label={t("common.closeModalAria")}
+              title={t("common.close")}
+              on:click={() => (previewZoomOpen = false)}>✕</button
+            >
           </div>
         </header>
         <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
-          {#if previewZoomDataUrl}
+          {#if (previewZoomMediaType === "video" && previewZoomFileUrl) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomDataUrl}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
               class="zoom-modal__stage"
               role="application"
-              aria-label="Área de zoom y arrastre"
+              aria-label={t("zoom.stageAria")}
               bind:this={zoomStageEl}
               on:pointerdown={beginPan}
               on:pointermove={movePan}
@@ -3234,20 +4034,65 @@
               on:pointercancel={endPan}
               on:click={onZoomStageClick}
             >
-              <img
-                class="zoom-modal__img"
-                class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
-                class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
-                bind:this={zoomImgEl}
-                src={previewZoomDataUrl}
-                alt={previewZoomName}
-                style={`transform: ${zoomImgTransform};`}
-                on:load={onZoomImageLoad}
-              />
+              {#if previewZoomMediaType === "video" && previewZoomFileUrl}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video
+                  class="zoom-modal__img"
+                  class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
+                  class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                  bind:this={zoomVideoEl}
+                  src={previewZoomFileUrl}
+                  controls
+                  playsinline
+                  preload="metadata"
+                  style={`transform: ${zoomImgTransform};`}
+                  on:loadedmetadata={onZoomVideoMeta}
+                ></video>
+              {:else if previewZoomMediaType === "svg" && previewZoomFileUrl}
+                <img
+                  class="zoom-modal__img"
+                  class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
+                  class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                  bind:this={zoomImgEl}
+                  src={previewZoomFileUrl}
+                  alt={previewZoomName}
+                  style={`transform: ${zoomImgTransform};`}
+                  on:load={onZoomImageLoad}
+                />
+              {:else if previewZoomDataUrl}
+                <img
+                  class="zoom-modal__img"
+                  class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
+                  class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                  bind:this={zoomImgEl}
+                  src={previewZoomDataUrl}
+                  alt={previewZoomName}
+                  style={`transform: ${zoomImgTransform};`}
+                  on:load={onZoomImageLoad}
+                />
+              {/if}
               {#if zoomHudVisible}
                 <div class="zoom-mini" bind:this={zoomMiniEl}>
-                  <img src={previewZoomDataUrl} alt="" />
+                  <img
+                    src={previewZoomMediaType === "svg" ? previewZoomFileUrl : previewZoomDataUrl}
+                    alt=""
+                  />
                   <div class="zoom-mini__rect" style={zoomMiniRect}></div>
+                </div>
+              {/if}
+              {#if zoomCropMode && previewZoomDataUrl}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="zoom-crop-layer"
+                  on:pointerdown={onCropPointerDown}
+                  on:pointermove={onCropPointerMove}
+                  on:pointerup={onCropPointerUp}
+                  on:pointercancel={onCropPointerUp}
+                  on:click|stopPropagation
+                >
+                  {#if zoomCropMarqueeStyle}
+                    <div class="zoom-crop-marquee" style={zoomCropMarqueeStyle} aria-hidden="true"></div>
+                  {/if}
                 </div>
               {/if}
               {#if previewZoomDestMode}
@@ -3291,13 +4136,13 @@
               {/if}
             </div>
           {:else}
-            <div class="preview__empty">Cargando imagen…</div>
+            <div class="preview__empty">{t("zoom.previewLoading")}</div>
           {/if}
         </div>
         <div
           class="zoom-modal__carousel"
           class:zoom-modal__carousel--hidden={!previewZoomCarouselVisible}
-          aria-label="Carrusel de miniaturas"
+          aria-label={t("zoom.carouselAria")}
           bind:this={zoomCarouselEl}
         >
           {#each zoomNavItems as it}
@@ -3310,6 +4155,10 @@
             >
               {#if it.thumbDataUrl}
                 <img src={it.thumbDataUrl} alt={it.name} class:thumb--lq={it.thumbQuality === "lq"} />
+              {:else if it.path.toLowerCase().endsWith(".svg")}
+                <span class="zoom-carousel__svg-ph" aria-hidden="true">SVG</span>
+              {:else if it.kind === "video"}
+                <span class="zoom-carousel__video-ph" aria-hidden="true">▶</span>
               {/if}
             </button>
           {/each}
@@ -3347,24 +4196,32 @@
         on:click|stopPropagation={() => undefined}
       >
         <header class="org-float__head">
-          <strong id="org-float-title">Organizar medios</strong>
-          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={() => (orgPanelOpen = false)}>✕</button>
+          <strong id="org-float-title">{t("organizer.title")}</strong>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("common.closeModalAria")}
+            title={t("common.close")}
+            on:click={() => (orgPanelOpen = false)}>✕</button
+          >
         </header>
         <div class="org-row">
-          <label class="field-label" for="org-path-input-float">Ruta</label>
-          <input id="org-path-input-float" class="om-input org-row__input" bind:value={orgPath} placeholder="Carpeta raíz a organizar" />
-          <button type="button" class="om-btn om-btn--primary" title="Elegir carpeta" on:click={pickOrgFolder}>Examinar…</button>
+          <label class="field-label" for="org-path-input-float">{t("destinations.pathLabel")}</label>
+          <input id="org-path-input-float" class="om-input org-row__input" bind:value={orgPath} placeholder={t("organizer.pathPlaceholder")} />
+          <button type="button" class="om-btn om-btn--primary" title={t("organizer.pickFolderTitle")} on:click={pickOrgFolder}
+            >{t("destinations.browse")}</button
+          >
         </div>
         <div class="checks">
-          <label class="check"><input type="checkbox" bind:checked={orgOptions.includeOrganized} /> Incluir Organizado</label>
-          <label class="check"><input type="checkbox" bind:checked={orgOptions.includeComics} /> Incluir ComicsCBZ</label>
-          <label class="check"><input type="checkbox" bind:checked={orgOptions.includePending} /> Incluir PendientesRevisión</label>
-          <label class="check"><input type="checkbox" bind:checked={orgOptions.removeDuplicates} /> Eliminar duplicadas</label>
-          <label class="check"><input type="checkbox" bind:checked={orgOptions.groupSimilarImages} /> Agrupar similares</label>
+          <label class="check"><input type="checkbox" bind:checked={orgOptions.includeOrganized} /> {t("organizer.includeOrganized")}</label>
+          <label class="check"><input type="checkbox" bind:checked={orgOptions.includeComics} /> {t("organizer.includeComics")}</label>
+          <label class="check"><input type="checkbox" bind:checked={orgOptions.includePending} /> {t("organizer.includePending")}</label>
+          <label class="check"><input type="checkbox" bind:checked={orgOptions.removeDuplicates} /> {t("organizer.removeDuplicates")}</label>
+          <label class="check"><input type="checkbox" bind:checked={orgOptions.groupSimilarImages} /> {t("organizer.groupSimilar")}</label>
         </div>
         <div class="org-row org-row--footer">
-          <button type="button" class="om-btn om-btn--primary" on:click={startOrganizer} disabled={orgRunning}>Organizar ahora</button>
-          <button type="button" class="om-btn om-btn--ghost" on:click={cancelOrganizer} disabled={!orgRunning}>Cancelar</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={startOrganizer} disabled={orgRunning}>{t("organizer.run")}</button>
+          <button type="button" class="om-btn om-btn--ghost" on:click={cancelOrganizer} disabled={!orgRunning}>{t("organizer.cancelRun")}</button>
           <span class="org-status">{orgDetail}</span>
           <span class="org-progress">{orgProgress}</span>
         </div>
@@ -3381,15 +4238,17 @@
       class="dest-ctx-menu om-panel om-panel--lift"
       role="menu"
       tabindex="-1"
-      aria-label="Acciones del destino"
+      aria-label={t("menus.destAria")}
       style={`left:${destCtxMenu.x}px;top:${destCtxMenu.y}px`}
       on:click|stopPropagation
     >
       {#if destCtxMenu.source === "gallery"}
-        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openPreviewFromCtx}>Ver carpeta</button>
+        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openPreviewFromCtx}>{t("menus.viewFolder")}</button>
       {/if}
-      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditFromCtx}>Editar…</button>
-      <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={removeDestFromCtx}>Eliminar</button>
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditFromCtx}>{t("menus.edit")}</button>
+      <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={removeDestFromCtx}
+        >{t("menus.delete")}</button
+      >
     </div>
   {/if}
 
@@ -3402,12 +4261,107 @@
       class="dest-ctx-menu om-panel om-panel--lift"
       role="menu"
       tabindex="-1"
-      aria-label="Acciones del marcador"
+      aria-label={t("menus.pinnedAria")}
       style={`left:${pinnedCtxMenu.x}px;top:${pinnedCtxMenu.y}px`}
       on:click|stopPropagation
     >
-      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditPinnedFromCtx}>Editar…</button>
-      <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={askUnpinPinnedFromCtx}>Desanclar</button>
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditPinnedFromCtx}>{t("menus.edit")}</button>
+      <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={askUnpinPinnedFromCtx}
+        >{t("menus.unpin")}</button
+      >
+    </div>
+  {/if}
+
+  {#if galleryItemCtxMenu}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="ctx-menu-backdrop" role="presentation" on:click={closeGalleryItemCtxMenu}></div>
+    <!-- svelte-ignore a11y-interactive-supports-focus -->
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div
+      class="dest-ctx-menu gallery-item-ctx-menu om-panel om-panel--lift"
+      role="menu"
+      tabindex="-1"
+      aria-label={t("menus.galleryFileAria")}
+      style={`left:${galleryItemCtxMenu.x}px;top:${galleryItemCtxMenu.y}px`}
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+    >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
+        >{t("contextGallery.copyPath")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={!galleryItemCtxMenu.thumbDataUrl || !String(galleryItemCtxMenu.thumbDataUrl).startsWith("data:")}
+        on:click={() => void copyGalleryCtxThumb()}
+        >{t("contextGallery.copyThumb")}</button
+      >
+      <div class="gallery-item-ctx-menu__section" role="presentation">{t("contextGallery.moveSection")}</div>
+      {#if destRows.length === 0}
+        <div class="gallery-item-ctx-menu__hint">{t("contextGallery.noDestinations")}</div>
+      {:else}
+        {#each destRows as d, di (d.path + "\0gctx\0" + di)}
+          <button
+            type="button"
+            class="dest-ctx-menu__item dest-ctx-menu__item--sub"
+            role="menuitem"
+            title={d.path}
+            on:click={() => void moveGalleryItemFromCtxTo(d.path)}
+            >{d.label}</button
+          >
+        {/each}
+      {/if}
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
+        >{t("contextGallery.metadata")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item dest-ctx-menu__item--danger"
+        role="menuitem"
+        on:click={askDeleteGalleryItemFromCtx}>{t("contextGallery.delete")}</button
+      >
+    </div>
+  {/if}
+
+  {#if galleryFileInfoModal}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div
+      class="overlay overlay--dim overlay--confirm"
+      role="presentation"
+      on:click|self={() => (galleryFileInfoModal = null)}
+    >
+      <div
+        class="modal modal--confirm om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="gallery-file-info-title"
+        tabindex="-1"
+        on:click|stopPropagation
+      >
+        <header class="modal__head">
+          <strong id="gallery-file-info-title">{t("contextGallery.metadataTitle")}</strong>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("contextGallery.closeInfo")}
+            title={t("contextGallery.closeInfo")}
+            on:click={() => (galleryFileInfoModal = null)}>✕</button
+          >
+        </header>
+        <p class="settings-hint">{galleryFileInfoModal.name}</p>
+        <p class="gallery-file-info__path">{galleryFileInfoModal.path}</p>
+        <p class="gallery-file-info__meta">
+          <span>{t("contextGallery.sizeLabel")}: {formatFileSizeBytes(galleryFileInfoModal.sizeBytes)}</span>
+          ·
+          <span>{t("contextGallery.modifiedLabel")}: {galleryFileInfoModal.mtimeIso}</span>
+        </p>
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--primary" on:click={() => (galleryFileInfoModal = null)}
+            >{t("contextGallery.closeInfo")}</button
+          >
+        </div>
+      </div>
     </div>
   {/if}
 
@@ -3423,260 +4377,87 @@
         on:click|stopPropagation={() => undefined}
       >
         <header class="modal__head">
-          <strong id="dest-form-title">{destFormMode === "add" ? "Agregar carpeta destino" : "Editar destino"}</strong>
-          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={closeDestForm}>✕</button>
+          <strong id="dest-form-title"
+            >{destFormMode === "add" ? t("destinations.formAddTitle") : t("destinations.formEditTitle")}</strong
+          >
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("common.closeModalAria")}
+            title={t("common.close")}
+            on:click={closeDestForm}>✕</button
+          >
         </header>
         <section class="dest-form-body">
-          <label class="field-label" for="dest-form-label">Nombre</label>
-          <input id="dest-form-label" class="om-input" type="text" bind:value={destFormLabel} placeholder="Etiqueta en la lista" />
-          <label class="field-label" for="dest-form-path">Ruta</label>
+          <label class="field-label" for="dest-form-label">{t("destinations.nameLabel")}</label>
+          <input
+            id="dest-form-label"
+            class="om-input"
+            type="text"
+            bind:value={destFormLabel}
+            placeholder={t("destinations.namePlaceholder")}
+          />
+          <label class="field-label" for="dest-form-path">{t("destinations.pathLabel")}</label>
           <div class="dest-form-path-row">
-            <input id="dest-form-path" class="om-input" type="text" bind:value={destFormPath} placeholder="Ruta de la carpeta" />
-            <button type="button" class="om-btn om-btn--primary" on:click={pickDestFormFolder}>Examinar…</button>
+            <input
+              id="dest-form-path"
+              class="om-input"
+              type="text"
+              bind:value={destFormPath}
+              placeholder={t("destinations.pathPlaceholder")}
+            />
+            <button type="button" class="om-btn om-btn--primary" on:click={pickDestFormFolder}
+              >{t("destinations.browse")}</button
+            >
           </div>
         </section>
         <div class="settings-actions">
-          <button type="button" class="om-btn om-btn--ghost" on:click={closeDestForm}>Cancelar</button>
-          <button type="button" class="om-btn om-btn--primary" on:click={saveDestForm}>Guardar</button>
+          <button type="button" class="om-btn om-btn--ghost" on:click={closeDestForm}>{t("common.cancel")}</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={saveDestForm}>{t("common.save")}</button>
         </div>
       </div>
     </div>
   {/if}
 
   {#if settingsOpen}
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <div class="overlay overlay--dim" role="presentation" on:click|self={cancelSettingsModal}>
-      <div
-        class="modal modal--settings om-panel om-panel--lift"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        tabindex="-1"
-        on:click|stopPropagation={() => undefined}
-      >
-        <header class="modal__head">
-          <strong id="settings-title">Ajustes</strong>
-          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={cancelSettingsModal}>✕</button>
-        </header>
-        <section class="settings-body">
-          <div class="settings-group">
-            <h3 class="settings-group__title">Rendimiento</h3>
-            <label class="field-label" for="set-thumbs-page">Imágenes por página (0 = sin límite)</label>
-            <input
-              id="set-thumbs-page"
-              class="om-input"
-              type="number"
-              min="0"
-              placeholder="Ejemplo: 48"
-              bind:value={thumbsPerPage}
-            />
-            <div class="settings-preset-row">
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 24)}>Alto rendimiento (24)</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 48)}>Rendimiento (48)</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 96)}>Equilibrado (96)</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 0)}>Sin límite (0)</button>
-            </div>
-            {#if Number(thumbsPerPage) === 0}
-              <p class="settings-hint settings-hint--warn">Sin límite puede degradar el rendimiento en carpetas grandes.</p>
-            {/if}
-            <p class="settings-hint">Mientras más bajo, mejor rendimiento.</p>
-          </div>
-
-          <div class="settings-group">
-            <h3 class="settings-group__title">Miniaturas</h3>
-            <label class="field-label" for="set-thumb-preset">Tamaño (preset)</label>
-            <input
-              id="set-thumb-preset"
-              class="om-range"
-              type="range"
-              min="0"
-              max={thumbScalePresets.length - 1}
-              step="1"
-              bind:value={settingsThumbPresetIdx}
-              on:input={() => {
-                const p = thumbScalePresets[Math.max(0, Math.min(thumbScalePresets.length - 1, Number(settingsThumbPresetIdx) || 0))];
-                settingsThumbScaleDraft = p.value;
-              }}
-            />
-            <div class="settings-preset-row">
-              {#each thumbScalePresets as p, i}
-                <button
-                  type="button"
-                  class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-                  class:om-btn--primary={i === settingsThumbPresetIdx}
-                  on:click={() => {
-                    settingsThumbPresetIdx = i;
-                    settingsThumbScaleDraft = p.value;
-                  }}
-                >{p.label}</button>
-              {/each}
-            </div>
-            <label class="field-label" for="set-thumb-scale">Ajuste fino {Math.round(settingsThumbScaleDraft * 100)}%</label>
-            <input
-              id="set-thumb-scale"
-              class="om-range"
-              type="range"
-              min="0.01"
-              max="2.25"
-              step="0.01"
-              bind:value={settingsThumbScaleDraft}
-            />
-            <label class="field-label" for="set-thumb-gap">Separación entre miniaturas {Math.round(thumbGapPx)}px</label>
-            <input
-              id="set-thumb-gap"
-              class="om-range"
-              type="range"
-              min="0"
-              max="20"
-              step="1"
-              bind:value={thumbGapPx}
-            />
-            <label class="field-label" for="set-thumb-radius">Redondeado de imagen {Math.round(thumbImageRadiusPx)}px</label>
-            <input
-              id="set-thumb-radius"
-              class="om-range"
-              type="range"
-              min="0"
-              max="18"
-              step="1"
-              bind:value={thumbImageRadiusPx}
-            />
-            <label class="field-label" for="set-tile-radius">Redondeado del elemento {Math.round(thumbTileRadiusPx)}px</label>
-            <input
-              id="set-tile-radius"
-              class="om-range"
-              type="range"
-              min="0"
-              max="28"
-              step="1"
-              bind:value={thumbTileRadiusPx}
-            />
-            <div class="settings-preset-row">
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 0)}>Sin redondeo</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 6)}>Suave</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 12)}>Medio</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbTileRadiusPx = 18)}>Alto</button>
-            </div>
-          </div>
-
-          <div class="settings-group">
-            <h3 class="settings-group__title">Apariencia</h3>
-            <div class="settings-preset-row">
-              <label class="check"><input type="checkbox" bind:checked={showThumbLabels} /> Mostrar etiquetas en miniaturas</label>
-            </div>
-            <div class="settings-preset-row">
-              <label class="check"><input type="checkbox" bind:checked={thumbFrameVisible} /> Mostrar recuadro de miniaturas</label>
-            </div>
-            <div class="settings-preset-row">
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-                class:om-btn--primary={thumbCardStyle === "soft"}
-                on:click={() => (thumbCardStyle = "soft")}
-              >Recuadro suave</button>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-                class:om-btn--primary={thumbCardStyle === "flat"}
-                on:click={() => (thumbCardStyle = "flat")}
-              >Recuadro plano</button>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-                class:om-btn--primary={thumbCardStyle === "outlined"}
-                on:click={() => (thumbCardStyle = "outlined")}
-              >Solo contorno</button>
-            </div>
-            <div
-              class="settings-thumb-preview"
-              class:settings-thumb-preview--no-frame={!thumbFrameVisible}
-              style={`--cell:${settingsPreviewCellPx}px;--thumb-gap:${thumbGapPx}px;--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
-            >
-              <div class="tile"><div class="folder-ph">A</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 1</span>{/if}</div>
-              <div class="tile"><div class="folder-ph">B</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 2</span>{/if}</div>
-              <div class="tile"><div class="folder-ph">C</div>{#if showThumbLabels}<span class="tile__name">Ejemplo 3</span>{/if}</div>
-            </div>
-          </div>
-
-          <div class="settings-group">
-            <h3 class="settings-group__title">Atajos de teclado</h3>
-            <p class="settings-hint">Configurables. Usa nombres como Shift, Escape, ArrowLeft, o letras. Listas separadas por comas.</p>
-            <label class="field-label" for="set-shortcut-toggle">Alternar modo Destinos/Selección</label>
-            <input id="set-shortcut-toggle" class="om-input" type="text" bind:value={keyboardShortcuts.toggleMode} />
-            <label class="field-label" for="set-shortcut-delete">Eliminar (contextual)</label>
-            <input id="set-shortcut-delete" class="om-input" type="text" bind:value={keyboardShortcuts.deleteAction} />
-            <label class="field-label" for="set-shortcut-zoom-prev">Fullscreen anterior</label>
-            <input id="set-shortcut-zoom-prev" class="om-input" type="text" bind:value={keyboardShortcuts.zoomPrev} />
-            <label class="field-label" for="set-shortcut-zoom-next">Fullscreen siguiente</label>
-            <input id="set-shortcut-zoom-next" class="om-input" type="text" bind:value={keyboardShortcuts.zoomNext} />
-            <label class="field-label" for="set-shortcut-escape">Escape (limpiar/cerrar)</label>
-            <input id="set-shortcut-escape" class="om-input" type="text" bind:value={keyboardShortcuts.escape} />
-            <div class="settings-preset-row">
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--compact settings-preset-chip"
-                on:click={() => (keyboardShortcuts = { ...defaultKeyboardShortcuts })}
-              >Restaurar atajos por defecto</button>
-            </div>
-          </div>
-        </section>
-        <div class="settings-actions">
-          <button type="button" class="om-btn om-btn--ghost" on:click={cancelSettingsModal}>Cancelar</button>
-          <button type="button" class="om-btn om-btn--primary" on:click={saveSettingsModal}>Guardar</button>
-        </div>
-      </div>
-    </div>
+    <SettingsModal
+      bind:thumbsPerPage
+      bind:settingsThumbPresetIdx
+      bind:settingsThumbScaleDraft
+      bind:thumbGapPx
+      bind:thumbImageRadiusPx
+      bind:thumbTileRadiusPx
+      bind:uiTheme
+      bind:showThumbLabels
+      bind:thumbFrameVisible
+      bind:thumbCardStyle
+      bind:keyboardShortcuts
+      defaultShortcuts={defaultKeyboardShortcuts}
+      themeNameLabel={themeNameLabel}
+      onCancel={cancelSettingsModal}
+      onSave={saveSettingsModal}
+    />
   {/if}
 
   {#if confirmDeleteOpen}
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <div class="overlay overlay--dim overlay--confirm" role="presentation" on:click|self={closeConfirmDelete}>
-      <div
-        class="modal modal--confirm om-panel om-panel--lift"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirm-delete-title"
-        tabindex="-1"
-        on:click|stopPropagation={() => undefined}
-        on:keydown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            void runConfirmDelete();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            closeConfirmDelete();
-          }
-        }}
-      >
-        <header class="modal__head">
-          <strong id="confirm-delete-title">{confirmDeleteTitle}</strong>
-          <button type="button" class="om-btn om-btn--ghost om-btn--close" aria-label="Cerrar modal" title="Cerrar" on:click={closeConfirmDelete}>✕</button>
-        </header>
-        <p class="settings-hint">{confirmDeleteDetail}</p>
-        {#if confirmDeleteBypassEnabled}
-          <label class="check">
-            <input type="checkbox" bind:checked={confirmDeleteBypassChecked} />
-            {confirmDeleteBypassLabel}
-          </label>
-        {/if}
-        <div class="settings-actions">
-          <button type="button" class="om-btn om-btn--ghost" on:click={closeConfirmDelete}>Cancelar</button>
-          <button type="button" class="om-btn om-btn--primary" on:click={runConfirmDelete}>{confirmDeleteConfirmLabel}</button>
-        </div>
-      </div>
-    </div>
+    <ConfirmDeleteModal
+      title={confirmDeleteTitle}
+      detail={confirmDeleteDetail}
+      confirmLabel={confirmDeleteConfirmLabel}
+      bypassEnabled={confirmDeleteBypassEnabled}
+      bypassLabel={confirmDeleteBypassLabel}
+      bind:bypassChecked={confirmDeleteBypassChecked}
+      onClose={closeConfirmDelete}
+      onConfirm={runConfirmDelete}
+    />
   {/if}
 
   {#if uiLoading}
-    <div class="load-overlay" aria-busy="true" aria-live="polite">
-      <div class="load-overlay__spinner"></div>
-      <span class="load-overlay__text">Cargando…</span>
-    </div>
+    <LoadOverlay />
   {/if}
 </main>
 
 <style>
-  @import "./styles/design-tokens.css";
   @import "./styles/components.css";
 
   .app {
@@ -3688,7 +4469,7 @@
     padding: 8px 12px;
     font-family: var(--om-font-sans);
     color: var(--om-text-primary);
-    background: radial-gradient(120% 80% at 50% -20%, rgb(124 140 255 / 0.12), transparent 50%), var(--om-bg-base);
+    background: radial-gradient(120% 80% at 50% -20%, var(--om-bg-spot), transparent 50%), var(--om-bg-base);
     box-sizing: border-box;
   }
 
@@ -3704,6 +4485,124 @@
     flex-wrap: wrap;
     padding-block: 4px;
     padding-inline: 8px;
+    position: relative;
+    z-index: 60;
+  }
+
+  .view-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+  }
+
+  .view-menu-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .view-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 70;
+    min-width: min(320px, calc(100vw - 24px));
+    padding: var(--om-space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--om-space-3);
+    box-shadow: var(--om-shadow-lg);
+  }
+
+  .view-menu__row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--om-space-2);
+    font-size: 0.85rem;
+    color: var(--om-text-secondary);
+    cursor: pointer;
+  }
+
+  .view-menu__row input:disabled + span {
+    opacity: 0.55;
+  }
+
+  .view-menu__fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  .view-menu__legend {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--om-text-muted);
+    margin-bottom: var(--om-space-2);
+  }
+
+  .view-menu__hint {
+    margin: 0;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--om-text-muted);
+  }
+
+  .gallery-section-head {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--om-space-2) var(--om-space-4);
+    padding: var(--om-space-2) var(--om-space-3);
+    margin-top: var(--om-space-2);
+    border-radius: var(--om-radius-sm);
+    border: 1px dashed var(--om-border-default);
+    background: color-mix(in oklab, var(--om-surface-2) 90%, transparent);
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+
+  .gallery-section-head--drop {
+    border-color: var(--om-accent);
+    background: color-mix(in oklab, var(--om-accent-soft) 55%, var(--om-surface-2));
+  }
+
+  .gallery-section-head--timeline {
+    border-style: solid;
+    border-color: color-mix(in oklab, var(--om-accent-2) 35%, var(--om-border-default));
+  }
+
+  .gallery-section-head--tinted {
+    background: color-mix(in oklab, var(--section-tint) 28%, var(--om-surface-2));
+    border-color: color-mix(in oklab, var(--section-tint) 40%, var(--om-border-default));
+  }
+
+  .timeline-day-break {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    padding: 2px 4px 0;
+    min-height: 1.1rem;
+  }
+
+  .timeline-day-break__n {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--om-text-muted);
+    text-transform: uppercase;
+  }
+
+  .gallery-section-head__title {
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--om-text-primary);
+  }
+
+  .gallery-section-head__path {
+    font-size: 0.72rem;
+    color: var(--om-text-muted);
+    word-break: break-all;
   }
 
   .tabs-bar.om-panel,
@@ -4397,6 +5296,51 @@
     border: 1px solid var(--om-border-subtle);
   }
 
+  .preview__video {
+    background: rgb(0 0 0 / 0.35);
+  }
+
+  .preview__svg {
+    background: rgb(124 140 255 / 0.06);
+  }
+
+  .tile-video-ph {
+    font-size: 1.35rem;
+    line-height: 1;
+    opacity: 0.88;
+  }
+
+  .tile-svg-ph {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    opacity: 0.9;
+  }
+
+  .zoom-carousel__svg-ph {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 2.25rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--om-text-secondary);
+    background: rgb(124 140 255 / 0.12);
+    border-radius: var(--om-radius-sm);
+  }
+
+  .zoom-carousel__video-ph {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 2.25rem;
+    font-size: 0.95rem;
+    color: var(--om-text-secondary);
+    background: rgb(0 0 0 / 0.28);
+    border-radius: var(--om-radius-sm);
+  }
+
   .preview__empty {
     flex: 1 1 0;
     min-height: 80px;
@@ -4591,40 +5535,6 @@
     flex: 1;
   }
 
-  .load-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 150;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: var(--om-space-3);
-    background: rgb(4 6 14 / 0.42);
-    pointer-events: all;
-  }
-
-  .load-overlay__spinner {
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
-    border: 3px solid rgb(255 255 255 / 0.18);
-    border-top-color: var(--om-accent);
-    animation: om-spin 0.7s linear infinite;
-  }
-
-  .load-overlay__text {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--om-text-secondary);
-  }
-
-  @keyframes om-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
   .overlay {
     position: fixed;
     inset: 0;
@@ -4641,18 +5551,6 @@
 
   .overlay--confirm {
     z-index: 75;
-  }
-
-  .modal--settings {
-    width: min(760px, 96vw);
-    max-height: min(92vh, 780px);
-    display: flex;
-    flex-direction: column;
-    gap: var(--om-space-3);
-    padding: var(--om-space-4);
-    box-sizing: border-box;
-    overflow: hidden;
-    border-radius: var(--thumb-tile-radius, var(--om-radius-md));
   }
 
   .modal--dest-form {
@@ -4761,31 +5659,46 @@
     background: rgb(248 113 113 / 0.12);
   }
 
-  .settings-body {
-    display: flex;
-    flex-direction: column;
-    gap: var(--om-space-3);
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding-right: 4px;
+  .dest-ctx-menu__item--sub {
+    padding-left: var(--om-space-4);
+    font-weight: 500;
+    font-size: 0.75rem;
+    opacity: 0.95;
   }
 
-  .settings-group {
+  .gallery-item-ctx-menu {
+    min-width: 12rem;
+  }
+
+  .gallery-item-ctx-menu__section {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--om-text-muted);
+    padding: var(--om-space-1) var(--om-space-3) var(--om-space-1);
+    margin-top: var(--om-space-1);
+  }
+
+  .gallery-item-ctx-menu__hint {
+    font-size: 0.6875rem;
+    color: var(--om-text-muted);
+    padding: 0 var(--om-space-3) var(--om-space-2);
+  }
+
+  .gallery-file-info__path {
+    font-size: 0.75rem;
+    word-break: break-all;
+    color: var(--om-text-secondary);
+    margin: 0 0 var(--om-space-3);
+    line-height: 1.4;
+  }
+
+  .gallery-file-info__meta {
     display: flex;
     flex-direction: column;
     gap: var(--om-space-2);
-    padding: var(--om-space-2);
-    border: 1px solid color-mix(in oklab, var(--om-border-default) 78%, transparent);
-    border-radius: var(--om-radius-md);
-    background: color-mix(in oklab, var(--om-surface-2) 86%, transparent);
-  }
-
-  .settings-group__title {
-    margin: 0;
-    font-size: 0.84rem;
-    color: var(--om-text-secondary);
-    letter-spacing: 0.01em;
+    font-size: 0.8125rem;
   }
 
   .settings-hint {
@@ -4795,42 +5708,11 @@
     line-height: 1.4;
   }
 
-  .settings-hint--warn {
-    color: color-mix(in oklab, #ffbf66 78%, var(--om-text-primary));
-  }
-
-  .settings-preset-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--om-space-1);
-  }
-
-  .settings-preset-chip {
-    min-height: 1.65rem;
-  }
-
   .om-btn--close {
     min-width: 2rem;
     padding-inline: 0.45rem;
     font-size: 1rem;
     line-height: 1;
-  }
-
-  .settings-thumb-preview {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(var(--cell, 140px), var(--cell, 140px)));
-    gap: var(--thumb-gap, var(--om-space-2));
-    justify-content: start;
-    max-width: 100%;
-    overflow-x: auto;
-    padding: 2px 0;
-  }
-
-  .settings-thumb-preview--no-frame .tile {
-    background: transparent;
-    border-color: transparent;
-    box-shadow: none;
-    padding: 0;
   }
 
   .settings-actions {
@@ -5001,6 +5883,22 @@
     position: relative;
   }
 
+  .zoom-crop-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .zoom-crop-marquee {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px solid rgb(255 255 255 / 0.95);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45) inset;
+    pointer-events: none;
+  }
+
   .zoom-dest-chips {
     position: absolute;
     left: 50%;
@@ -5148,11 +6046,11 @@
   }
 
   .zoom-carousel__item--active {
-    border-color: color-mix(in oklab, var(--om-accent) 82%, #ffffff);
-    background: color-mix(in oklab, var(--om-accent) 30%, var(--om-surface-2));
+    border-color: color-mix(in oklab, var(--om-accent) 82%, var(--om-bg-elevated));
+    background: color-mix(in oklab, var(--om-accent) 28%, var(--om-surface-2));
     box-shadow:
-      0 0 0 2px color-mix(in oklab, var(--om-accent) 70%, #ffffff),
-      0 0 14px rgb(124 140 255 / 0.3);
+      0 0 0 2px color-mix(in oklab, var(--om-accent) 65%, transparent),
+      0 0 12px var(--om-accent-glow);
   }
 
   .zoom-mini {
