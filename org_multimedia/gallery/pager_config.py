@@ -5,7 +5,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from ..settings import save_app_settings
+from ..core.settings import save_app_settings
 
 # Valores permitidos para miniaturas por pagina (pixmaps en X ~ proporcional).
 ALLOWED_THUMBS_PER_PAGE = (60, 90, 120, 150, 180, 240)

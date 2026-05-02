@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
-from ..gallery_paths import list_subdirs, scan_images_flat
-from ..settings import save_app_settings
+from ..core.gallery_paths import list_subdirs, scan_images_flat
+from ..core.settings import save_app_settings
 
 
 class GalleryNavigationMixin:

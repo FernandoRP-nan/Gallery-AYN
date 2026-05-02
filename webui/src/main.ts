@@ -1,3 +1,4 @@
+import "./styles/app.css";
 import "./styles/design-tokens.css";
 import "./styles/om-theme-overrides.css";
 import { mount } from "svelte";

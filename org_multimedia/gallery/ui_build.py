@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .ribbon_word_tabs import GalleryWordRibbon
-from ..settings import save_app_settings
+from ..core.settings import save_app_settings
 
 
 class GalleryUIBuildMixin:

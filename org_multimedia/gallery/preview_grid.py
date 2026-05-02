@@ -6,8 +6,8 @@ import threading
 import tkinter as tk
 from pathlib import Path
 
-from ..gallery_images import load_preview_photoimage_fill_box
-from ..pil_compat import HAS_PIL
+from ..core.gallery_images import load_preview_photoimage_fill_box
+from ..core.pil_compat import HAS_PIL
 
 
 class GalleryPreviewGridMixin:

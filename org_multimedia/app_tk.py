@@ -7,7 +7,7 @@ from tkinter import ttk
 
 from .gallery_frame import GalleryManualFrame
 from .organizer_tab import OrganizerApp
-from .settings import load_app_settings, save_app_settings
+from .core.settings import load_app_settings, save_app_settings
 from .ui_theme import apply_dark_theme
 
 

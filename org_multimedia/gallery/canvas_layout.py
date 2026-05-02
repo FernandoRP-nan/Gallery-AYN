@@ -5,8 +5,8 @@ from __future__ import annotations
 import queue
 import tkinter as tk
 
-from ..gallery_grid_layout import GalleryGridLayout
-from ..settings import save_app_settings
+from ..core.gallery_grid_layout import GalleryGridLayout
+from ..core.settings import save_app_settings
 
 
 class GalleryCanvasLayoutMixin:

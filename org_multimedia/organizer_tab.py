@@ -10,7 +10,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .media_organizer import MediaOrganizer
+from .core.media_organizer import MediaOrganizer
 
 
 class OrganizerApp:

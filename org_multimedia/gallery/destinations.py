@@ -7,10 +7,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from ..fs_utils import ensure_unique_destination
-from ..gallery_images import make_thumbnail_photoimage
-from ..gallery_paths import scan_images_flat
-from ..settings import save_app_settings
+from ..core.fs_utils import ensure_unique_destination
+from ..core.gallery_images import make_thumbnail_photoimage
+from ..core.gallery_paths import scan_images_flat
+from ..core.settings import save_app_settings
 
 
 class GalleryDestinationsMixin:

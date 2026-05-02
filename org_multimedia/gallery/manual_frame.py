@@ -8,7 +8,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
-from ..settings import load_app_settings
+from ..core.settings import load_app_settings
 
 from .canvas_layout import GalleryCanvasLayoutMixin
 from .destinations import GalleryDestinationsMixin

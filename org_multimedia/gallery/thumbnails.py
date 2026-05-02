@@ -7,8 +7,8 @@ import threading
 import tkinter as tk
 from pathlib import Path
 
-from ..gallery_images import make_thumbnail_photoimage
-from ..pil_compat import HAS_PIL
+from ..core.gallery_images import make_thumbnail_photoimage
+from ..core.pil_compat import HAS_PIL
 
 
 class GalleryThumbnailsMixin:
