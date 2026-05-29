@@ -2084,7 +2084,7 @@
       previewPanStartX = e.clientX - previewPanX;
       previewPanStartY = e.clientY - previewPanY;
     }
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     touchZoomHud();
   }
 
@@ -2108,7 +2108,7 @@
 
   function endPan(e: PointerEvent) {
     previewPanDrag = false;
-    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
   }
 
   function toggleZoomCarousel() {
@@ -2130,8 +2130,6 @@
       previewZoomOpen = false;
       return;
     }
-    previewPanX = 0;
-    previewPanY = 0;
     toggleZoomCarousel();
   }
 
