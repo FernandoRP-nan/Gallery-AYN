@@ -163,45 +163,6 @@
       </div>
     {/if}
   </div>
-  {#if destinationsMode}
-  <div class="dest-float-chips" aria-label={t("selection.destBarAria")}>
-    <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
-      +
-    </button>
-    {#if destRows.length === 0}
-      <span class="dest-float-empty">{t("selection.noDestFolders")}</span>
-    {/if}
-    {#each destRows as d, i (d.path + "\0" + i)}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_interactive_supports_focus -->
-      <div
-        class="dest-float-chip"
-        class:dest-float-chip--drop-target={dragOverDestPath === d.path}
-        class:dest-float-chip--dragging={draggedDestIdx === i}
-        data-dest-path={d.path}
-        title={d.path}
-        role="button"
-        tabindex="0"
-        draggable={true}
-        on:click={(e) => onDestCardClick(e, d.path)}
-        on:keydown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onDestCardClick(e as unknown as MouseEvent, d.path);
-          }
-        }}
-        on:contextmenu={(e) => onDestContextMenu(e, i, "gallery")}
-        on:dragstart={(e) => onDestChipDragStart(e, i)}
-        on:dragend={onDestChipDragEnd}
-        on:dragenter|preventDefault
-        on:dragover|preventDefault
-        on:drop={(e) => onDestDrop(e, d.path)}
-      >
-        <span class="dest-float-chip__title">{d.label}</span>
-      </div>
-    {/each}
-  </div>
-  {/if}
 </article>
 
 <style>
@@ -364,54 +325,7 @@
     overflow-y: hidden;
     box-sizing: border-box;
   }
-.dest-float-add {
-    border-radius: 999px;
-    border: 1px solid rgb(255 255 255 / 0.18);
-    background: rgb(255 255 255 / 0.07);
-    color: var(--om-text-secondary);
-    min-height: 1.95rem;
-    padding: 4px 12px;
-    font-size: 0.82rem;
-  }
-.dest-float-add:hover {
-    border-color: rgb(124 140 255 / 0.45);
-    background: rgb(124 140 255 / 0.14);
-    color: var(--om-text-primary);
-  }
-.dest-float-empty {
-    font-size: 0.72rem;
-    color: var(--om-text-muted);
-  }
-.dest-float-chip {
-    display: inline-flex;
-    align-items: center;
-    flex: 0 0 auto;
-    min-height: 1.95rem;
-    padding: 4px 12px;
-    border-radius: 999px;
-    border: 1px solid rgb(255 255 255 / 0.16);
-    background: rgb(255 255 255 / 0.06);
-    color: var(--om-text-secondary);
-    cursor: pointer;
-    user-select: none;
-    max-width: min(280px, 100%);
-  }
-.dest-float-chip:hover {
-    border-color: rgb(124 140 255 / 0.45);
-    background: rgb(124 140 255 / 0.14);
-  }
-.dest-float-chip--drop-target {
-    border-color: rgb(124 140 255 / 0.82);
-    background: linear-gradient(160deg, rgb(124 140 255 / 0.32), rgb(94 228 212 / 0.18));
-    color: var(--om-text-primary);
-  }
-.dest-float-chip__title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.82rem;
-    line-height: 1.2;
-  }
+
 .selection-float__count {
     font-size: 0.7rem;
     font-weight: 700;
@@ -423,6 +337,7 @@
 .gallery {
     min-height: 0;
     min-width: 0;
+    position: relative;
   }
 .grid {
     display: grid;

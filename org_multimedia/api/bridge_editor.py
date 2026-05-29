@@ -162,6 +162,34 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
     except Exception:
         return None
 
+def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) -> str | None:
+    """Miniatura del primer fotograma de un video usando ffmpeg."""
+    import subprocess
+    if Image is None:
+        return None
+    try:
+        # ffmpeg extrae el fotograma más cercano al segundo 0.5 como PNG en stdout
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-ss", "0.5",          # posición temporal (evita fotogramas negros)
+                "-i", str(path),
+                "-vframes", "1",       # solo un fotograma
+                "-vf", f"scale={size}:{size}:force_original_aspect_ratio=decrease,pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:black",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return None
+        payload = base64.b64encode(result.stdout).decode("ascii")
+        return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        return None
+
 class EditorBridgeMixin:
     def gallery_preview(self, path: str, width: int, height: int) -> dict:
         p = Path(path).expanduser().resolve()
@@ -331,7 +359,11 @@ class EditorBridgeMixin:
             if hit is not None and hit[0] == mtime:
                 return hit[1]
         if path.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS:
-            return None
+            # Genera miniatura del primer fotograma con ffmpeg
+            data = _video_thumb_jpeg_data_url_square(path, thumb_px)
+            with self._thumb_cache_lock:
+                self._thumb_cache[key] = (mtime, data)
+            return data
         # Pillow no rasteriza SVG de forma fiable; la UI usa `file://` en vista previa.
         if path.suffix.lower() == ".svg":
             return None

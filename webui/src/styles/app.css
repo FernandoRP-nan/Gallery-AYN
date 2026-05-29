@@ -110,6 +110,7 @@
     gap: 0;
     min-height: 0;
     align-items: stretch;
+    position: relative;
   }
 
 .destinos-work__top {
@@ -124,6 +125,82 @@
 .destinos-work__top > .content {
     flex: 1;
     min-height: 0;
+  }
+
+/* Barra de chips de destinos: fila visible debajo de la galería en modo Edición. */
+  .dest-float-chips-bar {
+    position: absolute;
+    left: 50%;
+    bottom: var(--om-space-4);
+    transform: translateX(-50%);
+    z-index: 20;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: var(--om-space-1);
+    padding: var(--om-space-1) var(--om-space-2);
+    border-radius: var(--om-radius-md);
+    background: linear-gradient(180deg, rgb(8 10 18 / 0.55), rgb(8 10 18 / 0.88));
+    border: 1px solid rgb(255 255 255 / 0.1);
+    border-top-color: transparent;
+    border-left-color: transparent;
+    border-right-color: transparent;
+    box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
+    backdrop-filter: blur(10px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+  }
+
+.dest-float-add {
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.18);
+    background: rgb(255 255 255 / 0.07);
+    color: var(--om-text-secondary);
+    min-height: 1.95rem;
+    padding: 4px 12px;
+    font-size: 0.82rem;
+  }
+.dest-float-add:hover {
+    border-color: rgb(124 140 255 / 0.45);
+    background: rgb(124 140 255 / 0.14);
+    color: var(--om-text-primary);
+  }
+.dest-float-empty {
+    font-size: 0.72rem;
+    color: var(--om-text-muted);
+  }
+.dest-float-chip {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    min-height: 1.95rem;
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.16);
+    background: rgb(255 255 255 / 0.06);
+    color: var(--om-text-secondary);
+    cursor: pointer;
+    user-select: none;
+    max-width: min(280px, 100%);
+  }
+.dest-float-chip:hover {
+    border-color: rgb(124 140 255 / 0.45);
+    background: rgb(124 140 255 / 0.14);
+  }
+.dest-float-chip--drop-target {
+    border-color: rgb(124 140 255 / 0.82);
+    background: linear-gradient(160deg, rgb(124 140 255 / 0.32), rgb(94 228 212 / 0.18));
+    color: var(--om-text-primary);
+  }
+.dest-float-chip__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.82rem;
+    line-height: 1.2;
   }
 
 :global(.om-btn--mini) {
