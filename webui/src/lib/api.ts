@@ -86,6 +86,14 @@ const devMockApi: WebApi = {
     mediaType: "image" as const,
     fileUrl: null as string | null,
   }),
+  gallery_file_base64: async () => ({
+    dataUrl: null as string | null,
+    error: null as string | null,
+  }),
+  gallery_copy_to_clipboard: async () => ({
+    ok: false,
+    error: null as string | null,
+  }),
   gallery_file_stat: async () => ({
     path: "",
     name: "",
@@ -177,6 +185,8 @@ export const bridge = {
   galleryInvertSelection: () => call<any>("gallery_invert_selection"),
   galleryPreview: (path: string, width: number, height: number) =>
     call<any>("gallery_preview", path, width, height),
+  galleryFileBase64: (path: string) => call<any>("gallery_file_base64", path),
+  galleryCopyToClipboard: (path: string) => call<any>("gallery_copy_to_clipboard", path),
   galleryFileStat: (path: string) => call<any>("gallery_file_stat", path),
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMovePaths: (paths: string[], destPath: string) =>

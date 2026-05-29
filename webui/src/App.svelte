@@ -2564,20 +2564,17 @@
     closeGalleryItemCtxMenu();
   }
 
-  async function copyGalleryCtxThumb() {
+  async function copyGalleryCtxFullImage() {
     if (!galleryItemCtxMenu) return;
-    const u = galleryItemCtxMenu.thumbDataUrl;
-    if (!u || !String(u).startsWith("data:")) {
-      status = t("contextGallery.copyThumbUnavailable");
-      closeGalleryItemCtxMenu();
-      return;
-    }
+    const path = galleryItemCtxMenu.path;
+    status = t("load.loading");
     try {
-      const res = await fetch(u);
-      const blob = await res.blob();
-      const type = blob.type && blob.type !== "" ? blob.type : "image/png";
-      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-      status = t("contextGallery.copyThumbOk");
+      const res = await bridge.galleryCopyToClipboard(path);
+      if (res.ok) {
+        status = t("contextGallery.copyThumbOk");
+      } else {
+        status = res.error || t("contextGallery.copyError");
+      }
     } catch {
       status = t("contextGallery.copyError");
     }
@@ -3660,7 +3657,7 @@
         class="dest-ctx-menu__item"
         role="menuitem"
         disabled={!galleryItemCtxMenu.thumbDataUrl || !String(galleryItemCtxMenu.thumbDataUrl).startsWith("data:")}
-        on:click={() => void copyGalleryCtxThumb()}
+        on:click={() => void copyGalleryCtxFullImage()}
         >{t("contextGallery.copyThumb")}</button
       >
       <div class="gallery-item-ctx-menu__section" role="presentation">{t("contextGallery.moveSection")}</div>

@@ -267,10 +267,10 @@ export const es = {
   },
   contextGallery: {
     copyPath: "Copiar ruta",
-    copyThumb: "Copiar miniatura al portapapeles",
+    copyThumb: "Copiar imagen completa al portapapeles",
     copyPathOk: "Ruta copiada al portapapeles",
-    copyThumbOk: "Miniatura copiada al portapapeles",
-    copyThumbUnavailable: "No hay miniatura generada para copiar",
+    copyThumbOk: "Imagen completa copiada al portapapeles",
+    copyThumbUnavailable: "No se pudo obtener la imagen",
     copyError: "No se pudo copiar al portapapeles",
     moveSection: "Mover a carpeta destino",
     noDestinations: "No hay carpetas destino (ajústalas en la barra inferior)",

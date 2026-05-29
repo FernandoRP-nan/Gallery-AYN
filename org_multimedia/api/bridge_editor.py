@@ -199,6 +199,56 @@ class EditorBridgeMixin:
             "fileUrl": None,
         }
 
+    def gallery_file_base64(self, path: str) -> dict:
+        """Lee el archivo original y lo codifica en base64 para evitar el alto consumo de memoria de decodificar/re-codificar PNG grandes."""
+        import mimetypes
+        p = Path(path).expanduser().resolve()
+        if not p.is_file():
+            return {"error": "File not found"}
+        mime, _ = mimetypes.guess_type(str(p))
+        if not mime:
+            mime = "image/jpeg"
+        try:
+            with open(p, "rb") as f:
+                data = base64.b64encode(f.read()).decode("ascii")
+            return {"dataUrl": f"data:{mime};base64,{data}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def gallery_copy_to_clipboard(self, path: str) -> dict:
+        """Copia una imagen directamente al portapapeles del SO (Wayland o X11)."""
+        import subprocess
+        p = Path(path).expanduser().resolve()
+        if not p.is_file():
+            return {"error": "Archivo no encontrado"}
+        
+        if Image is None:
+            return {"error": "Pillow no disponible"}
+            
+        try:
+            with Image.open(p) as im:
+                bio = io.BytesIO()
+                im.save(bio, format="PNG")
+                png_data = bio.getvalue()
+        except Exception as e:
+            return {"error": f"Error al procesar la imagen: {e}"}
+
+        # Wayland
+        try:
+            subprocess.run(["wl-copy", "-t", "image/png"], input=png_data, check=True)
+            return {"ok": True}
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            pass
+
+        # X11
+        try:
+            subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png"], input=png_data, check=True)
+            return {"ok": True}
+        except Exception as e:
+            return {"error": "No se pudo copiar: falta wl-copy o xclip"}
+
     def gallery_image_rotate(self, path: str, degrees: int) -> dict:
         """Rota la imagen en disco (±90° o 180°)."""
         if Image is None or ImageOps is None:
