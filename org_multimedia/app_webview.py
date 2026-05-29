@@ -14,6 +14,7 @@ from .pywebview_bridge_return import patch_js_bridge_return_value
 from .pywebview_qt_json import patch_qt_qjson_bridge
 from .core.settings import load_app_settings
 from .api.web_api import WebApi
+from .media_server import start_media_server
 
 
 def _resolve_frontend_url() -> str:
@@ -56,6 +57,9 @@ def main() -> None:
 
     settings = load_app_settings()
     api = WebApi()
+    
+    start_media_server(port=51234)
+    
     window = webview.create_window(
         "Galería AYN",
         _resolve_frontend_url(),

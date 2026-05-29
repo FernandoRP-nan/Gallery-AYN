@@ -175,20 +175,24 @@ class EditorBridgeMixin:
             }
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            import urllib.parse
+            media_url = f"http://127.0.0.1:51234/media?path={urllib.parse.quote(str(p))}"
             return {
                 "path": str(p),
                 "name": p.name,
                 "dataUrl": None,
                 "mediaType": "video",
-                "fileUrl": p.as_uri(),
+                "fileUrl": media_url,
             }
         if ext == ".svg":
+            import urllib.parse
+            media_url = f"http://127.0.0.1:51234/media?path={urllib.parse.quote(str(p))}"
             return {
                 "path": str(p),
                 "name": p.name,
                 "dataUrl": None,
                 "mediaType": "svg",
-                "fileUrl": p.as_uri(),
+                "fileUrl": media_url,
             }
         data_url = _img_to_data_url_contain(p, max(80, int(width)), max(80, int(height)))
         return {
