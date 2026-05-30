@@ -286,6 +286,8 @@
     border-right-color: transparent;
     box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
     backdrop-filter: blur(10px);
+    /* Capa GPU propia: aísla el repaint del fondo para reducir parpadeo. */
+    will-change: transform;
   }
 .selection-float {
     display: inline-flex;
@@ -299,6 +301,8 @@
     border: 1px solid rgb(255 255 255 / 0.1);
     box-shadow: var(--om-shadow-md);
     backdrop-filter: blur(8px);
+    /* Capa GPU propia: aísla el repaint del fondo para reducir parpadeo. */
+    will-change: transform;
   }
 /* Fuera del área con scroll: no provoca artefactos ni cortes raros al desplazar. */
   .gallery--with-float > .dest-float-chips {

@@ -152,6 +152,9 @@
     box-sizing: border-box;
     width: max-content;
     max-width: calc(100vw - 32px);
+    /* Promoción a capa GPU propia: aísla el repaint de las barras flotantes
+       del resto de la página y reduce el parpadeo al mover ventanas del SO. */
+    will-change: transform;
   }
 
 .dest-float-add {
@@ -450,6 +453,18 @@
 :global(body.om-dragging) .splitter,
   :global(body.om-dragging) .splitter {
     pointer-events: none;
+  }
+
+/* Durante el drag: suspender backdrop-filter en el Toolbar y las barras flotantes.
+   backdrop-filter obliga al compositor a releer el fondo en cada frame, lo que
+   provoca parpadeo notorio cuando el SO mueve ventanas por encima de la webview. */
+  :global(body.om-dragging) .tabs-bar,
+  :global(body.om-dragging) .dest-float-chips-bar,
+  :global(body.om-dragging) .dest-float-chips,
+  :global(body.om-dragging) .selection-float,
+  :global(body.om-dragging) .tile__name {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 
 .preview {

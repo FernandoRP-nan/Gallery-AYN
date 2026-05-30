@@ -225,6 +225,8 @@
   /** Listeners globales durante HTML5 DnD (Qt WebEngine: document + capture). */
   let dragWinMove: ((ev: DragEvent) => void) | null = null;
   let dragWinEnd: (() => void) | null = null;
+  /** Throttle: true mientras hay un rAF pendiente del dragWinMove. */
+  let dragRafPending = false;
 
   let splitDrag = false;
   /** Contador para overlay de carga (carpetas, API, etc.). */
@@ -2426,13 +2428,24 @@
     dragWinMove = (ev: DragEvent) => {
       ev.preventDefault();
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+      // Coordenadas del ghost: actualizar siempre (CSS transform, no re-render Svelte).
       ghostX = ev.clientX;
       ghostY = ev.clientY;
-      const el = document.elementFromPoint(ev.clientX, ev.clientY);
-      const card = el?.closest?.("[data-dest-path]") as HTMLElement | null;
-      dragOverDestPath = card?.dataset?.destPath ?? null;
-      const sec = el?.closest?.("[data-section-folder]") as HTMLElement | null;
-      dragOverSectionPath = sec?.dataset?.sectionFolder ?? null;
+      // Throttle: las actualizaciones reactivas de Svelte (dragOverDestPath /
+      // dragOverSectionPath) se limitan a 1 por frame para evitar re-renders
+      // continuos que provocan parpadeo en el Toolbar y la barra de chips.
+      if (dragRafPending) return;
+      dragRafPending = true;
+      const cx = ev.clientX;
+      const cy = ev.clientY;
+      requestAnimationFrame(() => {
+        dragRafPending = false;
+        const el = document.elementFromPoint(cx, cy);
+        const card = el?.closest?.("[data-dest-path]") as HTMLElement | null;
+        dragOverDestPath = card?.dataset?.destPath ?? null;
+        const sec = el?.closest?.("[data-section-folder]") as HTMLElement | null;
+        dragOverSectionPath = sec?.dataset?.sectionFolder ?? null;
+      });
     };
     dragWinEnd = () => {
       endDragSessionAfterGesture();
