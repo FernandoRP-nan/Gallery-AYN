@@ -35,6 +35,18 @@
   export let reload: () => void;
   export let pickGalleryFolder: () => void;
   export let openSettingsModal: () => void;
+
+  // Lista de prioridad de ordenamiento reactiva
+  $: sortPriorityParts = (() => {
+    const parts = (gallerySortMode || "name,mtime,type").split(',').map(x => x.trim()).filter(Boolean);
+    const allModes = ['name', 'mtime', 'type'];
+    for (const m of allModes) {
+      if (!parts.includes(m)) {
+        parts.push(m);
+      }
+    }
+    return parts;
+  })();
 </script>
 
 <header class="tabs-bar om-panel">
@@ -100,7 +112,7 @@
           <fieldset class="view-menu__fieldset">
             <div class="view-menu__legend">{t("view.sortLabel")}</div>
             <div class="sort-priority-list">
-              {#each gallerySortMode.split(',').map(x => x.trim()).filter(Boolean) as modeKey, index}
+              {#each sortPriorityParts as modeKey, index}
                 <div class="sort-priority-item">
                   <span class="sort-priority-label">
                     {#if modeKey === 'name'}
@@ -118,12 +130,11 @@
                       disabled={index === 0}
                       title="Subir prioridad"
                       on:click={() => {
-                        const parts = gallerySortMode.split(',').map(x => x.trim()).filter(Boolean);
-                        // Intercambiar con el anterior
-                        const temp = parts[index - 1];
-                        parts[index - 1] = parts[index];
-                        parts[index] = temp;
-                        onGallerySortChange(parts.join(','));
+                        const nextParts = [...sortPriorityParts];
+                        const temp = nextParts[index - 1];
+                        nextParts[index - 1] = nextParts[index];
+                        nextParts[index] = temp;
+                        onGallerySortChange(nextParts.join(','));
                       }}
                     >
                       ▲
@@ -131,15 +142,14 @@
                     <button
                       type="button"
                       class="sort-priority-btn"
-                      disabled={index === gallerySortMode.split(',').map(x => x.trim()).filter(Boolean).length - 1}
+                      disabled={index === sortPriorityParts.length - 1}
                       title="Bajar prioridad"
                       on:click={() => {
-                        const parts = gallerySortMode.split(',').map(x => x.trim()).filter(Boolean);
-                        // Intercambiar con el siguiente
-                        const temp = parts[index + 1];
-                        parts[index + 1] = parts[index];
-                        parts[index] = temp;
-                        onGallerySortChange(parts.join(','));
+                        const nextParts = [...sortPriorityParts];
+                        const temp = nextParts[index + 1];
+                        nextParts[index + 1] = nextParts[index];
+                        nextParts[index] = temp;
+                        onGallerySortChange(nextParts.join(','));
                       }}
                     >
                       ▼
