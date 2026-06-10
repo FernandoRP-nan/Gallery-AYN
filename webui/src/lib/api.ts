@@ -11,7 +11,10 @@ export type GalleryItem = {
   thumbDataUrl?: string | null;
   thumbQuality?: "lq" | "hq";
   selected?: boolean;
+  /** Miniaturas del contenido interior (solo kind === "folder", hasta 4 elementos). */
+  folderPreviewUrls?: (string | null)[];
 };
+
 
 type WebApi = Record<string, (...args: any[]) => Promise<any>>;
 

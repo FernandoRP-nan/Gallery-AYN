@@ -162,6 +162,44 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
     except Exception:
         return None
 
+# Número de miniaturas del contenido de carpeta que se envían al frontend.
+_FOLDER_PREVIEW_COUNT = 4
+
+
+def _folder_preview_thumbs(
+    folder: Path,
+    count: int,
+    thumb_px: int,
+) -> list[str | None]:
+    """Devuelve hasta `count` data-URLs LQ de imágenes del primer nivel de la carpeta.
+
+    Solo busca en el nivel inmediato (no recursivo), ignora videos y SVGs ya que
+    su miniatura sería None o lenta. El resultado puede tener menos de `count`
+    elementos si la carpeta tiene pocas imágenes o está vacía.
+    """
+    if Image is None:
+        return []
+    thumb_cell = max(32, thumb_px // 2)  # cada celda del mosaico es pequeña
+    candidates: list[Path] = []
+    try:
+        for p in folder.iterdir():
+            if not p.is_file():
+                continue
+            ext = p.suffix.lower()
+            # Solo imágenes rasterizadas (no SVG ni vídeos)
+            if ext in MediaOrganizer.IMAGE_EXTENSIONS and ext != ".svg":
+                candidates.append(p)
+    except OSError:
+        return []
+    candidates.sort(key=lambda x: str(x).lower())
+    chosen = candidates[:count]
+    urls: list[str | None] = []
+    for p in chosen:
+        url = _thumb_jpeg_data_url_square(p, thumb_cell, quality=40)
+        urls.append(url)
+    return urls
+
+
 class GalleryBridgeMixin:
     def _is_grouped_mode(self) -> bool:
         return bool(self.settings.get("gallery_group_by_folder", False))
@@ -412,8 +450,25 @@ class GalleryBridgeMixin:
         s, e = self._slice()
         items: list[dict] = []
         if self.gallery_page == 0 and self.gallery_folder is not None:
-            for sub in self.subfolders:
-                items.append({"kind": "folder", "name": sub.name, "path": str(sub), "thumbDataUrl": None})
+            thumb_px = _thumb_px_from_gallery_scale(
+                float(self.settings.get("gallery_thumb_scale", 1.0))
+            )
+            # Genera las miniaturas de todas las subcarpetas en paralelo.
+            def _folder_item(sub: Path) -> dict:
+                preview_urls = _folder_preview_thumbs(
+                    sub, _FOLDER_PREVIEW_COUNT, thumb_px
+                )
+                return {
+                    "kind": "folder",
+                    "name": sub.name,
+                    "path": str(sub),
+                    "thumbDataUrl": None,
+                    "folderPreviewUrls": preview_urls,
+                }
+            max_w = min(8, max(1, len(self.subfolders)))
+            with ThreadPoolExecutor(max_workers=max_w) as pool:
+                folder_items = list(pool.map(_folder_item, self.subfolders))
+            items.extend(folder_items)
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         slice_paths = self.ordered_paths[s:e]
         selected_frozenset = frozenset(self.selected)

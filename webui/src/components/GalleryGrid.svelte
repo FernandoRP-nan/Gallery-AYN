@@ -116,6 +116,28 @@
             loading="lazy"
             decoding="async"
           />
+        {:else if it.kind === "folder" && it.folderPreviewUrls && it.folderPreviewUrls.length > 0}
+          <!-- Mosaico de miniaturas del contenido de la carpeta -->
+          <div
+            class="folder-mosaic"
+            class:folder-mosaic--1={it.folderPreviewUrls.length === 1}
+            class:folder-mosaic--2={it.folderPreviewUrls.length === 2}
+            class:folder-mosaic--3={it.folderPreviewUrls.length === 3}
+          >
+            {#each it.folderPreviewUrls.slice(0, 4) as url}
+              <div class="folder-mosaic__cell">
+                {#if url}
+                  <img src={url} alt="" draggable={false} />
+                {/if}
+              </div>
+            {/each}
+          </div>
+          <!-- Ícono de carpeta flotante sobre el mosaico -->
+          <div class="folder-mosaic__overlay" aria-hidden="true">
+            <svg class="folder-ph__svg folder-mosaic__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z" fill="currentColor" />
+            </svg>
+          </div>
         {:else}
           <div class="folder-ph" class:folder-ph--folder={!isGalleryMediaKind(it.kind)}>
             {#if it.kind === "image" && it.path.toLowerCase().endsWith(".svg")}
@@ -374,4 +396,70 @@
     gap: var(--om-space-2);
     font-size: 0.8125rem;
   }
+/* Mosaico de miniaturas del contenido de carpeta */
+.folder-mosaic {
+    width: 100%;
+    aspect-ratio: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 2px;
+    border-radius: var(--thumb-image-radius, var(--om-radius-sm));
+    overflow: hidden;
+    background: color-mix(in oklab, var(--om-surface-1) 60%, transparent);
+    position: relative;
+  }
+/* 1 imagen: ocupa toda la celda */
+.folder-mosaic.folder-mosaic--1 {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+/* 2 imágenes: dos columnas, una fila */
+.folder-mosaic.folder-mosaic--2 {
+    grid-template-rows: 1fr;
+  }
+/* 3 imágenes: última celda vacía se muestra con fondo */
+.folder-mosaic.folder-mosaic--3 .folder-mosaic__cell:last-child {
+    background: color-mix(in oklab, var(--om-surface-2) 70%, transparent);
+  }
+.folder-mosaic__cell {
+    background: color-mix(in oklab, var(--om-bg-base) 55%, transparent);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 0;
+  }
+.folder-mosaic__cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+/* Overlay: icono de carpeta superpuesto en la esquina inferior izquierda */
+.folder-mosaic__overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 6px;
+    pointer-events: none;
+    /* Sombra de fondo muy sutil para que el icono sea visible sobre las fotos */
+    background: linear-gradient(
+      to top,
+      rgb(0 0 0 / 0.45) 0%,
+      transparent 50%
+    );
+  }
+.folder-mosaic__icon {
+    width: 1.1rem;
+    height: 1.1rem;
+    opacity: 0.85;
+    color: #fff;
+    filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.7));
+    flex-shrink: 0;
+  }
 </style>
+
