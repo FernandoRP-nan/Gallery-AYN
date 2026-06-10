@@ -61,7 +61,7 @@ const devMockApi: WebApi = {
       gallery_recent_folders: [] as string[],
       gallery_thumbs_per_page: 48,
       gallery_include_subfolders: false,
-      gallery_sort_mode: "name",
+      gallery_sort_mode: "name,mtime,type",
       gallery_group_by_folder: false,
       gallery_timeline_view: false,
       gallery_section_dominant_color: true,

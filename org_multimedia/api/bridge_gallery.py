@@ -325,7 +325,7 @@ class GalleryBridgeMixin:
                 "name": p.name,
                 "path": str(p),
                 "selected": p in selected_frozenset,
-                "thumbDataUrl": None if is_video else self._thumb_data_url_cached(p, thumb_px, "lq"),
+                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
                 "thumbQuality": "lq",
             }
             if timeline_meta:

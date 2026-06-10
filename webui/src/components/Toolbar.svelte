@@ -26,7 +26,7 @@
   export let onGroupByFolderChange: (val: boolean) => void;
   export let onSectionDominantColorChange: (val: boolean) => void;
   export let onTimelineViewChange: (val: boolean) => void;
-  export let onGallerySortChange: (val: "name" | "mtime") => void;
+  export let onGallerySortChange: (val: string) => void;
   export let goBackFolder: () => void;
   export let goForwardFolder: () => void;
   export let goUpFolder: () => void;
@@ -99,24 +99,55 @@
           </label>
           <fieldset class="view-menu__fieldset">
             <div class="view-menu__legend">{t("view.sortLabel")}</div>
-            <label class="view-menu__row">
-              <input
-                type="radio"
-                name="gallery-sort"
-                checked={gallerySortMode === "name"}
-                on:change={() => void onGallerySortChange("name")}
-              />
-              <span>{t("view.sortName")}</span>
-            </label>
-            <label class="view-menu__row">
-              <input
-                type="radio"
-                name="gallery-sort"
-                checked={gallerySortMode === "mtime"}
-                on:change={() => void onGallerySortChange("mtime")}
-              />
-              <span>{t("view.sortDate")}</span>
-            </label>
+            <div class="sort-priority-list">
+              {#each gallerySortMode.split(',').map(x => x.trim()).filter(Boolean) as modeKey, index}
+                <div class="sort-priority-item">
+                  <span class="sort-priority-label">
+                    {#if modeKey === 'name'}
+                      {t("view.sortName")}
+                    {:else if modeKey === 'mtime'}
+                      {t("view.sortDate")}
+                    {:else if modeKey === 'type'}
+                      {t("view.sortType")}
+                    {/if}
+                  </span>
+                  <div class="sort-priority-actions">
+                    <button
+                      type="button"
+                      class="sort-priority-btn"
+                      disabled={index === 0}
+                      title="Subir prioridad"
+                      on:click={() => {
+                        const parts = gallerySortMode.split(',').map(x => x.trim()).filter(Boolean);
+                        // Intercambiar con el anterior
+                        const temp = parts[index - 1];
+                        parts[index - 1] = parts[index];
+                        parts[index] = temp;
+                        onGallerySortChange(parts.join(','));
+                      }}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      class="sort-priority-btn"
+                      disabled={index === gallerySortMode.split(',').map(x => x.trim()).filter(Boolean).length - 1}
+                      title="Bajar prioridad"
+                      on:click={() => {
+                        const parts = gallerySortMode.split(',').map(x => x.trim()).filter(Boolean);
+                        // Intercambiar con el siguiente
+                        const temp = parts[index + 1];
+                        parts[index + 1] = parts[index];
+                        parts[index] = temp;
+                        onGallerySortChange(parts.join(','));
+                      }}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
           </fieldset>
           <p class="view-menu__hint">{t("view.timelineHint")}</p>
         </div>
@@ -188,7 +219,7 @@
 .view-menu-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: 80;
   }
 .view-menu-wrap {
     position: relative;
@@ -199,7 +230,7 @@
     position: absolute;
     top: calc(100% + 6px);
     left: 0;
-    z-index: 70;
+    z-index: 90;
     min-width: min(320px, calc(100vw - 24px));
     padding: var(--om-space-3);
     display: flex;
@@ -229,6 +260,58 @@
     letter-spacing: 0.04em;
     color: var(--om-text-muted);
     margin-bottom: var(--om-space-2);
+  }
+.sort-priority-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-block: 4px;
+  }
+.sort-priority-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    background: color-mix(in oklab, var(--om-surface-2) 60%, transparent);
+    border: 1px solid var(--om-border-default);
+    border-radius: var(--om-radius-sm, 4px);
+    font-size: 0.85rem;
+    color: var(--om-text-primary);
+  }
+.sort-priority-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+.sort-priority-actions {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+  }
+.sort-priority-btn {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--om-surface-3, #2a2a2a);
+    border: 1px solid var(--om-border-default);
+    border-radius: 4px;
+    color: var(--om-text-secondary);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.15s ease;
+  }
+.sort-priority-btn:hover:not(:disabled) {
+    background: var(--om-accent, #007acc);
+    color: #fff;
+    border-color: var(--om-accent);
+  }
+.sort-priority-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
   }
 .view-menu__hint {
     margin: 0;

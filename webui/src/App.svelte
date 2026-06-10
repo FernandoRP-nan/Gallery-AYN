@@ -136,7 +136,7 @@
   let sectionDominantColor = true;
   /** Vista calendario: secciones por mes; marcas por día según zoom (solo cliente). */
   let timelineView = false;
-  let gallerySortMode: "name" | "mtime" = "name";
+  let gallerySortMode = "name,mtime,type";
   /** Resaltado al arrastrar sobre encabezado de sección (agrupar por carpeta). */
   let dragOverSectionPath: string | null = null;
   let settingsOpen = false;
@@ -370,7 +370,7 @@
   }
 
   async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: number, token: number) {
-    const base = snapshot.filter((x) => x.kind === "image");
+    const base = snapshot.filter((x) => x.kind === "image" || x.kind === "video");
     const orderedPaths = prioritizePathsByViewport(
       base.map((x) => x.path),
       ".tile[data-item-path]",
@@ -389,7 +389,7 @@
           if (galleryThumbHydrationToken !== token) return;
           if (!out?.thumbDataUrl) continue;
           items = items.map((x) =>
-            x.kind === "image" && x.path === it.path
+            (x.kind === "image" || x.kind === "video") && x.path === it.path
               ? { ...x, thumbDataUrl: out.thumbDataUrl, thumbQuality: "hq" }
               : x
           );
@@ -505,10 +505,7 @@
     groupByFolder = Boolean(data.settings?.gallery_group_by_folder ?? false);
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
-    {
-      const sm = String(data.settings?.gallery_sort_mode ?? "name").toLowerCase();
-      gallerySortMode = sm === "mtime" ? "mtime" : "name";
-    }
+    gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
     await syncDestinationsFromApi();
   };
 
@@ -519,7 +516,7 @@
       await trackLoad(
         bridge.settingsPatch({
           gallery_include_subfolders: includeSubfolders,
-          gallery_sort_mode: gallerySortMode === "mtime" ? "mtime" : "name",
+          gallery_sort_mode: gallerySortMode,
           gallery_group_by_folder: groupByFolder,
           gallery_timeline_view: timelineView,
           gallery_section_dominant_color: sectionDominantColor,
@@ -556,14 +553,20 @@
     timelineView = checked;
     if (checked) {
       groupByFolder = false;
-      gallerySortMode = "mtime";
+      // La línea de tiempo requiere que la fecha (mtime) sea la prioridad más alta.
+      // Reordenamos para colocar 'mtime' al inicio.
+      const currentParts = gallerySortMode.split(",").map(p => p.trim());
+      const filtered = currentParts.filter(p => p !== "mtime");
+      gallerySortMode = ["mtime", ...filtered].join(",");
     }
     await persistViewAndReload();
   }
 
-  async function onGallerySortChange(mode: "name" | "mtime") {
+  async function onGallerySortChange(mode: string) {
     gallerySortMode = mode;
-    if (mode === "name" && timelineView) {
+    // Si la fecha ('mtime') no está en la primera prioridad y la línea de tiempo está activa, desactivarla.
+    const primarySort = mode.split(",")[0]?.trim();
+    if (primarySort !== "mtime" && timelineView) {
       timelineView = false;
     }
     await persistViewAndReload();

@@ -253,6 +253,7 @@ export const es = {
     sortLabel: "Ordenar",
     sortName: "Nombre",
     sortDate: "Fecha (modificación)",
+    sortType: "Tipo (archivo)",
     timelineView: "Línea de tiempo (por mes)",
     timelineViewHint:
       "Agrupa por mes según la fecha de modificación del archivo. Con zoom de miniaturas alto aparecen marcas por día. Requiere orden por fecha (se ajusta solo).",

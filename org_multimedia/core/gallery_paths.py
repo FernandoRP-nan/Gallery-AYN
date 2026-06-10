@@ -81,14 +81,47 @@ def scan_media_recursive(root: Path, extensions: frozenset[str] | None = None) -
 
 
 def sort_image_paths(paths: list[Path], mode: str) -> list[Path]:
-    """Orden estable: `name` por ruta; `mtime` por fecha de modificación."""
-    m = (mode or "name").strip().lower()
-    if m in ("mtime", "date", "fecha"):
-        def key(p: Path) -> tuple:
-            try:
-                return (p.stat().st_mtime_ns, str(p).lower())
-            except OSError:
-                return (0, str(p).lower())
+    """Orden compuesto y estable: `mode` puede ser una lista separada por comas, ej. 'type,mtime,name'.
 
-        return sorted(paths, key=key)
-    return sorted(paths, key=lambda x: str(x).lower())
+    Criterios:
+      - `type`: Agrupa videos primero y luego imágenes (o viceversa). 0 para imágenes, 1 para videos.
+      - `mtime`/`date`/`fecha`: Fecha de modificación (de menor a mayor).
+      - `name`: Nombre del archivo / ruta completa (case insensitive).
+    """
+    # Procesar la lista de prioridades de ordenamiento
+    raw_modes = [x.strip().lower() for x in (mode or "name").split(",")]
+    # Filtrar los modos válidos
+    sort_keys = []
+    for m in raw_modes:
+        if m in ("mtime", "date", "fecha"):
+            sort_keys.append("mtime")
+        elif m in ("type", "tipo"):
+            sort_keys.append("type")
+        elif m in ("name", "nombre"):
+            sort_keys.append("name")
+
+    # Si por alguna razón queda vacío, forzar ordenar por nombre
+    if not sort_keys:
+        sort_keys = ["name"]
+
+    # Agregar "name" como criterio final implícito de desempate para asegurar orden estable
+    if "name" not in sort_keys:
+        sort_keys.append("name")
+
+    def make_sort_key(p: Path) -> tuple:
+        key_parts = []
+        for sk in sort_keys:
+            if sk == "mtime":
+                try:
+                    key_parts.append(p.stat().st_mtime_ns)
+                except OSError:
+                    key_parts.append(0)
+            elif sk == "type":
+                # Vídeos tienen valor 1, imágenes valor 0 para ordenamiento (o viceversa)
+                is_video = p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS
+                key_parts.append(1 if is_video else 0)
+            elif sk == "name":
+                key_parts.append(str(p).lower())
+        return tuple(key_parts)
+
+    return sorted(paths, key=make_sort_key)

@@ -47,7 +47,7 @@ def load_app_settings() -> dict:
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
             "gallery_include_subfolders": False,
-            "gallery_sort_mode": "name",
+            "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_section_dominant_color": True,
@@ -137,10 +137,15 @@ def load_app_settings() -> dict:
         else:
             data["gallery_include_subfolders"] = bool(data["gallery_include_subfolders"])
         if "gallery_sort_mode" not in data:
-            data["gallery_sort_mode"] = "name"
+            data["gallery_sort_mode"] = "name,mtime,type"
         else:
+            # Validar y limpiar la lista de ordenamiento compuesta
             sm = str(data["gallery_sort_mode"]).lower()
-            data["gallery_sort_mode"] = sm if sm in ("name", "mtime") else "name"
+            parts = [p.strip() for p in sm.split(",") if p.strip() in ("name", "mtime", "type", "nombre", "fecha", "tipo")]
+            if parts:
+                data["gallery_sort_mode"] = ",".join(parts)
+            else:
+                data["gallery_sort_mode"] = "name,mtime,type"
         if "gallery_group_by_folder" not in data:
             data["gallery_group_by_folder"] = False
         else:
@@ -183,7 +188,7 @@ def load_app_settings() -> dict:
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
             "gallery_include_subfolders": False,
-            "gallery_sort_mode": "name",
+            "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_section_dominant_color": True,
