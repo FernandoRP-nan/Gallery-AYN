@@ -250,11 +250,6 @@
     position: relative;
     z-index: 60;
   }
-.view-menu-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 80;
-  }
 .view-menu-wrap {
     position: relative;
     display: inline-flex;

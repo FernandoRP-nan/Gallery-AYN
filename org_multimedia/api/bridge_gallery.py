@@ -257,9 +257,21 @@ class GalleryBridgeMixin:
         self.gallery_page = max(0, min(self.gallery_page, tp - 1))
 
     def _slice(self) -> tuple[int, int]:
-        if self._is_grouped_mode() or self._is_timeline_mode():
+        if self._is_grouped_mode():
             total = len(self.ordered_paths)
             return 0, total
+        if self._is_timeline_mode():
+            total = len(self.ordered_paths)
+            if not self._is_unlimited_mode():
+                return 0, total
+            if total <= 0:
+                return 0, 0
+            loaded = self.gallery_unlimited_loaded
+            if loaded <= 0:
+                loaded = min(total, self._unlimited_batch_size())
+            loaded = max(0, min(total, loaded))
+            self.gallery_unlimited_loaded = loaded
+            return 0, loaded
         if self._is_unlimited_mode():
             total = len(self.ordered_paths)
             if total <= 0:
@@ -422,25 +434,41 @@ class GalleryBridgeMixin:
             items.extend(self._build_image_items(slice_paths, thumb_px, selected_frozenset))
         return items
 
-    def _build_gallery_items_timeline(self) -> list[dict]:
+    def _build_timeline_items_for_range(self, range_start: int, range_end: int) -> list[dict]:
+        """Ítems de línea de tiempo para un rango de índices en ordered_paths (carga progresiva)."""
         items: list[dict] = []
+        if range_start >= range_end:
+            return items
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
-        for start, end, key, label in self._gallery_timeline_spans:
-            items.append(
-                {
-                    "kind": "section",
-                    "name": label,
-                    "path": f"section:timeline:{key}",
-                    "sectionFolder": "",
-                    "thumbDataUrl": None,
-                }
-            )
-            slice_paths = self.ordered_paths[start:end]
+        for span_start, span_end, key, label in self._gallery_timeline_spans:
+            if span_end <= range_start:
+                continue
+            if span_start >= range_end:
+                break
+            clip_start = max(span_start, range_start)
+            clip_end = min(span_end, range_end)
+            if clip_start >= clip_end:
+                continue
+            if clip_start == span_start:
+                items.append(
+                    {
+                        "kind": "section",
+                        "name": label,
+                        "path": f"section:timeline:{key}",
+                        "sectionFolder": "",
+                        "thumbDataUrl": None,
+                    }
+                )
+            slice_paths = self.ordered_paths[clip_start:clip_end]
             items.extend(
                 self._build_image_items(slice_paths, thumb_px, selected_frozenset, timeline_meta=True)
             )
         return items
+
+    def _build_gallery_items_timeline(self) -> list[dict]:
+        s, e = self._slice()
+        return self._build_timeline_items_for_range(s, e)
 
     def _build_gallery_items(self) -> list[dict]:
         if self._is_grouped_mode():
@@ -493,7 +521,7 @@ class GalleryBridgeMixin:
             self.gallery_unlimited_loaded = (
                 min(len(self.ordered_paths), self._unlimited_batch_size()) if self._is_unlimited_mode() else 0
             )
-            if (self._is_grouped_mode() or self._is_timeline_mode()) and self._is_unlimited_mode():
+            if self._is_grouped_mode() and self._is_unlimited_mode():
                 self.gallery_unlimited_loaded = len(self.ordered_paths)
             return {
                 "state": self._gallery_state(),
@@ -513,8 +541,12 @@ class GalleryBridgeMixin:
             self._schedule_gallery_total_bytes_recompute()
             self._clamp_page()
             if self._is_unlimited_mode():
-                if self._is_grouped_mode() or self._is_timeline_mode():
+                if self._is_grouped_mode():
                     self.gallery_unlimited_loaded = len(self.ordered_paths)
+                elif self._is_timeline_mode():
+                    self.gallery_unlimited_loaded = min(
+                        len(self.ordered_paths), self._unlimited_batch_size()
+                    )
                 else:
                     self.gallery_unlimited_loaded = min(len(self.ordered_paths), self._unlimited_batch_size())
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
@@ -539,7 +571,7 @@ class GalleryBridgeMixin:
         with self.lock:
             if not self.gallery_folder:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
-            if self._is_grouped_mode() or self._is_timeline_mode():
+            if self._is_grouped_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
             if not self._is_unlimited_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
@@ -552,13 +584,16 @@ class GalleryBridgeMixin:
             if start >= end:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
-            thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
-            selected_frozenset = frozenset(self.selected)
-            image_items = self._build_image_items(self.ordered_paths[start:end], thumb_px, selected_frozenset)
+            if self._is_timeline_mode():
+                batch_items = self._build_timeline_items_for_range(start, end)
+            else:
+                thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+                selected_frozenset = frozenset(self.selected)
+                batch_items = self._build_image_items(self.ordered_paths[start:end], thumb_px, selected_frozenset)
 
             self.gallery_unlimited_loaded = end
             has_more = end < total
-            return {"state": self._gallery_state(), "items": image_items, "hasMore": has_more}
+            return {"state": self._gallery_state(), "items": batch_items, "hasMore": has_more}
 
     def gallery_open_folder_tile(self, path: str) -> dict:
         return self.gallery_load_folder(path)

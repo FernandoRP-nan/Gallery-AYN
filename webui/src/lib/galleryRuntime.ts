@@ -37,12 +37,17 @@ export function getGalleryState(): GalleryState {
 }
 
 export function setGalleryPayload(state: GalleryState, nextItems: GalleryItem[]) {
-  galleryState.set(state);
   galleryItems.set(nextItems);
+  galleryState.set({ ...state, selectedCount: countSelectedMedia(nextItems) });
 }
 
 export function setGalleryState(state: GalleryState) {
-  galleryState.set(state);
+  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
+}
+
+/** Fusiona metadatos del API sin pisar el conteo de selección local. */
+export function setGalleryStateFromApi(state: GalleryState) {
+  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
 }
 
 export function setGalleryItems(nextItems: GalleryItem[]) {
@@ -56,7 +61,11 @@ export function updateGalleryItems(mutator: (items: GalleryItem[]) => GalleryIte
 export function mergeGalleryItemsFromApi(nextItems: GalleryItem[], state?: GalleryState) {
   const merged = mergeItemsKeepingBestThumb(getGalleryItems(), nextItems);
   galleryItems.set(merged);
-  if (state) galleryState.set(state);
+  if (state) {
+    galleryState.set({ ...state, selectedCount: countSelectedMedia(merged) });
+  } else {
+    syncSelectedCountFromItems();
+  }
 }
 
 export function syncSelectedCountFromItems() {

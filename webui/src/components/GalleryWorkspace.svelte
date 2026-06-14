@@ -10,6 +10,7 @@
     patchGallerySelection,
     setGalleryItems,
     setGalleryState,
+    setGalleryStateFromApi,
     syncSelectedCountFromItems,
     updateGalleryItems,
   } from "../lib/galleryRuntime";
@@ -22,6 +23,7 @@
   } from "../lib/galleryThumbs";
   import { galleryChromeBusy } from "../lib/chromeRemember";
   import {
+    countSelectedMedia,
     expandTimelineDayBreaks,
     isGalleryMediaKind,
     mergeItemsKeepingBestThumb,
@@ -92,26 +94,94 @@
   let frozenGalleryState = $galleryState;
 
   let galleryAutoLoadTimer: ReturnType<typeof setTimeout> | null = null;
+  let galleryHydratingPrev = false;
+  const VIEWPORT_FILL_GUARD = 48;
 
-  $: syncGalleryChromeBusy(galleryScrolling, galleryLoadingMore, $galleryThumbHydrating);
+  function viewportNeedsMoreContent(): boolean {
+    if (!galleryScrollEl) return false;
+    return galleryScrollEl.scrollHeight <= galleryScrollEl.clientHeight + 40;
+  }
+
+  async function fillViewportIfNeeded() {
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
+    if (!galleryScrollEl) return;
+    const runId = ++galleryAutoLoadRunId;
+    let guard = 0;
+    while (
+      runId === galleryAutoLoadRunId &&
+      thumbsPerPage === 0 &&
+      galleryHasMoreNow() &&
+      viewportNeedsMoreContent() &&
+      guard < VIEWPORT_FILL_GUARD
+    ) {
+      guard++;
+      const progressed = await loadMoreGalleryBatch();
+      if (!progressed) break;
+      await tick();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+  }
+
+  async function maybeAutoLoadMoreForViewport() {
+    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
+    if (!galleryScrollEl) return;
+    if (viewportNeedsMoreContent()) {
+      await loadMoreGalleryBatch();
+    }
+  }
+
+  async function autoLoadUnlimitedBatches() {
+    await fillViewportIfNeeded();
+  }
+
+  $: if (
+    thumbsPerPage === 0 &&
+    galleryHasMoreNow() &&
+    !galleryLoadingMore &&
+    $galleryItems.length > 0 &&
+    galleryScrollEl
+  ) {
+    if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
+    galleryAutoLoadTimer = setTimeout(() => {
+      galleryAutoLoadTimer = null;
+      void fillViewportIfNeeded();
+    }, 120);
+  }
+
+  $: if (gridCellPx && galleryScrollEl && thumbsPerPage === 0 && $galleryItems.length > 0) {
+    if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
+    galleryAutoLoadTimer = setTimeout(() => {
+      galleryAutoLoadTimer = null;
+      void fillViewportIfNeeded();
+    }, 160);
+  }
+
+  $: {
+    const hydrating = $galleryThumbHydrating;
+    if (galleryHydratingPrev && !hydrating) {
+      void fillViewportIfNeeded();
+    }
+    galleryHydratingPrev = hydrating;
+  }
 
   function syncGalleryChromeBusy(scrolling: boolean, loading: boolean, hydrating: boolean) {
     galleryChromeBusy.set(scrolling || loading || hydrating);
   }
 
+  $: syncGalleryChromeBusy(galleryScrolling, galleryLoadingMore, $galleryThumbHydrating);
+
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
   $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
   $: galleryGridItems = expandTimelineDayBreaks($galleryItems, timelineView, gridCellPx);
+  $: liveSelectedCount = countSelectedMedia($galleryItems);
 
-  $: galleryHasSelection =
-    Number($galleryState?.selectedCount ?? 0) > 0 ||
-    $galleryItems.some((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
+  $: galleryHasSelection = liveSelectedCount > 0;
 
   $: galleryFloatChromeActive =
     destinationsMode || galleryRangeSelecting || galleryHasSelection;
 
   $: if (!galleryScrolling) {
-    frozenGalleryState = $galleryState;
+    frozenGalleryState = { ...$galleryState, selectedCount: liveSelectedCount };
   }
 
   function galleryHasMoreNow(): boolean {
@@ -125,53 +195,18 @@
     try {
       const beforeEnd = Number($galleryState?.endIndex ?? 0);
       const out = await bridge.galleryLoadMore();
-      if (out?.state) setGalleryState(out.state);
       const extra = Array.isArray(out?.items) ? out.items : [];
       if (extra.length > 0) {
         updateGalleryItems((items) => [...items, ...extra]);
         void hydrateGalleryThumbsHq(extra, thumbScale, getGalleryThumbHydrationToken());
       }
+      if (out?.state) setGalleryStateFromApi(out.state);
+      else syncSelectedCountFromItems();
       const afterEnd = Number(getGalleryState()?.endIndex ?? 0);
       return afterEnd > beforeEnd || extra.length > 0;
     } finally {
       galleryLoadingMore = false;
     }
-  }
-
-  async function maybeAutoLoadMoreForViewport() {
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
-    if (!galleryScrollEl) return;
-    if (galleryScrollEl.scrollHeight <= galleryScrollEl.clientHeight + 40) {
-      await loadMoreGalleryBatch();
-    }
-  }
-
-  async function autoLoadUnlimitedBatches() {
-    // Solo rellena el viewport inicial; el resto lo pide el scroll del usuario.
-    const runId = ++galleryAutoLoadRunId;
-    let guard = 0;
-    while (runId === galleryAutoLoadRunId && thumbsPerPage === 0 && galleryHasMoreNow() && guard < 3) {
-      guard++;
-      const progressed = await loadMoreGalleryBatch();
-      if (!progressed) break;
-      if (!galleryScrollEl || galleryScrollEl.scrollHeight > galleryScrollEl.clientHeight + 40) break;
-      await new Promise((resolve) => setTimeout(resolve, 120));
-    }
-  }
-
-  $: if (
-    thumbsPerPage === 0 &&
-    galleryHasMoreNow() &&
-    !galleryLoadingMore &&
-    !galleryChromeBusy &&
-    $galleryItems.length > 0 &&
-    galleryScrollEl
-  ) {
-    if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
-    galleryAutoLoadTimer = setTimeout(() => {
-      galleryAutoLoadTimer = null;
-      void maybeAutoLoadMoreForViewport();
-    }, 120);
   }
 
   async function onGalleryScroll(e: Event) {
@@ -422,6 +457,7 @@
   bind:galleryRangeSuppressClick
   bind:showThumbLabels
   galleryState={frozenGalleryState}
+  selectionCount={liveSelectedCount}
   destRows={[]}
   bind:dragOverDestPath
   bind:draggedDestIdx

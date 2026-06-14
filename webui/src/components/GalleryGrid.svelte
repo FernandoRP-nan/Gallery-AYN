@@ -11,6 +11,7 @@
   export let galleryRangeSuppressClick: boolean;
   export let showThumbLabels: boolean;
   export let galleryState: any;
+  export let selectionCount = 0;
   export let destRows: any[];
   export let dragOverDestPath: string | null;
   export let destinationsMode: boolean;
@@ -64,16 +65,16 @@
           <button
             type="button"
             class="om-btn om-btn--ghost om-btn--mini"
-            disabled={Number(galleryState.selectedCount || 0) === 0}
+            disabled={selectionCount === 0}
             on:click={() =>
               openConfirmDelete(
                 t("confirm.deleteSelectionTitle"),
-                t("confirm.deleteSelectionDetail").replace("{count}", String(galleryState.selectedCount)),
+                t("confirm.deleteSelectionDetail").replace("{count}", String(selectionCount)),
                 deleteSelectedGalleryItems
               )}
           >{t("selection.delete")}</button>
           <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>{t("selection.invert")}</button>
-          <span class="selection-float__count" title={t("selection.selectedTitle")}>{galleryState.selectedCount}</span>
+          <span class="selection-float__count" title={t("selection.selectedTitle")}>{selectionCount}</span>
         </div>
       </div>
     {/if}
@@ -84,12 +85,12 @@
         <div
           class="gallery-section-head"
           class:gallery-section-head--timeline={it.path.includes("section:timeline:")}
-          class:gallery-section-head--tinted={Boolean(it.sectionTintHex)}
+          class:gallery-section-head--tinted={Boolean(it.sectionTintHex) && !it.path.includes("section:timeline:")}
           class:gallery-section-head--drop={Boolean(it.sectionFolder) && dragOverSectionPath === it.sectionFolder}
           role="separator"
           data-section-folder={it.sectionFolder ?? ""}
           data-item-path={it.path}
-          style={it.sectionTintHex ? `--section-tint: ${it.sectionTintHex}` : ""}
+          style={it.sectionTintHex && !it.path.includes("section:timeline:") ? `--section-tint: ${it.sectionTintHex}` : ""}
           on:dragover|preventDefault={(e) => {
             if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
           }}
@@ -99,9 +100,13 @@
             if (p) void navigateToFolder(p, { pushHistory: true });
           }}
         >
-          <span class="gallery-section-head__title">{it.name}</span>
-          {#if it.sectionFolder}
-            <span class="gallery-section-head__path">{it.sectionFolder}</span>
+          {#if it.path.includes("section:timeline:")}
+            <h3 class="gallery-section-head__title gallery-section-head__title--timeline">{it.name}</h3>
+          {:else}
+            <span class="gallery-section-head__title">{it.name}</span>
+            {#if it.sectionFolder}
+              <span class="gallery-section-head__path">{it.sectionFolder}</span>
+            {/if}
           {/if}
         </div>
       {:else if it.kind === "day_break"}
@@ -224,26 +229,55 @@
     background: color-mix(in oklab, var(--om-accent-soft) 55%, var(--om-surface-2));
   }
 .gallery-section-head--timeline {
-    border-style: solid;
-    border-color: color-mix(in oklab, var(--om-accent-2) 35%, var(--om-border-default));
+    border: none;
+    background: transparent;
+    padding: var(--om-space-5) var(--om-space-1) var(--om-space-3);
+    margin-top: var(--om-space-5);
+    margin-bottom: var(--om-space-1);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--om-space-2);
   }
-.gallery-section-head--tinted {
-    background: color-mix(in oklab, var(--section-tint) 28%, var(--om-surface-2));
-    border-color: color-mix(in oklab, var(--section-tint) 40%, var(--om-border-default));
+.gallery-section-head--timeline:first-of-type {
+    margin-top: var(--om-space-2);
+  }
+.gallery-section-head__title--timeline {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1.25;
+    color: var(--om-text-primary);
+    position: relative;
+    padding-bottom: var(--om-space-2);
+  }
+.gallery-section-head__title--timeline::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: min(5rem, 40%);
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--om-accent), color-mix(in oklab, var(--om-accent-2) 70%, transparent));
   }
 .timeline-day-break {
     grid-column: 1 / -1;
     display: flex;
     align-items: center;
-    padding: 2px 4px 0;
-    min-height: 1.1rem;
+    padding: var(--om-space-3) var(--om-space-1) var(--om-space-1);
+    min-height: 1.5rem;
   }
 .timeline-day-break__n {
-    font-size: 0.68rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    color: var(--om-text-muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--om-text-secondary);
     text-transform: uppercase;
+  }
+.gallery-section-head--tinted {
+    background: color-mix(in oklab, var(--section-tint) 28%, var(--om-surface-2));
+    border-color: color-mix(in oklab, var(--section-tint) 40%, var(--om-border-default));
   }
 .gallery-section-head__title {
     font-weight: 600;

@@ -75,6 +75,7 @@ export const es = {
   },
   load: {
     loading: "Cargando…",
+    openingFolder: "Abriendo carpeta…",
   },
   selection: {
     toolbarGalleryAria: "Selección",

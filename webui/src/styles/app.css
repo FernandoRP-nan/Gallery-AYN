@@ -23,8 +23,16 @@
   }
 
 .app-chrome--header {
+    /* Sin paint: el menú Vista desborda el header (position:absolute). */
+    contain: layout style;
     z-index: 80;
     border-radius: var(--thumb-tile-radius, var(--om-radius-md));
+  }
+
+.view-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 79;
   }
 
 .app-chrome--footer.pager.pager--bar {

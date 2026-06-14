@@ -229,10 +229,12 @@
   /** Contador para overlay de carga (carpetas, API, etc.). */
   let loadCount = 0;
   let uiLoading = false;
+  let uiLoadingMessage = "";
   let loadingTimeout: ReturnType<typeof setTimeout> | null = null;
-  function trackLoad<T>(promise: Promise<T>): Promise<T> {
+  function trackLoad<T>(promise: Promise<T>, message = ""): Promise<T> {
     loadCount++;
     if (loadCount === 1) {
+      uiLoadingMessage = message;
       if (loadingTimeout) clearTimeout(loadingTimeout);
       // Solo activa el spinner si la operación tarda más de 180ms (evita parpadeos en clics rápidos)
       loadingTimeout = setTimeout(() => {
@@ -245,6 +247,7 @@
       loadCount--;
       if (loadCount <= 0) {
         loadCount = 0;
+        uiLoadingMessage = "";
         if (loadingTimeout) {
           clearTimeout(loadingTimeout);
           loadingTimeout = null;
@@ -477,7 +480,7 @@
           gallery_section_dominant_color: sectionDominantColor,
         })
       );
-      await reload();
+      await reload({ silent: false });
       status = t("status.viewUpdated");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.viewApplyError");
@@ -546,7 +549,7 @@
       folderBackStack = [...folderBackStack, current];
       folderForwardStack = [];
     }
-    const out = await bridge.galleryLoadFolder(target);
+    const out = await trackLoad(bridge.galleryLoadFolder(target), t("load.openingFolder"));
     setGalleryPayload(out.state, out.items);
     await afterGalleryDataLoaded();
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
@@ -654,10 +657,10 @@
   };
 
   /** Recarga ítems de la galería. Por defecto sin overlay global (la rejilla ya da feedback). */
-  const reload = async (opts?: { silent?: boolean }) => {
+  const reload = async (opts?: { silent?: boolean; loadingMessage?: string }) => {
     const p = bridge.galleryReload();
     const silent = opts?.silent !== false;
-    const out = silent ? await p : await trackLoad(p);
+    const out = silent ? await p : await trackLoad(p, opts?.loadingMessage ?? t("load.loading"));
     setGalleryPayload(out.state, out.items);
     void afterGalleryDataLoaded();
   };
@@ -3335,7 +3338,7 @@
   {/if}
 
   {#if uiLoading}
-    <LoadOverlay />
+    <LoadOverlay message={uiLoadingMessage || t("load.loading")} />
   {/if}
 
   <!-- Modal/Overlay Layer -->
