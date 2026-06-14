@@ -18,6 +18,16 @@
 
   $: pager = $frozenPagerState;
   $: pageLinks = googlePageItems(Number(pager.page) || 1, Number(pager.totalPages) || 1);
+
+  function mediaCountLabel(state: typeof pager): string {
+    const total = Number(state?.total ?? 0);
+    const images = Number(state?.totalImages ?? total);
+    const videos = Number(state?.totalVideos ?? 0);
+    if (videos > 0) {
+      return `${images} ${t("pager.imagesWord")} · ${videos} ${t("pager.videosWord")}`;
+    }
+    return `${total} ${t("pager.imagesWord")}`;
+  }
 </script>
 
 <footer class="pager om-panel pager--bar app-chrome app-chrome--footer" aria-label={t("pager.footerAria")}>
@@ -50,8 +60,7 @@
     >
     <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.lastPage")} on:click={() => goPage(pager.totalPages)}>»|</button>
     <span class="pager__google-line"
-      >{pager.total}
-      {t("pager.imagesWord")} · {t("pager.pageWord")}
+      >{mediaCountLabel(pager)} · {t("pager.pageWord")}
       {pager.page}
       {t("pager.ofWord")}
       {pager.totalPages}</span
@@ -72,7 +81,7 @@
     <span class="pager__google-line">
       {t("pager.loadedPrefix")}
       {Number(pager?.endIndex ?? 0)}/{Number(pager?.total ?? 0)}
-      {t("pager.imagesWord")} ·
+      · {mediaCountLabel(pager)} ·
       {Number(pager?.totalElements ?? Number(pager?.total ?? 0) + Number(pager?.subfoldersCount ?? 0))}
       {t("pager.elementsWord")} · {t("pager.totalWeight")}
       {Number(pager?.totalBytes ?? -1) < 0 ? t("pager.calculating") : formatBytes(Number(pager?.totalBytes ?? 0))}

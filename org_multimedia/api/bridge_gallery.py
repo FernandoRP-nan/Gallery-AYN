@@ -33,6 +33,7 @@ from ..core.gallery_paths import (
     sort_image_paths,
 )
 
+from ..core.fs_path import resolve_dir_path
 from ..core.section_color import accent_hex_from_paths
 
 _MONTH_NAMES_ES = (
@@ -389,14 +390,25 @@ class GalleryBridgeMixin:
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
         return sort_image_paths(raw, sort_mode)
 
+    def _gallery_media_counts(self) -> tuple[int, int]:
+        """Devuelve (imágenes, vídeos) en ordered_paths."""
+        videos = 0
+        for p in self.ordered_paths:
+            if p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS:
+                videos += 1
+        return len(self.ordered_paths) - videos, videos
+
     def _gallery_state(self) -> dict:
         total = len(self.ordered_paths)
+        total_images, total_videos = self._gallery_media_counts()
         tp = self._total_pages()
         self._clamp_page()
         s, e = self._slice()
         return {
             "folder": str(self.gallery_folder) if self.gallery_folder else "",
             "total": total,
+            "totalImages": total_images,
+            "totalVideos": total_videos,
             "totalElements": total + len(self.subfolders),
             "totalBytes": int(self.gallery_total_bytes),
             "page": self.gallery_page + 1,
@@ -504,9 +516,7 @@ class GalleryBridgeMixin:
         return items
 
     def gallery_load_folder(self, raw_path: str) -> dict:
-        folder = Path(os.path.expandvars(os.path.expanduser(raw_path.strip()))).resolve()
-        if not folder.is_dir():
-            raise ValueError(f"No existe o no es carpeta: {folder}")
+        folder = resolve_dir_path(raw_path)
         with self.lock:
             self._clear_thumb_cache()
             self.gallery_folder = folder
@@ -604,18 +614,34 @@ class GalleryBridgeMixin:
         return {"path": str(p), "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "hq"), "thumbQuality": "hq"}
 
     def gallery_file_stat(self, path: str) -> dict:
-        """Metadatos básicos para el menú contextual (tamaño, fecha de modificación local)."""
-        p = Path(path).expanduser().resolve()
-        if not p.is_file():
-            raise ValueError("Archivo no encontrado.")
+        """Metadatos básicos para propiedades del menú contextual."""
+        import mimetypes
+
+        from ..core.fs_path import resolve_file_path
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            raise ValueError("Archivo no encontrado.") from exc
         try:
             st = p.stat()
         except OSError as exc:
             raise ValueError(f"No se pudo leer el archivo: {exc}") from exc
+        ext = p.suffix.lower()
+        if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            media_type = "video"
+        elif ext in MediaOrganizer.IMAGE_EXTENSIONS:
+            media_type = "image"
+        else:
+            media_type = "other"
+        mime, _ = mimetypes.guess_type(p.name)
         mtime = datetime.datetime.fromtimestamp(st.st_mtime)
         return {
             "path": str(p),
             "name": p.name,
             "sizeBytes": int(st.st_size),
             "mtimeIso": mtime.strftime("%Y-%m-%d %H:%M:%S"),
+            "extension": ext.lstrip(".") or p.suffix,
+            "mediaType": media_type,
+            "mimeType": mime or "",
         }

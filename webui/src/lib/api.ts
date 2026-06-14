@@ -1,3 +1,5 @@
+import { normalizePathForApi } from "./pathUtils";
+
 export type GalleryItem = {
   kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break";
   name: string;
@@ -32,6 +34,8 @@ const isDevBrowser = (): boolean =>
 const mockGalleryState = () => ({
   folder: "",
   total: 0,
+  totalImages: 0,
+  totalVideos: 0,
   totalElements: 0,
   totalBytes: 0,
   page: 1,
@@ -102,6 +106,9 @@ const devMockApi: WebApi = {
     name: "",
     sizeBytes: 0,
     mtimeIso: "",
+    extension: "",
+    mediaType: "image",
+    mimeType: "",
   }),
   destination_move_selected: async () => ({
     ...mockGalleryPayload(),
@@ -187,10 +194,10 @@ export const bridge = {
   galleryClearSelection: () => call<any>("gallery_clear_selection"),
   galleryInvertSelection: () => call<any>("gallery_invert_selection"),
   galleryPreview: (path: string, width: number, height: number) =>
-    call<any>("gallery_preview", path, width, height),
+    call<any>("gallery_preview", normalizePathForApi(path), width, height),
   galleryFileBase64: (path: string) => call<any>("gallery_file_base64", path),
   galleryCopyToClipboard: (path: string) => call<any>("gallery_copy_to_clipboard", path),
-  galleryFileStat: (path: string) => call<any>("gallery_file_stat", path),
+  galleryFileStat: (path: string) => call<any>("gallery_file_stat", normalizePathForApi(path)),
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMovePaths: (paths: string[], destPath: string) =>
     call<any>("destination_move_paths", paths, destPath),

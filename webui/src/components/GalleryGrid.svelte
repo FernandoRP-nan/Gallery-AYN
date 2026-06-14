@@ -431,36 +431,6 @@
     position: relative;
   }
 
-.gallery-item-ctx-menu {
-    min-width: 12rem;
-  }
-.gallery-item-ctx-menu__section {
-    font-size: 0.6875rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--om-text-muted);
-    padding: var(--om-space-1) var(--om-space-3) var(--om-space-1);
-    margin-top: var(--om-space-1);
-  }
-.gallery-item-ctx-menu__hint {
-    font-size: 0.6875rem;
-    color: var(--om-text-muted);
-    padding: 0 var(--om-space-3) var(--om-space-2);
-  }
-.gallery-file-info__path {
-    font-size: 0.75rem;
-    word-break: break-all;
-    color: var(--om-text-secondary);
-    margin: 0 0 var(--om-space-3);
-    line-height: 1.4;
-  }
-.gallery-file-info__meta {
-    display: flex;
-    flex-direction: column;
-    gap: var(--om-space-2);
-    font-size: 0.8125rem;
-  }
 /* Mosaico de miniaturas del contenido de carpeta */
 .folder-mosaic {
     width: 100%;

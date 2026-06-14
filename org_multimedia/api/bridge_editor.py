@@ -52,6 +52,7 @@ _MONTH_NAMES_ES = (
 )
 
 from ..core.media_organizer import MediaOrganizer
+from ..media_server import build_media_file_url
 
 from ..core.settings import load_app_settings, save_app_settings
 
@@ -192,35 +193,35 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
 
 class EditorBridgeMixin:
     def gallery_preview(self, path: str, width: int, height: int) -> dict:
-        p = Path(path).expanduser().resolve()
-        if not p.is_file():
+        from ..core.fs_path import resolve_file_path
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError:
+            fallback = Path(path).name
             return {
-                "path": str(p),
-                "name": p.name,
+                "path": path,
+                "name": fallback,
                 "dataUrl": None,
                 "mediaType": "image",
                 "fileUrl": None,
             }
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
-            import urllib.parse
-            media_url = f"http://127.0.0.1:51234/media?path={urllib.parse.quote(str(p))}"
             return {
                 "path": str(p),
                 "name": p.name,
                 "dataUrl": None,
                 "mediaType": "video",
-                "fileUrl": media_url,
+                "fileUrl": build_media_file_url(p),
             }
         if ext == ".svg":
-            import urllib.parse
-            media_url = f"http://127.0.0.1:51234/media?path={urllib.parse.quote(str(p))}"
             return {
                 "path": str(p),
                 "name": p.name,
                 "dataUrl": None,
                 "mediaType": "svg",
-                "fileUrl": media_url,
+                "fileUrl": build_media_file_url(p),
             }
         data_url = _img_to_data_url_contain(p, max(80, int(width)), max(80, int(height)))
         return {

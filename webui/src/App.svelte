@@ -6,6 +6,7 @@
   import LoadOverlay from "./components/LoadOverlay.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
   import { t } from "./lib/i18n";
+  import { normalizePathForApi, buildMediaFileUrl } from "./lib/pathUtils";
   import { galleryGridCellPx } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
   import PagerBar from "./components/PagerBar.svelte";
@@ -302,7 +303,7 @@
     for (const x of raw) {
       if (!x || typeof x !== "object") continue;
       const o = x as { path?: string; label?: string; folder?: string; dir?: string };
-      const path = String(o.path ?? o.folder ?? o.dir ?? "").trim();
+      const path = normalizePathForApi(String(o.path ?? o.folder ?? o.dir ?? ""));
       if (!path) continue;
       const label = String(o.label ?? "").trim() || path;
       out.push({ label, path });
@@ -442,15 +443,15 @@
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
-    const last = (data.settings?.gallery_last_folder ?? "").trim();
-    folder = (data.gallery?.folder ?? last) || "";
+    const last = normalizePathForApi(String(data.settings?.gallery_last_folder ?? ""));
+    folder = normalizePathForApi(String(data.gallery?.folder ?? last) || "");
     orgPath = folder || orgPath;
     if (data.gallery) setGalleryState(data.gallery);
     recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
-      ? (data.settings.gallery_recent_folders as string[])
+      ? (data.settings.gallery_recent_folders as string[]).map((p) => normalizePathForApi(String(p))).filter(Boolean)
       : [];
     pinnedFolders = Array.isArray(data.settings?.gallery_pinned_folders)
-      ? (data.settings.gallery_pinned_folders as string[])
+      ? (data.settings.gallery_pinned_folders as string[]).map((p) => normalizePathForApi(String(p))).filter(Boolean)
       : [];
     pinnedFolderLabels = typeof data.settings?.web_pinned_folder_labels === "object" && data.settings?.web_pinned_folder_labels
       ? (data.settings.web_pinned_folder_labels as Record<string, string>)
@@ -542,23 +543,27 @@
 
   async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
     closeGalleryItemCtxMenu();
-    const target = path.trim();
+    const target = normalizePathForApi(path);
     if (!target) return;
     const current = String(getGalleryState()?.folder ?? folder ?? "").trim();
     if (opts?.pushHistory !== false && current && current !== target) {
       folderBackStack = [...folderBackStack, current];
       folderForwardStack = [];
     }
-    const out = await trackLoad(bridge.galleryLoadFolder(target), t("load.openingFolder"));
-    setGalleryPayload(out.state, out.items);
-    await afterGalleryDataLoaded();
-    if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
-    pageJumpDraft = out.state.page;
-    folder = out.state?.folder ?? target;
-    orgPath = folder || orgPath;
-    routePickerOpen = false;
-    commitChromePagerState();
-    status = t("status.folderLoaded").replace("{path}", folder);
+    try {
+      const out = await trackLoad(bridge.galleryLoadFolder(target), t("load.openingFolder"));
+      setGalleryPayload(out.state, out.items);
+      await afterGalleryDataLoaded();
+      if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
+      pageJumpDraft = out.state.page;
+      folder = out.state?.folder ?? target;
+      orgPath = folder || orgPath;
+      routePickerOpen = false;
+      commitChromePagerState();
+      status = t("status.folderLoaded").replace("{path}", folder);
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("status.viewApplyError");
+    }
   }
 
   const loadFolder = async (closePicker = true) => {
@@ -833,7 +838,12 @@
     selectedPreview = {
       path: row.path,
       name: row.name,
-      dataUrl: row.thumbDataUrl ?? null,
+      dataUrl: row.kind === "video" ? null : row.thumbDataUrl ?? null,
+      mediaType: row.kind === "video" ? "video" : row.path.toLowerCase().endsWith(".svg") ? "svg" : "image",
+      fileUrl:
+        row.kind === "video" || row.path.toLowerCase().endsWith(".svg")
+          ? buildMediaFileUrl(row.path)
+          : null,
     };
     requestAnimationFrame(() => {
       bridge
@@ -1414,7 +1424,10 @@
     previewZoomDataUrl = null;
     previewZoomMediaType =
       it.kind === "video" ? "video" : it.path.toLowerCase().endsWith(".svg") ? "svg" : "image";
-    previewZoomFileUrl = null;
+    previewZoomFileUrl =
+      previewZoomMediaType === "video" || previewZoomMediaType === "svg"
+        ? buildMediaFileUrl(it.path)
+        : null;
     previewZoomScale = 1;
     previewPanX = 0;
     previewPanY = 0;
@@ -2057,8 +2070,17 @@
     path: string;
     name: string;
     thumbDataUrl?: string | null;
+    submenuLeft: boolean;
   } | null = null;
-  let galleryFileInfoModal: { path: string; name: string; sizeBytes: number; mtimeIso: string } | null = null;
+  let galleryFileInfoModal: {
+    path: string;
+    name: string;
+    sizeBytes: number;
+    mtimeIso: string;
+    mediaType: string;
+    extension: string;
+    mimeType: string;
+  } | null = null;
   let draggedDestIdx: number | null = null;
   let previewZoomSkipMoveConfirm = false;
 
@@ -2228,19 +2250,32 @@
     return `${(x / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
+  function formatGalleryMediaTypeLabel(mediaType: string, extension: string): string {
+    const base =
+      mediaType === "video"
+        ? t("contextGallery.mediaTypeVideo")
+        : mediaType === "image"
+          ? t("contextGallery.mediaTypeImage")
+          : t("contextGallery.mediaTypeOther");
+    const ext = String(extension ?? "").trim().replace(/^\./, "");
+    return ext ? `${base} (.${ext})` : base;
+  }
+
   function onGalleryItemContextMenu(e: MouseEvent, it: GalleryItem) {
     if (!isGalleryMediaKind(it.kind)) return;
     e.preventDefault();
     e.stopPropagation();
     const pad = 8;
-    const mw = 240;
-    const mh = Math.min(420, 56 + Math.max(0, destRows.length) * 34 + 120);
+    const menuW = 220;
+    const submenuW = 200;
+    const menuH = 280;
     let x = e.clientX;
     let y = e.clientY;
-    x = Math.min(x, window.innerWidth - mw - pad);
-    y = Math.min(y, window.innerHeight - mh - pad);
+    x = Math.min(x, window.innerWidth - menuW - pad);
+    y = Math.min(y, window.innerHeight - menuH - pad);
     x = Math.max(pad, x);
     y = Math.max(pad, y);
+    const submenuLeft = x + menuW + submenuW > window.innerWidth - pad;
     closeDestCtxMenu();
     closePinnedCtxMenu();
     galleryItemCtxMenu = {
@@ -2249,6 +2284,7 @@
       path: it.path,
       name: it.name,
       thumbDataUrl: it.thumbDataUrl ?? null,
+      submenuLeft,
     };
   }
 
@@ -2321,9 +2357,12 @@
         name: String(st.name ?? ""),
         sizeBytes: Number(st.sizeBytes ?? 0),
         mtimeIso: String(st.mtimeIso ?? ""),
+        mediaType: String(st.mediaType ?? "other"),
+        extension: String(st.extension ?? ""),
+        mimeType: String(st.mimeType ?? ""),
       };
     } catch {
-      status = t("contextGallery.metadataError");
+      status = t("contextGallery.propertiesError");
     }
   }
 
@@ -2857,13 +2896,15 @@
           <aside class="preview om-panel app-chrome app-chrome--preview">
             {#if selectedPreview?.mediaType === "video" && selectedPreview?.fileUrl}
               <!-- svelte-ignore a11y_media_has_caption -->
-              <video
-                class="preview__img preview__video"
-                src={selectedPreview.fileUrl}
-                controls
-                playsinline
-                preload="metadata"
-              ></video>
+              {#key selectedPreview.fileUrl}
+                <video
+                  class="preview__img preview__video"
+                  src={selectedPreview.fileUrl}
+                  controls
+                  playsinline
+                  preload="auto"
+                ></video>
+              {/key}
             {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
               <img
                 class="preview__img preview__svg"
@@ -3171,41 +3212,61 @@
       on:click|stopPropagation
       on:keydown|stopPropagation
     >
-      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
-        >{t("contextGallery.copyPath")}</button
-      >
-      <button
-        type="button"
-        class="dest-ctx-menu__item"
-        role="menuitem"
-        disabled={!galleryItemCtxMenu.thumbDataUrl || !String(galleryItemCtxMenu.thumbDataUrl).startsWith("data:")}
-        on:click={() => void copyGalleryCtxFullImage()}
-        >{t("contextGallery.copyThumb")}</button
-      >
-      <div class="gallery-item-ctx-menu__section" role="presentation">{t("contextGallery.moveSection")}</div>
-      {#if destRows.length === 0}
-        <div class="gallery-item-ctx-menu__hint">{t("contextGallery.noDestinations")}</div>
-      {:else}
-        {#each destRows as d, di (d.path + "\0gctx\0" + di)}
+      <div class="gallery-item-ctx-menu__scroll">
+        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
+          >{t("contextGallery.copyPath")}</button
+        >
+        <button
+          type="button"
+          class="dest-ctx-menu__item"
+          role="menuitem"
+          disabled={!galleryItemCtxMenu.thumbDataUrl || !String(galleryItemCtxMenu.thumbDataUrl).startsWith("data:")}
+          on:click={() => void copyGalleryCtxFullImage()}
+          >{t("contextGallery.copyThumb")}</button
+        >
+        <div
+          class="ctx-menu__submenu-wrap"
+          class:ctx-menu__submenu-wrap--left={galleryItemCtxMenu.submenuLeft}
+        >
           <button
             type="button"
-            class="dest-ctx-menu__item dest-ctx-menu__item--sub"
+            class="dest-ctx-menu__item ctx-menu__submenu-trigger"
             role="menuitem"
-            title={d.path}
-            on:click={() => void moveGalleryItemFromCtxTo(d.path)}
-            >{d.label}</button
+            aria-haspopup="true"
+            aria-expanded="false"
+            disabled={destRows.length === 0}
+            title={destRows.length === 0 ? t("contextGallery.noDestinations") : undefined}
           >
-        {/each}
-      {/if}
-      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
-        >{t("contextGallery.metadata")}</button
-      >
-      <button
-        type="button"
-        class="dest-ctx-menu__item dest-ctx-menu__item--danger"
-        role="menuitem"
-        on:click={askDeleteGalleryItemFromCtx}>{t("contextGallery.delete")}</button
-      >
+            <span>{t("contextGallery.moveTo")}</span>
+            <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">▸</span>
+          </button>
+          <div class="ctx-menu__submenu om-panel om-panel--lift" role="menu" aria-label={t("contextGallery.moveTo")}>
+            {#if destRows.length === 0}
+              <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
+            {:else}
+              {#each destRows as d, di (d.path + "\0gctx\0" + di)}
+                <button
+                  type="button"
+                  class="dest-ctx-menu__item"
+                  role="menuitem"
+                  title={d.path}
+                  on:click={() => void moveGalleryItemFromCtxTo(d.path)}
+                  >{d.label}</button
+                >
+              {/each}
+            {/if}
+          </div>
+        </div>
+        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
+          >{t("contextGallery.properties")}</button
+        >
+        <button
+          type="button"
+          class="dest-ctx-menu__item dest-ctx-menu__item--danger"
+          role="menuitem"
+          on:click={askDeleteGalleryItemFromCtx}>{t("contextGallery.delete")}</button
+        >
+      </div>
     </div>
   {/if}
 
@@ -3225,7 +3286,7 @@
         on:click|stopPropagation
       >
         <header class="modal__head">
-          <strong id="gallery-file-info-title">{t("contextGallery.metadataTitle")}</strong>
+          <strong id="gallery-file-info-title">{t("contextGallery.propertiesTitle")}</strong>
           <button
             type="button"
             class="om-btn om-btn--ghost om-btn--close"
@@ -3236,11 +3297,19 @@
         </header>
         <p class="settings-hint">{galleryFileInfoModal.name}</p>
         <p class="gallery-file-info__path">{galleryFileInfoModal.path}</p>
-        <p class="gallery-file-info__meta">
+        <div class="gallery-file-info__meta">
+          <span
+            >{t("contextGallery.typeLabel")}: {formatGalleryMediaTypeLabel(
+              galleryFileInfoModal.mediaType,
+              galleryFileInfoModal.extension
+            )}</span
+          >
+          {#if galleryFileInfoModal.mimeType}
+            <span>{t("contextGallery.mimeLabel")}: {galleryFileInfoModal.mimeType}</span>
+          {/if}
           <span>{t("contextGallery.sizeLabel")}: {formatFileSizeBytes(galleryFileInfoModal.sizeBytes)}</span>
-          ·
           <span>{t("contextGallery.modifiedLabel")}: {galleryFileInfoModal.mtimeIso}</span>
-        </p>
+        </div>
         <div class="settings-actions">
           <button type="button" class="om-btn om-btn--primary" on:click={() => (galleryFileInfoModal = null)}
             >{t("contextGallery.closeInfo")}</button

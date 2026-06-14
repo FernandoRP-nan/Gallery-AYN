@@ -15,6 +15,7 @@ from .pywebview_qt_json import patch_qt_qjson_bridge
 from .core.settings import load_app_settings
 from .api.web_api import WebApi
 from .media_server import start_media_server
+from .pywebview_http import OrganizadorBottleServer
 
 
 def _resolve_frontend_url() -> str:
@@ -57,12 +58,15 @@ def main() -> None:
 
     settings = load_app_settings()
     api = WebApi()
-    
-    start_media_server(port=51234)
-    
+
+    # En desarrollo con Vite (http://127.0.0.1:5173) el proxy redirige /media aquí.
+    frontend_url = _resolve_frontend_url()
+    if frontend_url.startswith("http://127.0.0.1:5173") or frontend_url.startswith("http://localhost:5173"):
+        start_media_server(port=51234)
+
     window = webview.create_window(
         "Galería AYN",
-        _resolve_frontend_url(),
+        frontend_url,
         js_api=api,
         width=1280,
         height=820,
@@ -74,5 +78,6 @@ def main() -> None:
         debug=bool(os.environ.get("ORGANIZADOR_WEB_DEBUG", "")),
         # Sirve dist/ por http://127.0.0.1:puerto (mejor capas GPU que file:// en WebKitGTK)
         http_server=True,
+        server=OrganizadorBottleServer,
     )
     _ = (window, settings)

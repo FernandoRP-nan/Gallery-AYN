@@ -6,6 +6,8 @@ export type GalleryState = {
   page: number;
   totalPages: number;
   total: number;
+  totalImages?: number;
+  totalVideos?: number;
   selectedCount: number;
   endIndex?: number;
   totalElements?: number;

@@ -223,7 +223,7 @@
                 src={previewZoomFileUrl}
                 controls
                 playsinline
-                preload="metadata"
+                preload="auto"
                 style={`transform: ${zoomImgTransform};`}
                 on:loadedmetadata={onZoomVideoMeta}
               ></video>

@@ -33,7 +33,7 @@ from ..core.gallery_paths import (
     sort_image_paths,
 )
 
-from ..core.section_color import accent_hex_from_paths
+from ..core.fs_path import normalize_path_string, resolve_dir_path
 
 _MONTH_NAMES_ES = (
     "",
@@ -189,9 +189,8 @@ class SystemBridgeMixin:
         raw = (start_path or "").strip()
         if raw:
             try:
-                expanded = Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
-                if expanded.is_dir():
-                    directory = str(expanded)
+                expanded = resolve_dir_path(raw)
+                directory = str(expanded)
             except (OSError, ValueError):
                 directory = ""
         result = win.create_file_dialog(FileDialog.FOLDER, directory=directory)
@@ -226,7 +225,7 @@ class SystemBridgeMixin:
         return [str(x) for x in pins if str(x).strip()]
 
     def gallery_pin_folder(self, raw_path: str) -> dict:
-        p = str(Path(raw_path).expanduser().resolve())
+        p = str(resolve_dir_path(raw_path))
         pins = self._pinned_folders()
         if p not in pins:
             pins.insert(0, p)
@@ -235,7 +234,7 @@ class SystemBridgeMixin:
         return {"pinnedFolders": list(self.settings.get("gallery_pinned_folders", []))}
 
     def gallery_unpin_folder(self, raw_path: str) -> dict:
-        p = str(Path(raw_path).expanduser().resolve())
+        p = str(resolve_dir_path(raw_path))
         pins = [x for x in self._pinned_folders() if x != p]
         self.settings["gallery_pinned_folders"] = pins
         save_app_settings(self.settings)
