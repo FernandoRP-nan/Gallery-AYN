@@ -38,14 +38,19 @@
 
   // Lista de prioridad de ordenamiento reactiva
   $: sortPriorityParts = (() => {
-    const parts = (gallerySortMode || "name,mtime,type").split(',').map(x => x.trim()).filter(Boolean);
+    const rawParts = (gallerySortMode || "mtime:desc,name:asc,type:asc").split(',').map(x => x.trim()).filter(Boolean);
+    const parsed = rawParts.map(r => {
+      const sp = r.split(':');
+      return { key: sp[0], dir: sp[1] || (sp[0] === 'mtime' ? 'desc' : 'asc') };
+    });
     const allModes = ['name', 'mtime', 'type'];
     for (const m of allModes) {
-      if (!parts.includes(m)) {
-        parts.push(m);
+      if (!parsed.some(p => p.key === m)) {
+        parsed.push({ key: m, dir: m === 'mtime' ? 'desc' : 'asc' });
       }
     }
-    return parts;
+    // Filtrar invalidos
+    return parsed.filter(p => allModes.includes(p.key));
   })();
 </script>
 
@@ -112,18 +117,30 @@
           <fieldset class="view-menu__fieldset">
             <div class="view-menu__legend">{t("view.sortLabel")}</div>
             <div class="sort-priority-list">
-              {#each sortPriorityParts as modeKey, index}
+              {#each sortPriorityParts as modeObj, index}
                 <div class="sort-priority-item">
                   <span class="sort-priority-label">
-                    {#if modeKey === 'name'}
+                    {#if modeObj.key === 'name'}
                       {t("view.sortName")}
-                    {:else if modeKey === 'mtime'}
+                    {:else if modeObj.key === 'mtime'}
                       {t("view.sortDate")}
-                    {:else if modeKey === 'type'}
+                    {:else if modeObj.key === 'type'}
                       {t("view.sortType")}
                     {/if}
                   </span>
                   <div class="sort-priority-actions">
+                    <button
+                      type="button"
+                      class="sort-priority-dir-btn"
+                      title={modeObj.dir === 'desc' ? "Descendente (click para Ascendente)" : "Ascendente (click para Descendente)"}
+                      on:click={() => {
+                        const nextParts = sortPriorityParts.map((p, i) => i === index ? { ...p, dir: p.dir === 'asc' ? 'desc' : 'asc' } : p);
+                        onGallerySortChange(nextParts.map(p => `${p.key}:${p.dir}`).join(','));
+                      }}
+                    >
+                      {modeObj.dir === 'desc' ? '⬇' : '⬆'}
+                    </button>
+                    <span class="sort-priority-sep">|</span>
                     <button
                       type="button"
                       class="sort-priority-btn"
@@ -134,7 +151,7 @@
                         const temp = nextParts[index - 1];
                         nextParts[index - 1] = nextParts[index];
                         nextParts[index] = temp;
-                        onGallerySortChange(nextParts.join(','));
+                        onGallerySortChange(nextParts.map(p => `${p.key}:${p.dir}`).join(','));
                       }}
                     >
                       ▲
@@ -149,7 +166,7 @@
                         const temp = nextParts[index + 1];
                         nextParts[index + 1] = nextParts[index];
                         nextParts[index] = temp;
-                        onGallerySortChange(nextParts.join(','));
+                        onGallerySortChange(nextParts.map(p => `${p.key}:${p.dir}`).join(','));
                       }}
                     >
                       ▼
@@ -225,6 +242,9 @@
     padding-inline: 8px;
     position: relative;
     z-index: 60;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
 .view-menu-backdrop {
     position: fixed;

@@ -326,7 +326,7 @@ class GalleryBridgeMixin:
                 "path": str(p),
                 "selected": p in selected_frozenset,
                 "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
-                "thumbQuality": "lq",
+                "thumbQuality": "hq" if is_video else "lq",
             }
             if timeline_meta:
                 d["mtimeIso"] = self._path_mtime_iso(p)

@@ -88,40 +88,78 @@ def sort_image_paths(paths: list[Path], mode: str) -> list[Path]:
       - `mtime`/`date`/`fecha`: Fecha de modificación (de menor a mayor).
       - `name`: Nombre del archivo / ruta completa (case insensitive).
     """
-    # Procesar la lista de prioridades de ordenamiento
+    # Procesar la lista de prioridades de ordenamiento y su dirección
     raw_modes = [x.strip().lower() for x in (mode or "name").split(",")]
-    # Filtrar los modos válidos
+    
+    # Filtrar los modos válidos y su dirección (por defecto desc para mtime, asc para name/type)
     sort_keys = []
-    for m in raw_modes:
+    for m_raw in raw_modes:
+        parts = m_raw.split(":")
+        m = parts[0]
+        direction = parts[1] if len(parts) > 1 else None
+        
         if m in ("mtime", "date", "fecha"):
-            sort_keys.append("mtime")
+            # mtime por defecto es desc (más reciente primero)
+            is_desc = direction != "asc"
+            sort_keys.append(("mtime", is_desc))
         elif m in ("type", "tipo"):
-            sort_keys.append("type")
+            # type por defecto es asc
+            is_desc = direction == "desc"
+            sort_keys.append(("type", is_desc))
         elif m in ("name", "nombre"):
-            sort_keys.append("name")
+            # name por defecto es asc
+            is_desc = direction == "desc"
+            sort_keys.append(("name", is_desc))
 
-    # Si por alguna razón queda vacío, forzar ordenar por nombre
+    # Si por alguna razón queda vacío, forzar ordenar por nombre asc
     if not sort_keys:
-        sort_keys = ["name"]
+        sort_keys = [("name", False)]
 
     # Agregar "name" como criterio final implícito de desempate para asegurar orden estable
-    if "name" not in sort_keys:
-        sort_keys.append("name")
+    if not any(k[0] == "name" for k in sort_keys):
+        sort_keys.append(("name", False))
 
+    # Python's `sorted` can only sort by a single `reverse` boolean for all keys at once.
+    # To support mixed directions, we invert the values of descending keys.
     def make_sort_key(p: Path) -> tuple:
         key_parts = []
-        for sk in sort_keys:
+        for sk, is_desc in sort_keys:
             if sk == "mtime":
                 try:
-                    key_parts.append(p.stat().st_mtime_ns)
+                    val = p.stat().st_mtime_ns
                 except OSError:
-                    key_parts.append(0)
+                    val = 0
+                key_parts.append(-val if is_desc else val)
             elif sk == "type":
-                # Vídeos tienen valor 1, imágenes valor 0 para ordenamiento (o viceversa)
+                # Vídeos tienen valor 1, imágenes valor 0 para ordenamiento
                 is_video = p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS
-                key_parts.append(1 if is_video else 0)
+                val = 1 if is_video else 0
+                key_parts.append(-val if is_desc else val)
             elif sk == "name":
-                key_parts.append(str(p).lower())
-        return tuple(key_parts)
+                # Strings can't be easily inverted numerically, but we can rely on Python's stable sort
+                # by sorting in multiple passes. But for simplicity, since name is usually the tiebreaker,
+                # we'll use a trick or just use single pass and not support desc name sorting fully.
+                # Actually, wait, let's just use string for ascending. For descending, we can invert characters?
+                # A simpler approach: we'll do multiple passes of stable sorting!
+                pass # Handled below
+        return tuple()
+        
+    # Since we need mixed sorting (some asc, some desc), and Python's stable sort allows us to sort multiple times:
+    # We sort by the least important key first, up to the most important key.
+    result = paths.copy()
+    for sk, is_desc in reversed(sort_keys):
+        if sk == "mtime":
+            def get_mtime(p: Path):
+                try: return p.stat().st_mtime_ns
+                except OSError: return 0
+            result.sort(key=get_mtime, reverse=is_desc)
+        elif sk == "type":
+            def get_type(p: Path):
+                return 1 if p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS else 0
+            result.sort(key=get_type, reverse=is_desc)
+        elif sk == "name":
+            def get_name(p: Path):
+                return str(p).lower()
+            result.sort(key=get_name, reverse=is_desc)
 
-    return sorted(paths, key=make_sort_key)
+    return result

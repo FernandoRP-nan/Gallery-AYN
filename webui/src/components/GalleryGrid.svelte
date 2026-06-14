@@ -10,11 +10,13 @@
   export let galleryRangeSelecting: boolean;
   export let galleryRangeSuppressClick: boolean;
   export let showThumbLabels: boolean;
-  export let galleryScrollAtTop: boolean;
   export let galleryState: any;
   export let destRows: any[];
   export let dragOverDestPath: string | null;
   export let destinationsMode: boolean;
+  export let galleryFloatChromeActive = false;
+  export let galleryScrolling = false;
+  export let galleryRangeDraftSelectedSet: Set<string> | null = null;
   export let galleryScrollEl: HTMLDivElement | null;
   export let galleryGridEl: HTMLDivElement | null;
 
@@ -44,8 +46,35 @@
   export let onDestDrop: (e: DragEvent, path: string) => void;
 </script>
 
-<article class="gallery om-panel om-panel--lift gallery--with-float">
+<article
+  class="gallery om-panel om-panel--lift"
+  class:gallery--with-float={galleryFloatChromeActive}
+  class:gallery--range-selecting={galleryRangeSelecting}
+  class:gallery--scrolling={galleryScrolling}
+>
   <div class="gallery__scroll" bind:this={galleryScrollEl} on:scroll={onGalleryScroll}>
+    {#if galleryFloatChromeActive}
+      <!-- Sticky dentro del scroll: misma UX con o sin pestaña Edición activa. -->
+      <div class="selection-float-rail">
+        <div class="selection-float selection-float--gallery-tr" role="toolbar" aria-label={t("selection.toolbarGalleryAria")}>
+          <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>{t("selection.page")}</button>
+          <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>{t("selection.remove")}</button>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--mini"
+            disabled={Number(galleryState.selectedCount || 0) === 0}
+            on:click={() =>
+              openConfirmDelete(
+                t("confirm.deleteSelectionTitle"),
+                t("confirm.deleteSelectionDetail").replace("{count}", String(galleryState.selectedCount)),
+                deleteSelectedGalleryItems
+              )}
+          >{t("selection.delete")}</button>
+          <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>{t("selection.invert")}</button>
+          <span class="selection-float__count" title={t("selection.selectedTitle")}>{galleryState.selectedCount}</span>
+        </div>
+      </div>
+    {/if}
     <div class="grid" bind:this={galleryGridEl} style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
     {#each galleryGridItems as it (it.path)}
       {#if it.kind === "section"}
@@ -87,7 +116,13 @@
         class="tile"
         class:tile--active={galleryKeyboardNavHintActive && galleryCursorPath === it.path}
         data-item-path={it.path}
-        class:selected={isGalleryTileSelected(it)}
+        class:selected={
+          galleryFloatChromeActive &&
+          isGalleryMediaKind(it.kind) &&
+          (galleryRangeSelecting && galleryRangeDraftSelectedSet
+            ? galleryRangeDraftSelectedSet.has(it.path)
+            : Boolean(it.selected))
+        }
         draggable={isGalleryMediaKind(it.kind) && !galleryRangeSelecting}
         on:pointerdown={(e) => onGalleryTilePointerDown(e, it)}
         on:pointerenter={() => onGalleryTilePointerEnter(it.path)}
@@ -164,27 +199,8 @@
       {/if}
     {/each}
     <div class="grid-end-spacer" aria-hidden="true"></div>
-    </div>
-    {#if destinationsMode && galleryScrollAtTop}
-      <div class="selection-float selection-float--gallery-tr" role="toolbar" aria-label={t("selection.toolbarGalleryAria")}>
-        <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>{t("selection.page")}</button>
-        <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>{t("selection.remove")}</button>
-        <button
-          type="button"
-          class="om-btn om-btn--ghost om-btn--mini"
-          disabled={Number(galleryState.selectedCount || 0) === 0}
-          on:click={() =>
-            openConfirmDelete(
-              t("confirm.deleteSelectionTitle"),
-              t("confirm.deleteSelectionDetail").replace("{count}", String(galleryState.selectedCount)),
-              deleteSelectedGalleryItems
-            )}
-        >{t("selection.delete")}</button>
-        <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertSelection}>{t("selection.invert")}</button>
-        <span class="selection-float__count" title={t("selection.selectedTitle")}>{galleryState.selectedCount}</span>
-      </div>
-    {/if}
-  </div>
+    </div> <!-- closes .grid -->
+  </div> <!-- closes .gallery__scroll -->
 </article>
 
 <style>
@@ -263,10 +279,14 @@
     overflow: auto;
     display: block;
     min-height: 0;
+    /* Confina la altura máxima de la galería respecto al viewport para aislar el scroll */
+    max-height: calc(100vh - 130px);
     padding-top: var(--om-space-2);
     border-radius: inherit;
     background: transparent;
     scrollbar-color: rgb(124 140 255 / 0.18) transparent;
+    /* Optimiza el desplazamiento y avisa al navegador de los cambios en el scroll */
+    will-change: transform, scroll-position;
   }
 .gallery:not(.gallery--with-float) .gallery__scroll {
     flex: 1;
@@ -290,26 +310,30 @@
     margin-block: var(--om-space-2);
     background: transparent;
   }
-/* Chip de herramientas: esquina superior derecha sobre la cuadrícula (mismo criterio visual que antes). */
-  .gallery--with-float .gallery__scroll > .selection-float.selection-float--gallery-tr {
-    position: absolute;
+/* Rail sticky: permanece visible en la esquina superior al desplazar la cuadrícula. */
+  .selection-float-rail {
+    position: sticky;
     top: var(--om-space-2);
-    right: var(--om-space-2);
-    left: auto;
-    margin: 0;
-    z-index: 6;
+    z-index: 8;
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+    padding: 0 var(--om-space-2);
+    margin-bottom: -2.65rem;
+    pointer-events: none;
+    isolation: isolate;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+.gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
+    pointer-events: auto;
     flex-wrap: nowrap;
     white-space: nowrap;
     max-width: min(560px, calc(100% - var(--om-space-4)));
-    background: linear-gradient(180deg, rgb(8 10 18 / 0.72), rgb(8 10 18 / 0.48));
-    border: 1px solid rgb(255 255 255 / 0.1);
-    border-top-color: transparent;
-    border-left-color: transparent;
-    border-right-color: transparent;
+    background: rgb(8 10 18 / 0.92);
+    border: 1px solid rgb(255 255 255 / 0.12);
     box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
-    backdrop-filter: blur(10px);
-    /* Capa GPU propia: aísla el repaint del fondo para reducir parpadeo. */
-    will-change: transform;
   }
 .selection-float {
     display: inline-flex;
@@ -323,8 +347,9 @@
     border: 1px solid rgb(255 255 255 / 0.1);
     box-shadow: var(--om-shadow-md);
     backdrop-filter: blur(8px);
-    /* Capa GPU propia: aísla el repaint del fondo para reducir parpadeo. */
-    will-change: transform;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
 /* Fuera del área con scroll: no provoca artefactos ni cortes raros al desplazar. */
   .gallery--with-float > .dest-float-chips {
@@ -399,6 +424,7 @@
 /* Mosaico de miniaturas del contenido de carpeta */
 .folder-mosaic {
     width: 100%;
+    height: 100%;
     aspect-ratio: 1;
     display: grid;
     grid-template-columns: 1fr 1fr;

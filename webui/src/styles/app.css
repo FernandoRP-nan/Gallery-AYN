@@ -127,12 +127,17 @@
     min-height: 0;
   }
 
-/* Barra de chips de destinos: fila visible debajo de la galería en modo Edición. */
+/* Barra de chips de destinos: anclada como fila del layout (no absolute) para no perderse al scroll. */
   .dest-float-chips-bar {
-    position: absolute;
-    left: 50%;
-    bottom: var(--om-space-4);
-    transform: translateX(-50%);
+    position: relative;
+    left: auto;
+    bottom: auto;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    justify-self: center;
+    align-self: center;
+    flex-shrink: 0;
     z-index: 20;
     display: flex;
     flex-wrap: nowrap;
@@ -152,9 +157,10 @@
     box-sizing: border-box;
     width: max-content;
     max-width: calc(100vw - 32px);
-    /* Promoción a capa GPU propia: aísla el repaint de las barras flotantes
-       del resto de la página y reduce el parpadeo al mover ventanas del SO. */
-    will-change: transform;
+  }
+
+.destinos-work > .dest-float-chips-bar {
+    margin: var(--om-space-2) auto var(--om-space-3);
   }
 
 .dest-float-add {
@@ -216,10 +222,6 @@
     padding-right: var(--grid-edge-pad, 8px);
     box-sizing: border-box;
   }
-/* En modo Edición evita líneas raras en bordes al redimensionar / scroll. */
-  .gallery--with-float .grid {
-    contain: none;
-  }
 .grid-end-spacer {
     grid-column: 1 / -1;
     height: 3.6rem;
@@ -232,6 +234,8 @@
     touch-action: manipulation;
     position: relative;
     box-sizing: border-box;
+    /* Estabiliza el aspect-ratio del contenedor para evitar bucles de redibujado */
+    aspect-ratio: 1;
     -webkit-user-select: none;
     user-select: none;
     background: linear-gradient(180deg, var(--om-surface-3) 0%, var(--om-surface-2) 100%);
@@ -320,6 +324,14 @@
     background: color-mix(in oklab, var(--om-accent) 24%, #8fc0ff);
     opacity: 0.9;
   }
+.gallery--range-selecting .tile,
+  .gallery--range-selecting .tile.selected img,
+  .gallery--range-selecting .tile.selected .folder-ph,
+  .gallery--scrolling .tile,
+  .gallery--scrolling .tile img,
+  .gallery--scrolling .tile .folder-ph {
+    transition: none;
+  }
 .tile.selected img,
   .tile.selected .folder-ph {
     transform: scale(0.9);
@@ -328,6 +340,7 @@
   }
 .tile img {
     width: 100%;
+    height: 100%;
     aspect-ratio: 1;
     object-fit: cover;
     border-radius: var(--thumb-image-radius, var(--om-radius-sm));
@@ -341,6 +354,7 @@
   }
 .folder-ph {
     width: 100%;
+    height: 100%;
     aspect-ratio: 1;
     display: grid;
     place-items: center;
@@ -462,6 +476,7 @@
   :global(body.om-dragging) .dest-float-chips-bar,
   :global(body.om-dragging) .dest-float-chips,
   :global(body.om-dragging) .selection-float,
+  :global(body.om-dragging) .selection-float-rail,
   :global(body.om-dragging) .tile__name {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
@@ -539,6 +554,9 @@
     padding-block: 7px;
     margin-top: 2px;
     min-height: 2.7rem;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
 
 /* Mantiene tamaño visual consistente aunque cambie el contenido del estado. */
@@ -628,6 +646,9 @@
     padding: var(--om-space-4);
     background: rgb(4 6 14 / 0.55);
     box-sizing: border-box;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
 
 .organizer-float {
@@ -695,6 +716,9 @@
     display: grid;
     place-items: center;
     z-index: 40;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
 
 .overlay--dim {
@@ -759,6 +783,9 @@
     flex-direction: column;
     gap: 2px;
     box-sizing: border-box;
+    /* Promueve a su propia capa de composición GPU */
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
 
 .dest-ctx-menu__item {
@@ -975,3 +1002,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+/* Durante el scroll: suspender backdrop-filter en el Toolbar, las celdas de las imágenes,
+   y las barras flotantes para evitar Layout Thrashing y parpadeos en ráfaga. */
+.gallery--scrolling .tile__name,
+.gallery--scrolling .selection-float,
+.gallery--scrolling .dest-float-chips-bar,
+.gallery--scrolling .dest-float-chips,
+.gallery--scrolling .selection-float-rail {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
