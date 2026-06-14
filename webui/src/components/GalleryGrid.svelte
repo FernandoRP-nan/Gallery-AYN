@@ -15,6 +15,7 @@
   export let dragOverDestPath: string | null;
   export let destinationsMode: boolean;
   export let galleryFloatChromeActive = false;
+  export let galleryBusy = false;
   export let galleryScrolling = false;
   export let galleryRangeDraftSelectedSet: Set<string> | null = null;
   export let galleryScrollEl: HTMLDivElement | null;
@@ -51,12 +52,13 @@
   class:gallery--with-float={galleryFloatChromeActive}
   class:gallery--range-selecting={galleryRangeSelecting}
   class:gallery--scrolling={galleryScrolling}
+  class:gallery--busy={galleryBusy}
 >
   <div class="gallery__scroll" bind:this={galleryScrollEl} on:scroll={onGalleryScroll}>
     {#if galleryFloatChromeActive}
       <!-- Sticky dentro del scroll: misma UX con o sin pestaña Edición activa. -->
       <div class="selection-float-rail">
-        <div class="selection-float selection-float--gallery-tr" role="toolbar" aria-label={t("selection.toolbarGalleryAria")}>
+        <div class="selection-float selection-float--gallery-tr app-chrome" role="toolbar" aria-label={t("selection.toolbarGalleryAria")}>
           <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>{t("selection.page")}</button>
           <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>{t("selection.remove")}</button>
           <button
@@ -148,7 +150,7 @@
             alt=""
             class:thumb--lq={it.thumbQuality === "lq"}
             draggable={false}
-            loading="lazy"
+            loading={it.thumbQuality === "lq" ? "eager" : "lazy"}
             decoding="async"
           />
         {:else if it.kind === "folder" && it.folderPreviewUrls && it.folderPreviewUrls.length > 0}
@@ -261,39 +263,43 @@
     box-shadow: 0 14px 42px rgb(0 0 0 / 0.52) !important;
     border-color: rgb(255 255 255 / 0.07) !important;
   }
-.gallery:not(.gallery--with-float) {
+.gallery:not(.gallery--with-float),
+.gallery--with-float {
     display: flex;
     flex-direction: column;
     overflow: hidden;
     min-height: 0;
+    height: 100%;
   }
 /* Scroll interno: modo Edición (barra selección + destinos) y modo base comparten estilo. */
   .gallery--with-float {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
     position: relative;
   }
 .gallery .gallery__scroll {
     overflow: auto;
     display: block;
     min-height: 0;
-    /* Confina la altura máxima de la galería respecto al viewport para aislar el scroll */
-    max-height: calc(100vh - 130px);
+    flex: 1;
     padding-top: var(--om-space-2);
     border-radius: inherit;
     background: transparent;
     scrollbar-color: rgb(124 140 255 / 0.18) transparent;
-    /* Optimiza el desplazamiento y avisa al navegador de los cambios en el scroll */
-    will-change: transform, scroll-position;
+  }
+.gallery--scrolling .gallery__scroll,
+.gallery--busy .gallery__scroll {
+    will-change: scroll-position;
+  }
+.gallery:not(.gallery--scrolling):not(.gallery--busy) .gallery__scroll {
+    will-change: auto;
+  }
+.gallery:not(.gallery--with-float) .gallery__scroll,
+.gallery--with-float .gallery__scroll {
+    flex: 1;
   }
 .gallery:not(.gallery--with-float) .gallery__scroll {
-    flex: 1;
     padding-bottom: var(--om-space-2);
   }
 .gallery--with-float .gallery__scroll {
-    flex: 1;
     padding-bottom: max(3.75rem, calc(env(safe-area-inset-bottom, 0px) + 3.25rem));
     position: relative;
   }
@@ -321,10 +327,10 @@
     padding: 0 var(--om-space-2);
     margin-bottom: -2.65rem;
     pointer-events: none;
-    isolation: isolate;
-    /* Promueve a su propia capa de composición GPU */
-    transform: translateZ(0);
-    backface-visibility: hidden;
+  }
+.gallery--scrolling .selection-float-rail,
+.gallery--busy .selection-float-rail {
+    transform: none;
   }
 .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
     pointer-events: auto;
@@ -346,10 +352,10 @@
     background: rgb(8 10 18 / 0.82);
     border: 1px solid rgb(255 255 255 / 0.1);
     box-shadow: var(--om-shadow-md);
-    backdrop-filter: blur(8px);
-    /* Promueve a su propia capa de composición GPU */
-    transform: translateZ(0);
-    backface-visibility: hidden;
+  }
+.gallery--scrolling .selection-float,
+.gallery--busy .selection-float {
+    transform: none;
   }
 /* Fuera del área con scroll: no provoca artefactos ni cortes raros al desplazar. */
   .gallery--with-float > .dest-float-chips {

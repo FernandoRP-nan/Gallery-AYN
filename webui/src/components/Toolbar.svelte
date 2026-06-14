@@ -34,6 +34,7 @@
   export let openPinMarkerModal: (folder: string) => void;
   export let reload: () => void;
   export let pickGalleryFolder: () => void;
+  export let loadFolder: () => void | Promise<void>;
   export let openSettingsModal: () => void;
 
   // Lista de prioridad de ordenamiento reactiva
@@ -203,6 +204,12 @@
         placeholder={t("route.pathPlaceholder")}
         title={t("route.pathInputTitle")}
         on:focus={() => (routePickerOpen = true)}
+        on:keydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void loadFolder();
+          }
+        }}
       />
       <button
         type="button"
@@ -242,9 +249,6 @@
     padding-inline: 8px;
     position: relative;
     z-index: 60;
-    /* Promueve a su propia capa de composición GPU */
-    transform: translateZ(0);
-    backface-visibility: hidden;
   }
 .view-menu-backdrop {
     position: fixed;

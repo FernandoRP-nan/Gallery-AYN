@@ -1,6 +1,7 @@
 import "./styles/app.css";
 import "./styles/design-tokens.css";
 import "./styles/om-theme-overrides.css";
+import "./lib/chromeRemember";
 import { mount } from "svelte";
 import App from "./App.svelte";
 import { applyUiThemeToDocument, readCachedUiTheme } from "./lib/uiTheme";

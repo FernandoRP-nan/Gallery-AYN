@@ -16,9 +16,11 @@
   import {
     bumpGalleryThumbHydrationToken,
     disposeGalleryThumbs,
+    galleryThumbHydrating,
     getGalleryThumbHydrationToken,
     hydrateGalleryThumbsHq,
   } from "../lib/galleryThumbs";
+  import { galleryChromeBusy } from "../lib/chromeRemember";
   import {
     expandTimelineDayBreaks,
     isGalleryMediaKind,
@@ -89,6 +91,14 @@
   let gridCellPx = 120;
   let frozenGalleryState = $galleryState;
 
+  let galleryAutoLoadTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $: syncGalleryChromeBusy(galleryScrolling, galleryLoadingMore, $galleryThumbHydrating);
+
+  function syncGalleryChromeBusy(scrolling: boolean, loading: boolean, hydrating: boolean) {
+    galleryChromeBusy.set(scrolling || loading || hydrating);
+  }
+
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
   $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
   $: galleryGridItems = expandTimelineDayBreaks($galleryItems, timelineView, gridCellPx);
@@ -137,14 +147,15 @@
   }
 
   async function autoLoadUnlimitedBatches() {
+    // Solo rellena el viewport inicial; el resto lo pide el scroll del usuario.
     const runId = ++galleryAutoLoadRunId;
     let guard = 0;
-    while (runId === galleryAutoLoadRunId && thumbsPerPage === 0 && galleryHasMoreNow() && guard < 200) {
+    while (runId === galleryAutoLoadRunId && thumbsPerPage === 0 && galleryHasMoreNow() && guard < 3) {
       guard++;
       const progressed = await loadMoreGalleryBatch();
-      await tick();
       if (!progressed) break;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (!galleryScrollEl || galleryScrollEl.scrollHeight > galleryScrollEl.clientHeight + 40) break;
+      await new Promise((resolve) => setTimeout(resolve, 120));
     }
   }
 
@@ -152,12 +163,15 @@
     thumbsPerPage === 0 &&
     galleryHasMoreNow() &&
     !galleryLoadingMore &&
+    !galleryChromeBusy &&
     $galleryItems.length > 0 &&
     galleryScrollEl
   ) {
-    setTimeout(() => {
+    if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
+    galleryAutoLoadTimer = setTimeout(() => {
+      galleryAutoLoadTimer = null;
       void maybeAutoLoadMoreForViewport();
-    }, 0);
+    }, 120);
   }
 
   async function onGalleryScroll(e: Event) {
@@ -168,7 +182,7 @@
     galleryScrollIdleTimer = setTimeout(() => {
       galleryScrolling = false;
       galleryScrollIdleTimer = null;
-    }, 120);
+    }, 200);
     if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
     if (!nearBottom) return;
@@ -373,6 +387,8 @@
   /** Llamado desde App tras cargar carpeta / recargar. */
   export async function afterGalleryPayloadLoaded(items: GalleryItem[], scale: number) {
     bumpGalleryThumbHydrationToken();
+    // Esperar al DOM de la rejilla para priorizar miniaturas visibles (viewport).
+    await tick();
     void hydrateGalleryThumbsHq(items, scale, getGalleryThumbHydrationToken());
     if (thumbsPerPage === 0) {
       await tick();
@@ -383,6 +399,8 @@
 
   onDestroy(() => {
     if (galleryScrollIdleTimer !== null) clearTimeout(galleryScrollIdleTimer);
+    if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
+    galleryChromeBusy.set(false);
     disposeGalleryThumbs();
   });
 </script>
@@ -410,6 +428,7 @@
   bind:galleryScrollEl
   bind:galleryGridEl
   {galleryFloatChromeActive}
+  galleryBusy={$galleryChromeBusy}
   {galleryScrolling}
   {galleryRangeDraftSelectedSet}
   {onGalleryScroll}

@@ -13,6 +13,43 @@
     box-sizing: border-box;
   }
 
+/* Capa de chrome aislada: toolbar, pager, preview y barras flotantes no se repintan con la rejilla. */
+  .app-chrome {
+    contain: layout style paint;
+    position: relative;
+    z-index: 70;
+    background: var(--om-surface-1);
+    box-shadow: var(--om-shadow-sm);
+  }
+
+.app-chrome--header {
+    z-index: 80;
+    border-radius: var(--thumb-tile-radius, var(--om-radius-md));
+  }
+
+.app-chrome--footer.pager.pager--bar {
+    z-index: 75;
+  }
+
+.app-chrome--preview {
+    z-index: 1;
+    background: linear-gradient(165deg, var(--om-surface-1) 0%, var(--om-bg-elevated) 100%);
+  }
+
+.app-chrome--dest-bar {
+    z-index: 72;
+    background: rgb(12 14 24 / 0.96) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+/* Solo la rejilla: paint containment (strict rompe la altura en modo normal). */
+  .gallery {
+    contain: paint;
+    height: 100%;
+    min-height: 0;
+  }
+
 /* Barra extra bajo el header cuando no está en modo destinos. */
   .app.app--layout-ruta {
     grid-template-rows: auto 1fr auto;
@@ -111,6 +148,9 @@
     min-height: 0;
     align-items: stretch;
     position: relative;
+    contain: layout;
+    isolation: isolate;
+    grid-template-rows: minmax(0, 1fr);
   }
 
 .destinos-work__top {
@@ -120,11 +160,14 @@
     display: flex;
     flex-direction: column;
     position: relative;
+    flex: 1;
   }
 
-.destinos-work__top > .content {
+.destinos-work__top > .content,
+.destinos-work > .content {
     flex: 1;
     min-height: 0;
+    height: 100%;
   }
 
 /* Barra de chips de destinos: anclada como fila del layout (no absolute) para no perderse al scroll. */
@@ -132,9 +175,6 @@
     position: relative;
     left: auto;
     bottom: auto;
-    /* Promueve a su propia capa de composición GPU */
-    transform: translateZ(0);
-    backface-visibility: hidden;
     justify-self: center;
     align-self: center;
     flex-shrink: 0;
@@ -217,7 +257,6 @@
     /* Columnas flexibles: se ajustan con cambios finos de ancho (splitter/vista previa). */
     grid-template-columns: repeat(auto-fill, minmax(var(--cell, 160px), 1fr));
     gap: var(--thumb-gap, var(--om-space-3));
-    contain: layout style;
     padding-left: var(--grid-edge-pad, 8px);
     padding-right: var(--grid-edge-pad, 8px);
     box-sizing: border-box;
@@ -247,7 +286,6 @@
     cursor: pointer;
     box-shadow: var(--om-shadow-sm);
     overflow: hidden;
-    isolation: isolate;
     transition:
       transform var(--om-transition),
       box-shadow var(--om-transition),
@@ -329,7 +367,10 @@
   .gallery--range-selecting .tile.selected .folder-ph,
   .gallery--scrolling .tile,
   .gallery--scrolling .tile img,
-  .gallery--scrolling .tile .folder-ph {
+  .gallery--scrolling .tile .folder-ph,
+  .gallery--busy .tile,
+  .gallery--busy .tile img,
+  .gallery--busy .tile .folder-ph {
     transition: none;
   }
 .tile.selected img,
@@ -554,9 +595,6 @@
     padding-block: 7px;
     margin-top: 2px;
     min-height: 2.7rem;
-    /* Promueve a su propia capa de composición GPU */
-    transform: translateZ(0);
-    backface-visibility: hidden;
   }
 
 /* Mantiene tamaño visual consistente aunque cambie el contenido del estado. */
@@ -1003,13 +1041,28 @@
     white-space: nowrap;
   }
 
-/* Durante el scroll: suspender backdrop-filter en el Toolbar, las celdas de las imágenes,
-   y las barras flotantes para evitar Layout Thrashing y parpadeos en ráfaga. */
+/* Chrome aislado: sin backdrop-filter (evita parpadeos en Qt WebEngine). */
+  .app-chrome,
+  .app-chrome .tabs-bar,
+  .app-chrome.selection-float,
+  .app-chrome--dest-bar,
+  .selection-float.app-chrome {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    transform: none !important;
+  }
+
+/* Durante el scroll/carga: sin transiciones en overlays de la rejilla. */
 .gallery--scrolling .tile__name,
 .gallery--scrolling .selection-float,
 .gallery--scrolling .dest-float-chips-bar,
 .gallery--scrolling .dest-float-chips,
-.gallery--scrolling .selection-float-rail {
+.gallery--scrolling .selection-float-rail,
+.gallery--busy .tile__name,
+.gallery--busy .selection-float,
+.gallery--busy .dest-float-chips-bar,
+.gallery--busy .dest-float-chips,
+.gallery--busy .selection-float-rail {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }

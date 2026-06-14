@@ -45,7 +45,17 @@
       </header>
       <section class="route-picker__body">
         <div class="route-picker__input-row">
-          <input class="om-input route-picker__input" bind:value={folder} placeholder={t("route.pathPlaceholder")} />
+          <input
+            class="om-input route-picker__input"
+            bind:value={folder}
+            placeholder={t("route.pathPlaceholder")}
+            on:keydown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void loadFolder();
+              }
+            }}
+          />
           <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("route.browseFolder")} on:click={pickGalleryFolder}>
             <svg class="route-folder-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path fill="currentColor" d="M3 7.5a2 2 0 0 1 2-2h5.2l1.8 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9z" />

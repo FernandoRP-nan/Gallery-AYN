@@ -8,8 +8,8 @@
   import { t } from "./lib/i18n";
   import { galleryGridCellPx } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
+  import PagerBar from "./components/PagerBar.svelte";
   import {
-    galleryState as galleryStateStore,
     getGalleryItems,
     getGalleryState,
     mergeGalleryItemsFromApi,
@@ -21,6 +21,7 @@
     updateGalleryItems,
   } from "./lib/galleryRuntime";
   import { disposeGalleryThumbs } from "./lib/galleryThumbs";
+  import { commitChromePagerState } from "./lib/chromeRemember";
   import { isGalleryMediaKind, mergeItemsKeepingBestThumb } from "./lib/galleryUtils";
   import {
     applyUiThemeToDocument,
@@ -526,6 +527,16 @@
     await persistViewAndReload();
   }
 
+  /** Tras cargar ítems: hidrata miniaturas HQ en GalleryWorkspace (aislado de la rejilla). */
+  async function afterGalleryDataLoaded() {
+    try {
+      await tick();
+      await galleryWorkspace?.afterGalleryPayloadLoaded(getGalleryItems(), thumbScale);
+    } catch {
+      /* La rejilla sigue mostrando LQ si falla la hidratación */
+    }
+  }
+
   async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
     closeGalleryItemCtxMenu();
     const target = path.trim();
@@ -537,11 +548,13 @@
     }
     const out = await bridge.galleryLoadFolder(target);
     setGalleryPayload(out.state, out.items);
-    void afterGalleryDataLoaded();
+    await afterGalleryDataLoaded();
     if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
     pageJumpDraft = out.state.page;
     folder = out.state?.folder ?? target;
     orgPath = folder || orgPath;
+    routePickerOpen = false;
+    commitChromePagerState();
     status = t("status.folderLoaded").replace("{path}", folder);
   }
 
@@ -654,6 +667,7 @@
     setGalleryPayload(out.state, out.items);
     void afterGalleryDataLoaded();
     pageJumpDraft = out.state.page;
+    commitChromePagerState();
   };
 
   const jumpToPageDraft = async () => {
@@ -1079,32 +1093,8 @@
     window.addEventListener("pointercancel", up);
   }
 
-  /** Números de página estilo resultados (mínimo 5 visibles + extremos). */
-  function googlePageItems(page: number, totalPages: number): Array<number | "gap"> {
-    if (totalPages <= 1) return totalPages === 1 ? [1] : [];
-    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
-    if (page <= 4) return [1, 2, 3, 4, 5, "gap", totalPages];
-    if (page >= totalPages - 3) return [1, "gap", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
-    return [1, "gap", page - 2, page - 1, page, page + 1, page + 2, "gap", totalPages];
-  }
-
-  function formatBytes(size: number): string {
-    const n = Math.max(0, Number(size) || 0);
-    if (n < 1024) return `${n} B`;
-    const units = ["KB", "MB", "GB", "TB"];
-    let v = n / 1024;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-      v /= 1024;
-      i++;
-    }
-    return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
-  }
-
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
   $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
-
-  $: pageLinks = googlePageItems(Number(getGalleryState().page) || 1, Number(getGalleryState().totalPages) || 1);
 
   function updateSplitFromClientX(clientX: number) {
     const el = document.querySelector(".content");
@@ -2517,7 +2507,7 @@
     await loadInitial();
     if (folder) {
       try {
-        await loadFolder(false);
+        await loadFolder(true);
       } catch {
         status = t("status.restoreFolderError");
       }
@@ -2752,6 +2742,7 @@
       zoomCropMode = false;
     } else if (previewZoomOpen) previewZoomOpen = false;
     else if (previewOpen) previewOpen = false;
+    else if (routePickerOpen) routePickerOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
   }}
 />
@@ -2766,6 +2757,7 @@
   style={`--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
 >
   
+  <div class="app-chrome app-chrome--header">
   <Toolbar
     bind:destinationsMode
     bind:viewMenuOpen
@@ -2795,8 +2787,10 @@
     {openPinMarkerModal}
     {reload}
     {pickGalleryFolder}
+    {loadFolder}
     {openSettingsModal}
   />
+  </div>
 
   
 
@@ -2807,7 +2801,7 @@
     class:destinos-work--drag={destinationsMode && destSplitDrag}
     style={destinationsMode ? "grid-template-rows:minmax(0,1fr) auto" : undefined}
   >
-    <div class:destinos-work__top={destinationsMode}>
+    <div class="destinos-work__top">
       <section
         class="content"
         style={previewVisible
@@ -2857,7 +2851,7 @@
             on:pointerdown={beginSplitDrag}
           ></div>
 
-          <aside class="preview om-panel">
+          <aside class="preview om-panel app-chrome app-chrome--preview">
             {#if selectedPreview?.mediaType === "video" && selectedPreview?.fileUrl}
               <!-- svelte-ignore a11y_media_has_caption -->
               <video
@@ -2884,7 +2878,7 @@
       </section>
     </div>
     {#if destinationsMode}
-      <div class="dest-float-chips-bar" aria-label={t("selection.destBarAria")}>
+      <div class="dest-float-chips-bar app-chrome app-chrome--dest-bar" aria-label={t("selection.destBarAria")}>
         <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
           +
         </button>
@@ -2924,77 +2918,19 @@
     {/if}
   </div>
 
-  <footer class="pager om-panel pager--bar" aria-label={t("pager.footerAria")}>
-    {#if thumbsPerPage !== 0}
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.firstPage")} on:click={() => goPage(1)}>|«</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.prevPage")} on:click={() => goPage(Math.max(1, $galleryStateStore.page - 1))}>‹</button>
-      {#each pageLinks as item}
-        {#if item === "gap"}
-          <span class="pager__gap" aria-hidden="true">…</span>
-        {:else}
-          <button
-            type="button"
-            class="om-btn om-btn--ghost pager__num"
-            class:om-btn--primary={item === $galleryStateStore.page}
-            title={t("pager.goPageTitle").replace("{n}", String(item))}
-            on:click={() => goPage(item)}>{item}</button>
-        {/if}
-      {/each}
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.nextPage")} on:click={() => goPage(Math.min($galleryStateStore.totalPages, $galleryStateStore.page + 1))}>›</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.lastPage")} on:click={() => goPage($galleryStateStore.totalPages)}>»|</button>
-      <span class="pager__google-line"
-        >{$galleryStateStore.total}
-        {t("pager.imagesWord")} · {t("pager.pageWord")}
-        {$galleryStateStore.page}
-        {t("pager.ofWord")}
-        {$galleryStateStore.totalPages}</span>
-      <label class="pager__jump">
-        <input
-          class="om-input pager__jump-input"
-          type="number"
-          min="1"
-          max={$galleryStateStore.totalPages}
-          bind:value={pageJumpDraft}
-          on:keydown={(e) => e.key === "Enter" && jumpToPageDraft()}
-        />
-        <span class="pager__jump-total">/ {$galleryStateStore.totalPages}</span>
-      </label>
-      <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>{t("pager.goJump")}</button>
-    {:else}
-      <span class="pager__google-line">
-        {t("pager.loadedPrefix")}
-        {Number($galleryStateStore?.endIndex ?? 0)}/{Number($galleryStateStore?.total ?? 0)}
-        {t("pager.imagesWord")} ·
-        {Number($galleryStateStore?.totalElements ?? Number($galleryStateStore?.total ?? 0) + Number($galleryStateStore?.subfoldersCount ?? 0))}
-        {t("pager.elementsWord")} · {t("pager.totalWeight")}
-        {Number($galleryStateStore?.totalBytes ?? -1) < 0 ? t("pager.calculating") : formatBytes(Number($galleryStateStore?.totalBytes ?? 0))}
-      </span>
-    {/if}
-    <div class="grow"></div>
-    <span class="status-line">{status}</span>
-    <span class="webui-build-tag" title={t("pager.buildTagTitle")}>{__WEBUI_BUILD__.slice(0, 10)}</span>
-    <button
-      type="button"
-      class="om-btn om-btn--ghost om-btn--compact"
-      title={previewVisible ? t("pager.previewHide") : t("pager.previewShow")}
-      on:click={togglePreviewVisible}
-    >{previewVisible ? t("pager.previewOn") : t("pager.previewOff")}</button>
-    <span class="field-label pager__split-label" title={t("pager.splitHint")}
-      >{t("preview.panelRight")} ~{Math.round(previewRatio * 100)}%</span>
-    <label class="field-label pager__thumb-label" for="route-thumb-scale-footer"
-      >{t("pager.thumbsLabel")} {Math.round(thumbScale * 100)}%</label>
-    <input
-      id="route-thumb-scale-footer"
-      class="om-range pager__thumb-range"
-      type="range"
-      min="0.01"
-      max="2.25"
-      step="0.01"
-      bind:value={thumbScale}
-      on:input={scheduleThumbScaleReload}
-      on:change={flushThumbScaleOnRelease}
-    />
-  </footer>
+  <PagerBar
+    {thumbsPerPage}
+    bind:pageJumpDraft
+    {status}
+    {previewVisible}
+    {previewRatio}
+    bind:thumbScale
+    {goPage}
+    {jumpToPageDraft}
+    {togglePreviewVisible}
+    {scheduleThumbScaleReload}
+    {flushThumbScaleOnRelease}
+  />
 
   {#if previewOpen}
     <div
