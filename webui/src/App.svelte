@@ -3171,7 +3171,6 @@
   <div
     class="destinos-work"
     class:destinos-work--drag={destinationsMode && destSplitDrag}
-    style={destinationsMode ? "grid-template-rows:minmax(0,1fr) auto" : undefined}
   >
     <div class="destinos-work__top">
       <section
@@ -3211,6 +3210,7 @@
           {onDestChipDragStart}
           {onDestChipDragEnd}
           {onDestDrop}
+          {destRows}
           on:preview={(e) => setSelectedPreviewFromPath(e.detail.path)}
         />
 
@@ -3295,45 +3295,6 @@
         {/if}
       </section>
     </div>
-    {#if destinationsMode}
-      <div class="dest-float-chips-bar app-chrome app-chrome--dest-bar" aria-label={t("selection.destBarAria")}>
-        <button type="button" class="om-btn om-btn--ghost om-btn--compact dest-float-add" on:click={openAddDestForm}>
-          +
-        </button>
-        {#if destRows.length === 0}
-          <span class="dest-float-empty">{t("selection.noDestFolders")}</span>
-        {/if}
-        {#each destRows as d, i (d.path + "\0" + i)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_interactive_supports_focus -->
-          <div
-            class="dest-float-chip"
-            class:dest-float-chip--drop-target={dragOverDestPath === d.path}
-            class:dest-float-chip--dragging={draggedDestIdx === i}
-            data-dest-path={d.path}
-            title={d.path}
-            role="button"
-            tabindex="0"
-            draggable={true}
-            on:click={(e) => onDestCardClick(e, d.path)}
-            on:keydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onDestCardClick(e as unknown as MouseEvent, d.path);
-              }
-            }}
-            on:contextmenu={(e) => onDestContextMenu(e, i, "gallery")}
-            on:dragstart={(e) => onDestChipDragStart(e, i)}
-            on:dragend={onDestChipDragEnd}
-            on:dragenter|preventDefault
-            on:dragover|preventDefault
-            on:drop={(e) => onDestDrop(e, d.path)}
-          >
-            <span class="dest-float-chip__title">{d.label}</span>
-          </div>
-        {/each}
-      </div>
-    {/if}
   </div>
 
   <PagerBar

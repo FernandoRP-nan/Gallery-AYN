@@ -67,6 +67,7 @@
   export let onDestChipDragStart: (e: DragEvent, idx: number) => void;
   export let onDestChipDragEnd: () => void;
   export let onDestDrop: (e: DragEvent, path: string) => void;
+  export let destRows: Array<{ label: string; path: string }> = [];
 
   export let galleryScrollEl: HTMLDivElement | null = null;
   export let galleryGridEl: HTMLDivElement | null = null;
@@ -450,6 +451,7 @@
   on:pointercancel={() => void endGalleryRangeSelection()}
 />
 
+<div class="gallery-workspace">
 <GalleryGrid
   {galleryGridItems}
   bind:gridCellPx
@@ -462,7 +464,7 @@
   bind:showThumbLabels
   galleryState={frozenGalleryState}
   selectionCount={liveSelectedCount}
-  destRows={[]}
+  {destRows}
   bind:dragOverDestPath
   bind:draggedDestIdx
   bind:galleryScrollEl
@@ -495,3 +497,4 @@
   {onDestDrop}
   {destinationsMode}
 />
+</div>
