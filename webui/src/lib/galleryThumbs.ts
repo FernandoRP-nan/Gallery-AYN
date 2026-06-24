@@ -5,6 +5,7 @@ import {
   setGalleryThumbHq,
   clearGalleryThumbHqCache,
 } from "./galleryThumbHqCache";
+import { getGalleryNavigationGeneration, isGalleryNavigationCurrent } from "./gallerySession";
 import { getGalleryItems } from "./galleryRuntime";
 import { galleryScrolling } from "./galleryScrollState";
 
@@ -61,10 +62,10 @@ export function cancelPendingGalleryThumbFlush() {
   }
 }
 
-export function bumpGalleryThumbHydrationToken(): number {
+export function bumpGalleryThumbHydrationToken(clearCache = false): number {
   galleryThumbHydrationToken++;
   cancelPendingGalleryThumbFlush();
-  clearGalleryThumbHqCache();
+  if (clearCache) clearGalleryThumbHqCache();
   return galleryThumbHydrationToken;
 }
 
@@ -129,6 +130,7 @@ function queueGalleryThumbHq(path: string, thumbDataUrl: string, token: number) 
 }
 
 export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: number, token: number) {
+  const navGen = getGalleryNavigationGeneration();
   const base = snapshot.filter((x) => x.kind === "image" || x.kind === "video");
   const orderedPaths = prioritizePathsByViewport(
     base.map((x) => x.path),
@@ -148,7 +150,7 @@ export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: num
         const it = targets[cur];
         try {
           const out = await bridge.galleryThumbHq(it.path, scale);
-          if (galleryThumbHydrationToken !== token) return;
+          if (galleryThumbHydrationToken !== token || !isGalleryNavigationCurrent(navGen)) return;
           if (!out?.thumbDataUrl) continue;
           queueGalleryThumbHq(it.path, out.thumbDataUrl, token);
         } catch {

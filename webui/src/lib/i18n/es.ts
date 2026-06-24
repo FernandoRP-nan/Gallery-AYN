@@ -337,6 +337,12 @@ export const es = {
     sortName: "Nombre",
     sortDate: "Fecha (modificación)",
     sortType: "Tipo (archivo)",
+    sortAsc: "Ascendente",
+    sortDesc: "Descendente",
+    sortPriority: "Prioridad {n}",
+    sortApply: "Aplicar orden",
+    sortCancel: "Descartar cambios",
+    sortPendingHint: "Los cambios de orden no se aplican hasta pulsar «Aplicar orden».",
     timelineView: "Línea de tiempo (por mes)",
     timelineViewHint:
       "Agrupa por mes según la fecha de modificación del archivo. Con zoom de miniaturas alto aparecen marcas por día. Requiere orden por fecha (se ajusta solo).",

@@ -15,13 +15,13 @@
     updateGalleryItems,
   } from "../lib/galleryRuntime";
   import {
-    bumpGalleryThumbHydrationToken,
     disposeGalleryThumbs,
     galleryThumbHydrating,
     getGalleryThumbHydrationToken,
     hydrateGalleryThumbsHq,
   } from "../lib/galleryThumbs";
   import { hasGalleryThumbHq } from "../lib/galleryThumbHqCache";
+  import { getGalleryNavigationGeneration, isGalleryNavigationCurrent } from "../lib/gallerySession";
   import { galleryChromeBusy } from "../lib/chromeRemember";
   import { galleryScrolling as galleryScrollingStore } from "../lib/galleryScrollState";
   import {
@@ -193,10 +193,12 @@
 
   async function loadMoreGalleryBatch() {
     if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return false;
+    const navGen = getGalleryNavigationGeneration();
     galleryLoadingMore = true;
     try {
       const beforeEnd = Number($galleryState?.endIndex ?? 0);
       const out = await bridge.galleryLoadMore();
+      if (!isGalleryNavigationCurrent(navGen)) return false;
       const extra = Array.isArray(out?.items) ? out.items : [];
       if (extra.length > 0) {
         updateGalleryItems((items) => [...items, ...extra]);
@@ -209,6 +211,12 @@
     } finally {
       galleryLoadingMore = false;
     }
+  }
+
+  /** Invalida scroll infinito y cargas en segundo plano al cambiar de carpeta. */
+  export function cancelBackgroundWork() {
+    galleryAutoLoadRunId++;
+    galleryLoadingMore = false;
   }
 
   async function onGalleryScroll(e: Event) {
@@ -421,10 +429,8 @@
     }
   };
 
-  /** Llamado desde App tras cargar carpeta / recargar. */
+  /** Tras cargar carpeta / recargar. La invalidación de hidratación ocurre en beginGalleryNavigation(). */
   export async function afterGalleryPayloadLoaded(items: GalleryItem[], scale: number) {
-    bumpGalleryThumbHydrationToken();
-    // Esperar al DOM de la rejilla para priorizar miniaturas visibles (viewport).
     await tick();
     void hydrateGalleryThumbsHq(items, scale, getGalleryThumbHydrationToken());
     if (thumbsPerPage === 0) {

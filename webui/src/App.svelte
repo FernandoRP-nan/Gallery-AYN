@@ -35,8 +35,13 @@
     type GalleryMutationResponse,
     type GalleryState,
   } from "./lib/galleryRuntime";
-  import { disposeGalleryThumbs } from "./lib/galleryThumbs";
+  import { bumpGalleryThumbHydrationToken, disposeGalleryThumbs } from "./lib/galleryThumbs";
   import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems } from "./lib/galleryThumbHqCache";
+  import {
+    bumpGalleryNavigationGeneration,
+    getGalleryNavigationGeneration,
+    isGalleryNavigationCurrent,
+  } from "./lib/gallerySession";
   import { commitChromePagerState } from "./lib/chromeRemember";
   import { isGalleryMediaKind, mergeItemsKeepingBestThumb } from "./lib/galleryUtils";
   import {
@@ -550,14 +555,24 @@
     await persistViewAndReload();
   }
 
-  async function onGallerySortChange(mode: string) {
+  async function onGallerySortApply(mode: string) {
     gallerySortMode = mode;
-    // Si la fecha ('mtime') no está en la primera prioridad y la línea de tiempo está activa, desactivarla.
-    const primarySort = mode.split(",")[0]?.trim();
+    const primarySort = mode.split(",")[0]?.trim().split(":")[0];
     if (primarySort !== "mtime" && timelineView) {
       timelineView = false;
     }
+    viewMenuOpen = false;
     await persistViewAndReload();
+  }
+
+  /** Cancela trabajo en curso de la carpeta anterior (miniaturas HQ, colas, scroll infinito). */
+  function beginGalleryNavigation(): number {
+    const navGen = bumpGalleryNavigationGeneration();
+    bumpGalleryThumbHydrationToken(true);
+    galleryMoveQueue = [];
+    galleryDeleteQueue = [];
+    galleryWorkspace?.cancelBackgroundWork();
+    return navGen;
   }
 
   /** Tras cargar ítems: hidrata miniaturas HQ en GalleryWorkspace (aislado de la rejilla). */
@@ -581,6 +596,7 @@
     scrollAnchor: GalleryScrollAnchor;
     prevItems: GalleryItem[];
     prevState: GalleryState;
+    navGen: number;
   };
 
   type GalleryMoveJob = GalleryMutationSnapshot & {
@@ -666,6 +682,7 @@
       scrollAnchor: captureGalleryScrollAnchor(),
       prevItems: getGalleryItems(),
       prevState: { ...getGalleryState() },
+      navGen: getGalleryNavigationGeneration(),
     };
   }
 
@@ -721,10 +738,13 @@
       folderBackStack = [...folderBackStack, current];
       folderForwardStack = [];
     }
+    const navGen = beginGalleryNavigation();
     try {
       const out = await trackLoad(bridge.galleryLoadFolder(target), t("load.openingFolder"));
+      if (!isGalleryNavigationCurrent(navGen)) return;
       setGalleryPayload(out.state, out.items);
       await afterGalleryDataLoaded();
+      if (!isGalleryNavigationCurrent(navGen)) return;
       if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
       pageJumpDraft = out.state.page;
       folder = out.state?.folder ?? target;
@@ -733,6 +753,7 @@
       commitChromePagerState();
       status = t("status.folderLoaded").replace("{path}", folder);
     } catch (e: unknown) {
+      if (!isGalleryNavigationCurrent(navGen)) return;
       status = e instanceof Error ? e.message : t("status.viewApplyError");
     }
   }
@@ -834,15 +855,19 @@
 
   /** Recarga ítems de la galería. Por defecto sin overlay global (la rejilla ya da feedback). */
   const reload = async (opts?: { silent?: boolean; loadingMessage?: string }) => {
+    const navGen = beginGalleryNavigation();
     const p = bridge.galleryReload();
     const silent = opts?.silent !== false;
     const out = silent ? await p : await trackLoad(p, opts?.loadingMessage ?? t("load.loading"));
+    if (!isGalleryNavigationCurrent(navGen)) return;
     setGalleryPayload(out.state, out.items);
     void afterGalleryDataLoaded();
   };
 
   const goPage = async (page: number) => {
+    const navGen = beginGalleryNavigation();
     const out = await trackLoad(bridge.galleryGoPage(page));
+    if (!isGalleryNavigationCurrent(navGen)) return;
     setGalleryPayload(out.state, out.items);
     void afterGalleryDataLoaded();
     pageJumpDraft = out.state.page;
@@ -1414,6 +1439,7 @@
         galleryMoveQueue = rest;
         try {
           const out = await bridge.destinationMovePaths(job.srcPaths, job.destPath);
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
           const moved = Number(out.moveResult?.moved ?? 0);
           const errors = Number(out.moveResult?.errors ?? 0);
           if (errors > 0 || moved < job.srcPaths.length) {
@@ -1426,6 +1452,7 @@
             .replace("{errors}", String(out.moveResult?.errors ?? 0))
             .replace("{queue}", String(galleryMoveQueue.length));
         } catch (e: unknown) {
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
           await rollbackOptimisticGalleryMove(job);
           status = e instanceof Error ? e.message : t("status.moveQueueError");
         }
@@ -1785,6 +1812,7 @@
         galleryDeleteQueue = rest;
         try {
           const out = await bridge.galleryDeletePaths(job.srcPaths);
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
           const deleted = Number(out.deleteResult?.deleted ?? 0);
           const errors = Number(out.deleteResult?.errors ?? 0);
           if (errors > 0 || deleted < job.srcPaths.length) {
@@ -1802,6 +1830,7 @@
             .replace("{errPart}", errors ? t("status.deleteErrorsPart").replace("{errors}", String(errors)) : "")
             .replace("{queue}", String(galleryDeleteQueue.length));
         } catch (e: unknown) {
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
           await rollbackOptimisticGalleryMutation(job);
           status = e instanceof Error ? e.message : t("status.deleteQueueError");
         }
@@ -2910,6 +2939,7 @@
     const job: GalleryMoveJob = { ...snapshot, destPath };
     try {
       const out = await trackLoad(bridge.galleryMovePath(src, destPath));
+      if (!isGalleryNavigationCurrent(job.navGen)) return;
       const moved = Number(out.moveResult?.moved ?? 0);
       if (moved > 0) {
         await reconcileGalleryMoveSuccess(out);
@@ -3399,7 +3429,7 @@
     {onGroupByFolderChange}
     {onSectionDominantColorChange}
     {onTimelineViewChange}
-    {onGallerySortChange}
+    {onGallerySortApply}
     {goBackFolder}
     {goForwardFolder}
     {goUpFolder}
