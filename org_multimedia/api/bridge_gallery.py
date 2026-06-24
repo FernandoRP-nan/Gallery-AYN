@@ -539,26 +539,28 @@ class GalleryBridgeMixin:
                 "recentFolders": list(self.settings.get("gallery_recent_folders", [])),
             }
 
-    def gallery_reload(self) -> dict:
+    def gallery_reload(self, *, clear_thumb_cache: bool = True) -> dict:
         """Reindexa archivos en la carpeta actual sin perder página ni selección (p. ej. tras mover archivos)."""
         if not self.gallery_folder:
             return {"state": self._gallery_state(), "items": []}
         with self.lock:
-            self._clear_thumb_cache()
+            prev_unlimited_loaded = int(self.gallery_unlimited_loaded or 0)
+            if clear_thumb_cache:
+                self._clear_thumb_cache()
             folder = self.gallery_folder
             self.subfolders = list_subdirs(folder)
             self.ordered_paths = self._scan_ordered_paths(folder)
             self._schedule_gallery_total_bytes_recompute()
             self._clamp_page()
             if self._is_unlimited_mode():
+                total = len(self.ordered_paths)
                 if self._is_grouped_mode():
-                    self.gallery_unlimited_loaded = len(self.ordered_paths)
-                elif self._is_timeline_mode():
-                    self.gallery_unlimited_loaded = min(
-                        len(self.ordered_paths), self._unlimited_batch_size()
-                    )
+                    self.gallery_unlimited_loaded = total
                 else:
-                    self.gallery_unlimited_loaded = min(len(self.ordered_paths), self._unlimited_batch_size())
+                    # Preservar cuánto había cargado el usuario (scroll infinito), no resetear al primer lote.
+                    batch = self._unlimited_batch_size()
+                    keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
+                    self.gallery_unlimited_loaded = min(total, max(batch, keep))
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
 
     def gallery_refresh_items(self) -> dict:

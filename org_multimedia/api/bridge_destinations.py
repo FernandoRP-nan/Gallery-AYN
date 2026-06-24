@@ -180,7 +180,7 @@ class DestinationsBridgeMixin:
                 except Exception:
                     errors += 1
             self.selected.clear()
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
@@ -214,7 +214,7 @@ class DestinationsBridgeMixin:
                     errors += 1
             moved_src = {Path(x).expanduser().resolve() for x in unique_raw}
             self.selected = {p for p in self.selected if p not in moved_src and p.exists()}
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
@@ -275,7 +275,7 @@ class DestinationsBridgeMixin:
                     moved += 1
                 except Exception:
                     errors += 1
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 

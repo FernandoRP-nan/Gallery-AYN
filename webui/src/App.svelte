@@ -566,6 +566,73 @@
     }
   }
 
+  type GalleryScrollAnchor = {
+    scrollTop: number;
+    path: string | null;
+    viewportOffsetPx: number;
+  };
+
+  function findGalleryTileByPath(path: string): HTMLElement | null {
+    if (!galleryScrollEl || !path) return null;
+    for (const tile of galleryScrollEl.querySelectorAll<HTMLElement>("[data-item-path]")) {
+      if (tile.dataset.itemPath === path) return tile;
+    }
+    return null;
+  }
+
+  function captureGalleryScrollAnchor(): GalleryScrollAnchor {
+    const el = galleryScrollEl;
+    if (!el) return { scrollTop: 0, path: null, viewportOffsetPx: 0 };
+    const bounds = el.getBoundingClientRect();
+    const scrollTop = el.scrollTop;
+    for (const tile of el.querySelectorAll<HTMLElement>("[data-item-path]")) {
+      const r = tile.getBoundingClientRect();
+      if (r.bottom <= bounds.top + 4) continue;
+      if (r.top >= bounds.bottom - 4) continue;
+      const path = String(tile.dataset.itemPath ?? "").trim();
+      if (!path) continue;
+      return { scrollTop, path, viewportOffsetPx: r.top - bounds.top };
+    }
+    return { scrollTop, path: null, viewportOffsetPx: 0 };
+  }
+
+  async function restoreGalleryScrollAnchor(anchor: GalleryScrollAnchor) {
+    const apply = () => {
+      const el = galleryScrollEl;
+      if (!el) return;
+      if (anchor.path) {
+        const tile = findGalleryTileByPath(anchor.path);
+        if (tile) {
+          const bounds = el.getBoundingClientRect();
+          const r = tile.getBoundingClientRect();
+          const delta = r.top - bounds.top - anchor.viewportOffsetPx;
+          if (Math.abs(delta) > 0.5) {
+            el.scrollTop = Math.max(0, el.scrollTop + delta);
+          }
+          return;
+        }
+      }
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTop = Math.min(anchor.scrollTop, maxScroll);
+    };
+    await tick();
+    apply();
+    requestAnimationFrame(apply);
+  }
+
+  /** Tras mover/eliminar: merge sin recarga total de miniaturas ni salto de scroll. */
+  async function applyGalleryItemsDelta(state: any, nextItems: GalleryItem[]) {
+    const anchor = captureGalleryScrollAnchor();
+    mergeGalleryItemsFromApi(nextItems, state);
+    try {
+      await tick();
+      await galleryWorkspace?.afterGalleryMoveDelta(getGalleryItems(), thumbScale);
+    } catch {
+      /* merge ya aplicado */
+    }
+    await restoreGalleryScrollAnchor(anchor);
+  }
+
   async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
     closeGalleryItemCtxMenu();
     const target = normalizePathForApi(path);
@@ -1275,9 +1342,7 @@
         galleryMoveQueue = rest;
         try {
           const out = await bridge.destinationMovePaths(job.srcPaths, job.destPath);
-          setGalleryState(out.state);
-          mergeGalleryItemsFromApi(out.items, out.state);
-          void afterGalleryDataLoaded();
+          await applyGalleryItemsDelta(out.state, out.items);
           status = t("status.moveBatchLine")
             .replace("{moved}", String(out.moveResult?.moved ?? 0))
             .replace("{errors}", String(out.moveResult?.errors ?? 0))
@@ -1641,9 +1706,7 @@
         galleryDeleteQueue = rest;
         try {
           const out = await bridge.galleryDeletePaths(job.paths);
-          setGalleryState(out.state ?? getGalleryState());
-          mergeGalleryItemsFromApi(out.items ?? getGalleryItems(), out.state);
-          void afterGalleryDataLoaded();
+          await applyGalleryItemsDelta(out.state ?? getGalleryState(), out.items ?? getGalleryItems());
           if (previewOpen) {
             const valid = new Set(
               (out.items ?? []).filter((x: GalleryItem) => isGalleryMediaKind(x.kind)).map((x: GalleryItem) => x.path)
@@ -1758,9 +1821,7 @@
   }
 
   function applyGalleryRefreshFromMove(state: any, nextItems: GalleryItem[]) {
-    setGalleryState(state);
-    setGalleryItems(nextItems);
-    void afterGalleryDataLoaded();
+    void applyGalleryItemsDelta(state, nextItems);
   }
 
   function startPreviewLongPress(path: string) {

@@ -436,6 +436,38 @@
     }
   }
 
+  function filterVisibleItemsNeedingHq(items: GalleryItem[]): GalleryItem[] {
+    if (!galleryScrollEl) return [];
+    const bounds = galleryScrollEl.getBoundingClientRect();
+    const visiblePaths = new Set<string>();
+    for (const tile of galleryScrollEl.querySelectorAll<HTMLElement>("[data-item-path]")) {
+      const r = tile.getBoundingClientRect();
+      if (r.bottom > bounds.top + 2 && r.top < bounds.bottom - 2) {
+        const p = tile.dataset.itemPath;
+        if (p) visiblePaths.add(p);
+      }
+    }
+    return items.filter(
+      (x) =>
+        visiblePaths.has(x.path) &&
+        (x.kind === "image" || x.kind === "video") &&
+        x.thumbQuality !== "hq"
+    );
+  }
+
+  /** Tras mover/eliminar: no invalidar HQ ni re-hidratar toda la galería. */
+  export async function afterGalleryMoveDelta(items: GalleryItem[], scale: number) {
+    await tick();
+    const needingHq = filterVisibleItemsNeedingHq(items);
+    if (needingHq.length > 0) {
+      void hydrateGalleryThumbsHq(needingHq, scale, getGalleryThumbHydrationToken());
+    }
+    if (thumbsPerPage === 0) {
+      await tick();
+      void maybeAutoLoadMoreForViewport();
+    }
+  }
+
   onDestroy(() => {
     if (galleryScrollIdleTimer !== null) clearTimeout(galleryScrollIdleTimer);
     if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);

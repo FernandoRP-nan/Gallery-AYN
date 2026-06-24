@@ -216,7 +216,7 @@ class SelectionBridgeMixin:
                 except Exception:
                     errors += 1
             self.selected.clear()
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["deleteResult"] = {"deleted": deleted, "errors": errors}
         return data
 
@@ -242,7 +242,7 @@ class SelectionBridgeMixin:
                 except Exception:
                     errors += 1
             self.selected = {p for p in self.selected if p.exists()}
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["deleteResult"] = {"deleted": deleted, "errors": errors}
         return data
 
@@ -262,7 +262,7 @@ class SelectionBridgeMixin:
                     self._last_gallery_move = (target, src)
         except Exception:
             errors = 1
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
@@ -282,6 +282,6 @@ class SelectionBridgeMixin:
                 self._last_gallery_move = None
             except Exception:
                 errors = 1
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
