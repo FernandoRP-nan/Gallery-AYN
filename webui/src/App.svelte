@@ -7,6 +7,16 @@
   import SettingsModal from "./components/SettingsModal.svelte";
   import { t } from "./lib/i18n";
   import { normalizePathForApi, buildMediaFileUrl } from "./lib/pathUtils";
+  import { copyTextToClipboard } from "./lib/clipboardText";
+  import { mergePreviewApiResult } from "./lib/previewUtils";
+  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, type MediaPlaybackInfo } from "./lib/mediaUrl";
+  import {
+    formatVideoDiagnosticReport,
+    isQtPlayerCreationError,
+    mediaErrorLabel,
+    probeVideoHttpUrl,
+    type VideoBackendDiagnostics,
+  } from "./lib/videoDiagnostics";
   import { galleryGridCellPx } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
   import PagerBar from "./components/PagerBar.svelte";
@@ -95,6 +105,15 @@
   let zoomVideoEl: HTMLVideoElement | null = null;
   let previewZoomMediaType: "image" | "video" | "svg" = "image";
   let previewZoomFileUrl: string | null = null;
+  let previewVideoSrc = "";
+  let previewVideoError = "";
+  let previewVideoErrorDetails = "";
+  let previewVideoLastErrorDetail = "";
+  let previewVideoDiagLoading = false;
+  let previewVideoTriedUrls: string[] = [];
+  let previewVideoPlayback: MediaPlaybackInfo | null = null;
+  let previewZoomPlayback: MediaPlaybackInfo | null = null;
+  let previewVideoPreparing = false;
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
@@ -830,29 +849,272 @@
     status = t("status.deleteImageQueued");
   }
 
+  function rememberPreviewVideoUrl(url: string) {
+    const u = String(url ?? "").trim();
+    if (!u || previewVideoTriedUrls.includes(u)) return;
+    previewVideoTriedUrls = [...previewVideoTriedUrls, u];
+  }
+
+  function previewVideoUrlKind(url: string): "direct" | "transcode" | "webm" | "unknown" {
+    if (isDataPlaybackUrl(url)) return "webm";
+    const key = mediaUrlKey(url);
+    if (key.startsWith("/om-webm/") || key.includes("format=webm")) return "webm";
+    const playback = previewVideoPlayback;
+    if (!playback) return "unknown";
+    if (url && sameMediaUrl(url, playback.transcodeUrl)) return "webm";
+    if (url && sameMediaUrl(url, playback.fileUrl)) return "direct";
+    if (key.startsWith("/om-transcode/") || key.includes("transcode=1")) return "transcode";
+    return "unknown";
+  }
+
+  function previewVideoErrorSummary(code: number, detail = ""): string {
+    if (isQtPlayerCreationError(detail)) return t("preview.videoDiagSummaryQtPlayer");
+    if (code === 4) return t("preview.videoDiagSummaryCodec");
+    if (code === 2) return t("preview.videoDiagSummaryNetwork");
+    if (code === 3) return t("preview.videoDiagSummaryDecode");
+    return t("preview.videoDiagSummaryGeneric");
+  }
+
+  async function collectPreviewVideoDiagnostics(el: HTMLVideoElement | null, code: number) {
+    const path = String(selectedPreview?.path ?? "").trim();
+    const videoUrl = String(previewVideoSrc || selectedPreview?.fileUrl || "").trim();
+    if (!path || !videoUrl) return;
+
+    previewVideoDiagLoading = true;
+    previewVideoErrorDetails = t("preview.videoDiagLoading");
+    try {
+      const [httpProbe, backend] = await Promise.all([
+        probeVideoHttpUrl(videoUrl),
+        bridge
+          .galleryVideoDiagnostics(path, true)
+          .catch((err: unknown) => ({ apiError: err instanceof Error ? err.message : String(err) }) as VideoBackendDiagnostics),
+      ]);
+      previewVideoErrorDetails = formatVideoDiagnosticReport({
+        mediaErrorCode: code,
+        mediaErrorMessage: String(el?.error?.message ?? "").trim(),
+        videoUrl,
+        urlKind: previewVideoUrlKind(videoUrl),
+        networkState: el?.networkState ?? 0,
+        readyState: el?.readyState ?? 0,
+        httpProbe,
+        backend: backend as VideoBackendDiagnostics,
+        triedUrls: previewVideoTriedUrls,
+      });
+    } catch (err) {
+      previewVideoErrorDetails = `${t("preview.videoDiagApiError")}: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      previewVideoDiagLoading = false;
+    }
+  }
+
+  async function tryBlobPreviewVideoUrl(): Promise<boolean> {
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (!path || typeof window === "undefined" || !window.pywebview?.api) return false;
+    const current = String(previewVideoSrc || selectedPreview?.fileUrl || "").trim();
+    if (isDataPlaybackUrl(current)) return false;
+    if (previewVideoTriedUrls.some((u) => isDataPlaybackUrl(u))) return false;
+    try {
+      const blob = await bridge.galleryVideoPlaybackBlob(path);
+      if (!blob?.ok || !blob.dataUrl) return false;
+      const dataUrl = String(blob.dataUrl);
+      previewVideoSrc = dataUrl;
+      rememberPreviewVideoUrl(dataUrl);
+      if (previewVideoPlayback) {
+        previewVideoPlayback = { ...previewVideoPlayback, transcodeUrl: dataUrl, playbackViaBlob: true };
+      }
+      selectedPreview = selectedPreview
+        ? { ...selectedPreview, fileUrl: dataUrl, transcodeUrl: dataUrl }
+        : selectedPreview;
+      previewVideoPreparing = false;
+      previewVideoError = "";
+      previewVideoErrorDetails = "";
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function tryAlternatePreviewVideoUrl(): boolean {
+    const playback = previewVideoPlayback;
+    if (!playback) return false;
+    const current = previewVideoSrc || selectedPreview?.fileUrl || "";
+    rememberPreviewVideoUrl(current);
+
+    // Con WebM obligatorio: no volver al MP4 directo (provoca bucle infinito en Qt).
+    if (playback.needsTranscode) {
+      if (
+        playback.transcodeUrl &&
+        !sameMediaUrl(current, playback.transcodeUrl) &&
+        !previewVideoTriedUrls.some((u) => sameMediaUrl(u, playback.transcodeUrl))
+      ) {
+        previewVideoSrc = playback.transcodeUrl;
+        rememberPreviewVideoUrl(playback.transcodeUrl);
+        previewVideoPreparing = true;
+        previewVideoError = "";
+        previewVideoErrorDetails = "";
+        return true;
+      }
+      return false;
+    }
+
+    for (const url of [playback.transcodeUrl, playback.fileUrl]) {
+      if (!url) continue;
+      if (sameMediaUrl(current, url)) continue;
+      if (previewVideoTriedUrls.some((u) => sameMediaUrl(u, url))) continue;
+      previewVideoSrc = url;
+      rememberPreviewVideoUrl(url);
+      previewVideoPreparing = sameMediaUrl(url, playback.transcodeUrl);
+      previewVideoError = "";
+      previewVideoErrorDetails = "";
+      return true;
+    }
+    return false;
+  }
+
   function setSelectedPreviewFromPath(path: string | null | undefined) {
     const p = String(path ?? "").trim();
     if (!p) return;
     const row = getGalleryItems().find((x) => isGalleryMediaKind(x.kind) && x.path === p) as GalleryItem | undefined;
     if (!row) return;
+    const isVideo = row.kind === "video";
+    const isSvg = row.path.toLowerCase().endsWith(".svg");
+    const fallbackUrl =
+      isVideo || isSvg ? buildMediaFileUrl(row.path) : null;
     selectedPreview = {
       path: row.path,
       name: row.name,
-      dataUrl: row.kind === "video" ? null : row.thumbDataUrl ?? null,
-      mediaType: row.kind === "video" ? "video" : row.path.toLowerCase().endsWith(".svg") ? "svg" : "image",
-      fileUrl:
-        row.kind === "video" || row.path.toLowerCase().endsWith(".svg")
-          ? buildMediaFileUrl(row.path)
-          : null,
+      dataUrl: isVideo ? null : row.thumbDataUrl ?? null,
+      mediaType: isVideo ? "video" : isSvg ? "svg" : "image",
+      fileUrl: isVideo ? null : fallbackUrl,
     };
+    previewVideoError = "";
+    previewVideoErrorDetails = "";
+    previewVideoLastErrorDetail = "";
+    previewVideoTriedUrls = [];
+    previewVideoSrc = isVideo ? "" : fallbackUrl ?? "";
+    previewVideoPlayback = null;
+    previewVideoPreparing = isVideo;
+    previewVideoDiagLoading = false;
+    if (isVideo || isSvg) {
+      void resolveMediaPlaybackInfo(row.path)
+        .then((info) => {
+          if (!selectedPreview || selectedPreview.path !== row.path) return;
+          previewVideoPlayback = info;
+          const url = pickInitialPlaybackUrl(info);
+          if (!url) return;
+          if (!sameMediaUrl(previewVideoSrc, url)) previewVideoSrc = url;
+          rememberPreviewVideoUrl(url);
+          previewVideoPreparing = Boolean(
+            info.needsTranscode &&
+              info.transcodeUrl &&
+              sameMediaUrl(url, info.transcodeUrl) &&
+              !info.playbackViaBlob
+          );
+          selectedPreview = {
+            ...selectedPreview,
+            fileUrl: url,
+            mediaType: isVideo ? "video" : "svg",
+          };
+        })
+        .catch(() => {
+          if (!selectedPreview || selectedPreview.path !== row.path || !fallbackUrl) return;
+          previewVideoSrc = fallbackUrl;
+          previewVideoPreparing = false;
+          selectedPreview = { ...selectedPreview, fileUrl: fallbackUrl };
+        });
+    }
     requestAnimationFrame(() => {
       bridge
         .galleryPreview(row.path, 1200, 900)
         .then((pr) => {
-          selectedPreview = pr;
+          selectedPreview = mergePreviewApiResult(selectedPreview ?? {}, pr, row.path, row.kind);
+          if (selectedPreview.mediaType === "video" || selectedPreview.mediaType === "svg") {
+            const nextUrl = selectedPreview.fileUrl ?? previewVideoSrc;
+            if (nextUrl && !sameMediaUrl(nextUrl, previewVideoSrc)) {
+              if (!isDataPlaybackUrl(previewVideoSrc) || isDataPlaybackUrl(nextUrl)) {
+                previewVideoSrc = nextUrl;
+              }
+            }
+          }
         })
         .catch(() => undefined);
     });
+  }
+
+  function buildPreviewVideoErrorCopyText(): string {
+    const lines: string[] = [];
+    if (previewVideoError) lines.push(previewVideoError);
+    if (previewVideoLastErrorDetail) lines.push(previewVideoLastErrorDetail);
+    if (previewVideoErrorDetails) {
+      if (lines.length) lines.push("");
+      lines.push(previewVideoErrorDetails);
+    }
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (path) {
+      if (lines.length) lines.push("");
+      lines.push(`${t("preview.videoDiagFileSection")}\n${path}`);
+    }
+    return lines.join("\n").trim();
+  }
+
+  async function copyPreviewVideoError() {
+    const text = buildPreviewVideoErrorCopyText();
+    if (!text) return;
+    const ok = await copyTextToClipboard(text);
+    status = ok ? t("preview.videoCopyErrorOk") : t("preview.videoCopyErrorFail");
+  }
+
+  async function onPreviewVideoError(e: Event) {
+    const el = e.currentTarget as HTMLVideoElement | null;
+    const code = el?.error?.code ?? 0;
+    previewVideoLastErrorDetail = String(el?.error?.message ?? "").trim();
+    rememberPreviewVideoUrl(previewVideoSrc || selectedPreview?.fileUrl || "");
+    if ((code === 4 || code === 3) && tryAlternatePreviewVideoUrl()) return;
+    if ((code === 4 || code === 3 || code === 2) && (await tryBlobPreviewVideoUrl())) return;
+    previewVideoPreparing = false;
+    previewVideoError = previewVideoErrorSummary(code, String(el?.error?.message ?? ""));
+    previewVideoErrorDetails = "";
+    status = `${previewVideoError} · ${mediaErrorLabel(code)}`;
+    void collectPreviewVideoDiagnostics(el, code);
+  }
+
+  function onPreviewVideoCanPlay() {
+    previewVideoPreparing = false;
+    previewVideoError = "";
+    previewVideoErrorDetails = "";
+    previewVideoLastErrorDetail = "";
+    previewVideoDiagLoading = false;
+  }
+
+  function onPreviewVideoLoadStart() {
+    const playback = previewVideoPlayback;
+    const current = previewVideoSrc || selectedPreview?.fileUrl || "";
+    if (playback?.needsTranscode && playback.transcodeUrl && sameMediaUrl(current, playback.transcodeUrl)) {
+      previewVideoPreparing = !playback.playbackViaBlob && !isDataPlaybackUrl(current);
+    }
+  }
+
+  async function openGalleryVideoExternal(path?: string) {
+    const p = String(path ?? selectedPreview?.path ?? "").trim();
+    if (!p) return;
+    try {
+      const res = await bridge.galleryOpenExternal(p);
+      if (res?.ok) {
+        status = t("preview.videoOpenExternalOk");
+        previewVideoError = "";
+      } else {
+        status = String(res?.error ?? t("preview.videoOpenExternalError"));
+      }
+    } catch {
+      status = t("preview.videoOpenExternalError");
+    }
+  }
+
+  async function openGalleryExternalFromCtx() {
+    if (!galleryItemCtxMenu) return;
+    const p = galleryItemCtxMenu.path;
+    closeGalleryItemCtxMenu();
+    await openGalleryVideoExternal(p);
   }
 
   function getGalleryNavigablePaths(): string[] {
@@ -1424,10 +1686,27 @@
     previewZoomDataUrl = null;
     previewZoomMediaType =
       it.kind === "video" ? "video" : it.path.toLowerCase().endsWith(".svg") ? "svg" : "image";
-    previewZoomFileUrl =
+    const zoomFallbackUrl =
       previewZoomMediaType === "video" || previewZoomMediaType === "svg"
         ? buildMediaFileUrl(it.path)
         : null;
+    previewZoomFileUrl = zoomFallbackUrl;
+    previewZoomPlayback = null;
+    if (previewZoomMediaType === "video" || previewZoomMediaType === "svg") {
+      void resolveMediaPlaybackInfo(it.path)
+        .then((info) => {
+          if (previewZoomOpen && previewZoomPath === it.path) {
+            previewZoomPlayback = info;
+            const url = pickInitialPlaybackUrl(info);
+            if (url) previewZoomFileUrl = url;
+          }
+        })
+        .catch(() => {
+          if (previewZoomOpen && previewZoomPath === it.path && zoomFallbackUrl) {
+            previewZoomFileUrl = zoomFallbackUrl;
+          }
+        });
+    }
     previewZoomScale = 1;
     previewPanX = 0;
     previewPanY = 0;
@@ -1445,10 +1724,26 @@
       .galleryPreview(it.path, 2200, 1600)
       .then((pr) => {
         if (previewZoomOpen && previewZoomPath === it.path) {
-          const mt = String(pr.mediaType ?? "image");
-          previewZoomMediaType = mt === "video" ? "video" : mt === "svg" ? "svg" : "image";
-          previewZoomFileUrl = pr.fileUrl ?? null;
-          previewZoomDataUrl = pr.dataUrl ?? null;
+          const merged = mergePreviewApiResult(
+            {
+              path: it.path,
+              name: it.name,
+              mediaType: previewZoomMediaType,
+              fileUrl: previewZoomFileUrl,
+              dataUrl: previewZoomDataUrl,
+            },
+            pr,
+            it.path,
+            it.kind
+          );
+          previewZoomMediaType = merged.mediaType ?? previewZoomMediaType;
+          const nextUrl = merged.fileUrl ?? previewZoomFileUrl;
+          if (nextUrl) {
+            if (!isDataPlaybackUrl(previewZoomFileUrl) || isDataPlaybackUrl(nextUrl)) {
+              previewZoomFileUrl = nextUrl;
+            }
+          }
+          previewZoomDataUrl = merged.dataUrl ?? previewZoomDataUrl;
         }
       })
       .catch(() => undefined);
@@ -1942,6 +2237,39 @@
     alignFillWidthToTop();
   }
 
+  async function onZoomVideoError(e: Event) {
+    const el = e.currentTarget as HTMLVideoElement | null;
+    const code = el?.error?.code ?? 0;
+    const playback = previewZoomPlayback;
+    if (!playback) return;
+    const current = previewZoomFileUrl || "";
+    if ((code === 4 || code === 3) && playback.transcodeUrl && !sameMediaUrl(current, playback.transcodeUrl)) {
+      previewZoomFileUrl = playback.transcodeUrl;
+      status = t("preview.videoTranscoding");
+      return;
+    }
+    if ((code === 4 || code === 3 || code === 2) && !isDataPlaybackUrl(current)) {
+      const path = String(previewZoomPath ?? "").trim();
+      if (path && window.pywebview?.api) {
+        try {
+          const blob = await bridge.galleryVideoPlaybackBlob(path);
+          if (blob?.ok && blob.dataUrl) {
+            previewZoomFileUrl = String(blob.dataUrl);
+            previewZoomPlayback = { ...playback, transcodeUrl: previewZoomFileUrl, playbackViaBlob: true };
+            status = "";
+            return;
+          }
+        } catch {
+          /* continuar con fallback MP4 */
+        }
+      }
+    }
+    if ((code === 4 || code === 3) && playback.fileUrl && !sameMediaUrl(current, playback.fileUrl)) {
+      previewZoomFileUrl = playback.fileUrl;
+      status = t("preview.videoCodecError");
+    }
+  }
+
   function openZoomFromGallery(it: GalleryItem) {
     const nav = getGalleryItems()
       .filter((x) => isGalleryMediaKind(x.kind))
@@ -2069,6 +2397,7 @@
     y: number;
     path: string;
     name: string;
+    kind: string;
     thumbDataUrl?: string | null;
     submenuLeft: boolean;
   } | null = null;
@@ -2283,6 +2612,7 @@
       y,
       path: it.path,
       name: it.name,
+      kind: it.kind,
       thumbDataUrl: it.thumbDataUrl ?? null,
       submenuLeft,
     };
@@ -2291,12 +2621,8 @@
   async function copyGalleryCtxPath() {
     if (!galleryItemCtxMenu) return;
     const p = galleryItemCtxMenu.path;
-    try {
-      await navigator.clipboard.writeText(p);
-      status = t("contextGallery.copyPathOk");
-    } catch {
-      status = t("contextGallery.copyError");
-    }
+    const ok = await copyTextToClipboard(p);
+    status = ok ? t("contextGallery.copyPathOk") : t("contextGallery.copyError");
     closeGalleryItemCtxMenu();
   }
 
@@ -2894,17 +3220,57 @@
           ></div>
 
           <aside class="preview om-panel app-chrome app-chrome--preview">
-            {#if selectedPreview?.mediaType === "video" && selectedPreview?.fileUrl}
-              <!-- svelte-ignore a11y_media_has_caption -->
-              {#key selectedPreview.fileUrl}
-                <video
-                  class="preview__img preview__video"
-                  src={selectedPreview.fileUrl}
-                  controls
-                  playsinline
-                  preload="auto"
-                ></video>
-              {/key}
+            {#if selectedPreview?.mediaType === "video"}
+              {#if previewVideoSrc || selectedPreview?.fileUrl}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                {#key mediaUrlKey(previewVideoSrc || selectedPreview?.fileUrl || "")}
+                  <video
+                    class="preview__img preview__video"
+                    src={previewVideoSrc || selectedPreview.fileUrl}
+                    controls
+                    playsinline
+                    preload="auto"
+                    on:loadstart={onPreviewVideoLoadStart}
+                    on:error={onPreviewVideoError}
+                    on:canplay={onPreviewVideoCanPlay}
+                  ></video>
+                {/key}
+              {/if}
+              {#if previewVideoPreparing || previewVideoError}
+                <div
+                  class="preview__video-error"
+                  class:preview__video-status={previewVideoPreparing}
+                >
+                  {#if previewVideoPreparing}
+                    <p>{t("preview.videoTranscoding")}</p>
+                  {:else}
+                    <p>{previewVideoError}</p>
+                    {#if previewVideoErrorDetails}
+                      <pre class="preview__video-diag" class:preview__video-diag--loading={previewVideoDiagLoading}>{previewVideoErrorDetails}</pre>
+                    {/if}
+                    <div class="preview__video-actions">
+                      {#if previewVideoError || previewVideoErrorDetails || previewVideoLastErrorDetail}
+                        <button
+                          type="button"
+                          class="om-btn preview__video-copy"
+                          on:click={() => void copyPreviewVideoError()}
+                        >
+                          {t("preview.videoCopyError")}
+                        </button>
+                      {/if}
+                      {#if selectedPreview?.path}
+                        <button
+                          type="button"
+                          class="om-btn preview__video-external"
+                          on:click={() => void openGalleryVideoExternal()}
+                        >
+                          {t("preview.videoOpenExternal")}
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
               <img
                 class="preview__img preview__svg"
@@ -3257,6 +3623,15 @@
             {/if}
           </div>
         </div>
+        {#if galleryItemCtxMenu.kind === "video"}
+          <button
+            type="button"
+            class="dest-ctx-menu__item"
+            role="menuitem"
+            on:click={() => void openGalleryExternalFromCtx()}
+            >{t("contextGallery.openExternal")}</button
+          >
+        {/if}
         <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
           >{t("contextGallery.properties")}</button
         >
@@ -3476,6 +3851,7 @@
     {endPan}
     {onZoomStageClick}
     {onZoomVideoMeta}
+    {onZoomVideoError}
     {onZoomImageLoad}
     {onCropPointerDown}
     {onCropPointerMove}

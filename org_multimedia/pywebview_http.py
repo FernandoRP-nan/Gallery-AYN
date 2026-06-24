@@ -46,6 +46,8 @@ class OrganizadorBottleServer(BottleServer):
             logger.debug("HTTP server root path: %s" % server.root_path)
             app = bottle.Bottle()
 
+            register_media_routes(app)
+
             @app.post(f"/js_api/{server.uid}")
             def js_api():
                 bottle.response.headers["Access-Control-Allow-Origin"] = "*"
@@ -63,15 +65,16 @@ class OrganizadorBottleServer(BottleServer):
 
             @app.route("/")
             @app.route("/<file:path>")
-            def asset(file):
+            def asset(file="index.html"):
+                req_path = bottle.request.path or ""
+                if req_path.startswith(("/media", "/om-webm/", "/om-transcode/", "/om-media/")):
+                    return bottle.HTTPError(404, "Not found")
                 if not server.root_path:
                     return ""
                 bottle.response.set_header("Cache-Control", "no-cache, no-store, must-revalidate")
                 bottle.response.set_header("Pragma", "no-cache")
                 bottle.response.set_header("Expires", 0)
                 return bottle.static_file(file, root=server.root_path)
-
-            register_media_routes(app)
 
         server.root_path = abspath(common_path) if common_path is not None else None
         server.port = http_port or _get_random_port()

@@ -52,7 +52,20 @@ _MONTH_NAMES_ES = (
 )
 
 from ..core.media_organizer import MediaOrganizer
-from ..media_server import build_media_file_url
+from ..core.viewer_playback import (
+    needs_viewer_transcode,
+    viewer_engine_label,
+    viewer_playback_cache_status,
+    viewer_prefers_webm,
+    warm_viewer_playback_async,
+)
+from ..media_server import (
+    build_media_file_url,
+    mime_for_path,
+    publish_media_url,
+    publish_transcode_url,
+    publish_viewer_playback_url,
+)
 
 from ..core.settings import load_app_settings, save_app_settings
 
@@ -192,6 +205,81 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
         return None
 
 class EditorBridgeMixin:
+    def gallery_media_url(self, path: str) -> dict:
+        """URL de streaming para vídeo/SVG (ruta corta /om-media/…)."""
+        from ..core.fs_path import resolve_file_path
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError:
+            return {"path": path, "fileUrl": None, "mimeType": None}
+        ext = p.suffix.lower()
+        if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            warm_viewer_playback_async(p)
+            cache = viewer_playback_cache_status(p)
+            return {
+                "path": str(p),
+                "fileUrl": publish_media_url(p),
+                "transcodeUrl": publish_viewer_playback_url(p),
+                "needsTranscode": needs_viewer_transcode(p),
+                "playbackMime": cache["playbackMime"],
+                "playbackFormat": cache["playbackFormat"],
+                "viewerEngine": viewer_engine_label(),
+                "mimeType": mime_for_path(p),
+            }
+        if ext == ".svg":
+            return {
+                "path": str(p),
+                "fileUrl": publish_media_url(p),
+                "transcodeUrl": None,
+                "needsTranscode": False,
+                "mimeType": "image/svg+xml",
+            }
+        return {"path": str(p), "fileUrl": None, "transcodeUrl": None, "needsTranscode": False, "mimeType": None}
+
+    def gallery_video_diagnostics(self, path: str, test_transcode: bool = False) -> dict:
+        """Diagnóstico detallado cuando falla la reproducción en el visor integrado."""
+        from ..core.fs_path import resolve_file_path
+        from ..core.video_probe import video_diagnostics
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"path": path, "exists": False, "error": str(exc)}
+        return video_diagnostics(p, test_transcode=bool(test_transcode))
+
+    def gallery_video_playback_blob(self, path: str) -> dict:
+        """Data URL del vídeo transcodificado (PyWebView a veces no reproduce /om-webm/)."""
+        import base64
+
+        from ..core.fs_path import resolve_file_path
+        from ..core.viewer_playback import ensure_viewer_playback
+
+        max_bytes = 12 * 1024 * 1024
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if p.suffix.lower() not in MediaOrganizer.VIDEO_EXTENSIONS:
+            return {"ok": False, "error": "No es un vídeo"}
+        stream_url = publish_viewer_playback_url(p)
+        try:
+            out, mime = ensure_viewer_playback(p)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "streamUrl": stream_url}
+        size = out.stat().st_size
+        if size > max_bytes:
+            return {"ok": False, "error": "too_large", "bytes": size, "streamUrl": stream_url}
+        data = out.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        return {
+            "ok": True,
+            "dataUrl": f"data:{mime};base64,{b64}",
+            "mimeType": mime,
+            "bytes": size,
+            "streamUrl": stream_url,
+        }
+
     def gallery_preview(self, path: str, width: int, height: int) -> dict:
         from ..core.fs_path import resolve_file_path
 
@@ -208,12 +296,19 @@ class EditorBridgeMixin:
             }
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            warm_viewer_playback_async(p)
+            cache = viewer_playback_cache_status(p)
             return {
                 "path": str(p),
                 "name": p.name,
                 "dataUrl": None,
                 "mediaType": "video",
                 "fileUrl": build_media_file_url(p),
+                "transcodeUrl": publish_viewer_playback_url(p),
+                "needsTranscode": needs_viewer_transcode(p),
+                "playbackMime": cache["playbackMime"],
+                "playbackFormat": cache["playbackFormat"],
+                "viewerEngine": viewer_engine_label(),
             }
         if ext == ".svg":
             return {
@@ -281,6 +376,29 @@ class EditorBridgeMixin:
             return {"ok": True}
         except Exception as e:
             return {"error": "No se pudo copiar: falta wl-copy o xclip"}
+
+    def gallery_copy_text_to_clipboard(self, text: str) -> dict:
+        """Copia texto plano al portapapeles (Wayland o X11)."""
+        import subprocess
+
+        payload = str(text or "")
+        if not payload.strip():
+            return {"ok": False, "error": "Texto vacío"}
+        data = payload.encode("utf-8")
+
+        try:
+            subprocess.run(["wl-copy"], input=data, check=True)
+            return {"ok": True}
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+        try:
+            subprocess.run(["xclip", "-selection", "clipboard"], input=data, check=True)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": f"No se pudo copiar: {exc}"}
 
     def gallery_image_rotate(self, path: str, degrees: int) -> dict:
         """Rota la imagen en disco (±90° o 180°)."""

@@ -18,8 +18,22 @@ export function normalizePathForApi(raw: string): string {
   return s.normalize("NFC");
 }
 
-/** URL de streaming en el mismo origen que la UI (vídeo / SVG). */
-export function buildMediaFileUrl(rawPath: string): string {
+/** Codifica como urllib.parse.quote(path, safe='/') en Python. */
+export function quoteMediaPath(path: string): string {
+  return encodeURI(path);
+}
+
+/** URL de streaming (mismo origen; /media no lo intercepta el catch-all de PyWebView). */
+export function buildMediaFileUrl(rawPath: string, opts?: { transcode?: boolean }): string {
   const path = normalizePathForApi(rawPath);
-  return `/media?path=${encodeURIComponent(path)}`;
+  const q = new URLSearchParams({ path });
+  if (opts?.transcode) q.set("transcode", "1");
+  const rel = `/media?${q.toString()}`;
+  if (typeof window !== "undefined") {
+    const origin = window.location?.origin;
+    if (origin && origin !== "null" && origin.startsWith("http")) {
+      return `${origin}${rel}`;
+    }
+  }
+  return rel;
 }

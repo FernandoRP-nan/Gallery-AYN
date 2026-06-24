@@ -51,6 +51,7 @@ def load_app_settings() -> dict:
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_section_dominant_color": True,
+            "web_prefer_qt_engine": True,
         }
     try:
         with path.open(encoding="utf-8") as f:
@@ -158,6 +159,10 @@ def load_app_settings() -> dict:
             data["gallery_section_dominant_color"] = True
         else:
             data["gallery_section_dominant_color"] = bool(data["gallery_section_dominant_color"])
+        if "web_prefer_qt_engine" not in data:
+            data["web_prefer_qt_engine"] = True
+        else:
+            data["web_prefer_qt_engine"] = bool(data["web_prefer_qt_engine"])
         return data
     except (OSError, json.JSONDecodeError):
         return {
@@ -192,6 +197,7 @@ def load_app_settings() -> dict:
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_section_dominant_color": True,
+            "web_prefer_qt_engine": True,
         }
 
 

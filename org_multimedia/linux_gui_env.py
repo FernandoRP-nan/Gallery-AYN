@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 
@@ -18,40 +19,62 @@ def _merge_qt_chromium_flags(*flags: str) -> None:
     os.environ[key] = " ".join(parts)
 
 
+def _qt_webengine_available() -> bool:
+    """Comprueba si hay Qt WebEngine instalado (reproducción de vídeo más fiable)."""
+    pairs = (
+        ("PyQt6", "PyQt6.QtWebEngineWidgets"),
+        ("PyQt5", "PyQt5.QtWebEngineWidgets"),
+        ("PySide6", "PySide6.QtWebEngineWidgets"),
+        ("PySide2", "PySide2.QtWebEngineWidgets"),
+    )
+    for pkg, webeng in pairs:
+        if importlib.util.find_spec(pkg) and importlib.util.find_spec(webeng):
+            return True
+    return False
+
+
+def _read_prefer_qt_from_settings() -> bool | None:
+    try:
+        from .core.settings import load_app_settings
+
+        raw = load_app_settings().get("web_prefer_qt_engine")
+        if raw is None:
+            return None
+        return bool(raw)
+    except Exception:
+        return None
+
+
 def prepare_linux_gui_env() -> None:
     """Configura backend y variables para WebKitGTK o Qt WebEngine.
 
-    ORGANIZADOR_FORCE_GTK=1 — fuerza WebKitGTK aunque tengas ORGANIZADOR_PREFER_QT (útil si Qt falla).
+    ORGANIZADOR_FORCE_GTK=1 — fuerza WebKitGTK (útil si Qt falla).
 
-    ORGANIZADOR_PREFER_QT=1 — fuerza PYWEBVIEW_GUI=qt (Chromium vía Qt WebEngine).
-    ORGANIZADOR_QT_API — opcional: pyqt6 (defecto), pyside6, pyqt5, pyside2.
-    Hay que fijar QT_API antes de importar qtpy: si no, qtpy elige PyQt5 y falla sin PyQt5.QtWebChannel.
+    ORGANIZADOR_PREFER_QT=1 — fuerza Qt WebEngine (Chromium).
 
-    ORGANIZADOR_WEBKIT_TRY_GPU=1 — en GTK, intenta DMA-BUF (riesgo pantalla en blanco).
-    ORGANIZADOR_ALLOW_WAYLAND_GTK=1 — no fuerza GDK_BACKEND=x11 (solo GTK).
-
-    Qt WebEngine (Chromium): en Fedora y otras distros la vista puede quedar en blanco sin
-    --no-sandbox (pywebview hace algo parecido en Arch/Manjaro). Se añade por defecto con Qt;
-    ORGANIZADOR_QT_SKIP_NO_SANDBOX=1 lo evita. Si sigue en blanco o ves fallos GBM/Vulkan:
-    ORGANIZADOR_QT_DISABLE_GPU=1 añade --disable-gpu al proceso de render.
+    Por defecto en Linux: Qt si está instalado (vídeos MP4 en WebKitGTK suelen fallar en Fedora).
+    Ajuste persistente: web_prefer_qt_engine en ~/.config/organizador_multimedia/settings.json
+    (requiere reiniciar la app).
     """
     if not sys.platform.startswith("linux"):
         return
 
     force_gtk = os.environ.get("ORGANIZADOR_FORCE_GTK", "").lower() in ("1", "true", "yes")
     prefer_qt = os.environ.get("ORGANIZADOR_PREFER_QT", "").lower() in ("1", "true", "yes")
+    settings_qt = _read_prefer_qt_from_settings()
+
     if force_gtk:
         os.environ["PYWEBVIEW_GUI"] = "gtk"
-    elif prefer_qt:
+    elif prefer_qt or settings_qt is True:
         os.environ["PYWEBVIEW_GUI"] = "qt"
-
-    if not os.environ.get("PYWEBVIEW_GUI"):
+    elif settings_qt is False:
         os.environ["PYWEBVIEW_GUI"] = "gtk"
+    elif not os.environ.get("PYWEBVIEW_GUI"):
+        os.environ["PYWEBVIEW_GUI"] = "qt" if _qt_webengine_available() else "gtk"
 
     gui = os.environ.get("PYWEBVIEW_GUI", "gtk").lower()
 
     if gui == "qt":
-        # qtpy importa PyQt5 antes que PyQt6 si no se fuerza; pywebview Qt usa QtWebEngine vía qtpy
         if "QT_API" not in os.environ:
             os.environ["QT_API"] = os.environ.get("ORGANIZADOR_QT_API", "pyqt6")
         skip_sandbox = os.environ.get("ORGANIZADOR_QT_SKIP_NO_SANDBOX", "").lower() in (
@@ -61,6 +84,10 @@ def prepare_linux_gui_env() -> None:
         )
         if not skip_sandbox:
             _merge_qt_chromium_flags("--no-sandbox")
+        _merge_qt_chromium_flags(
+            "--autoplay-policy=no-user-gesture-required",
+            "--disable-features=BlockInsecurePrivateNetworkRequests",
+        )
         if os.environ.get("ORGANIZADOR_QT_DISABLE_GPU", "").lower() in ("1", "true", "yes"):
             _merge_qt_chromium_flags("--disable-gpu")
         return

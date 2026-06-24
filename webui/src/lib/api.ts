@@ -92,7 +92,23 @@ const devMockApi: WebApi = {
     dataUrl: null,
     mediaType: "image" as const,
     fileUrl: null as string | null,
+    transcodeUrl: null as string | null,
+    needsTranscode: false,
   }),
+  gallery_media_url: async () => ({
+    path: "",
+    fileUrl: null as string | null,
+    transcodeUrl: null as string | null,
+    needsTranscode: false,
+    mimeType: null as string | null,
+  }),
+  gallery_video_playback_blob: async () => ({ ok: false, error: "mock" }),
+  gallery_video_diagnostics: async () => ({
+    path: "",
+    exists: false,
+    error: "Solo disponible con la app Python (PyWebView).",
+  }),
+  gallery_open_external: async () => ({ ok: true }),
   gallery_file_base64: async () => ({
     dataUrl: null as string | null,
     error: null as string | null,
@@ -101,6 +117,7 @@ const devMockApi: WebApi = {
     ok: false,
     error: null as string | null,
   }),
+  gallery_copy_text_to_clipboard: async () => ({ ok: true }),
   gallery_file_stat: async () => ({
     path: "",
     name: "",
@@ -195,8 +212,15 @@ export const bridge = {
   galleryInvertSelection: () => call<any>("gallery_invert_selection"),
   galleryPreview: (path: string, width: number, height: number) =>
     call<any>("gallery_preview", normalizePathForApi(path), width, height),
+  galleryMediaUrl: (path: string) => call<any>("gallery_media_url", normalizePathForApi(path)),
+  galleryVideoDiagnostics: (path: string, testTranscode = false) =>
+    call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
+  galleryVideoPlaybackBlob: (path: string) =>
+    call<any>("gallery_video_playback_blob", normalizePathForApi(path)),
+  galleryOpenExternal: (path: string) => call<any>("gallery_open_external", normalizePathForApi(path)),
   galleryFileBase64: (path: string) => call<any>("gallery_file_base64", path),
   galleryCopyToClipboard: (path: string) => call<any>("gallery_copy_to_clipboard", path),
+  galleryCopyTextToClipboard: (text: string) => call<any>("gallery_copy_text_to_clipboard", text),
   galleryFileStat: (path: string) => call<any>("gallery_file_stat", normalizePathForApi(path)),
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMovePaths: (paths: string[], destPath: string) =>

@@ -48,6 +48,7 @@
   export let endPan: (e: PointerEvent) => void;
   export let onZoomStageClick: (e: MouseEvent) => void;
   export let onZoomVideoMeta: () => void;
+  export let onZoomVideoError: (e: Event) => void;
   export let onZoomImageLoad: () => void;
   export let onCropPointerDown: (e: PointerEvent) => void;
   export let onCropPointerMove: (e: PointerEvent) => void;
@@ -226,6 +227,7 @@
                 preload="auto"
                 style={`transform: ${zoomImgTransform};`}
                 on:loadedmetadata={onZoomVideoMeta}
+                on:error={onZoomVideoError}
               ></video>
             {:else if previewZoomMediaType === "svg" && previewZoomFileUrl}
               <img
