@@ -69,7 +69,7 @@
     background: rgb(4 6 14 / 0.72);
     display: grid;
     place-items: center;
-    z-index: 75;
+    z-index: 140;
   }
 
   .cdb-dialog.modal {
@@ -79,7 +79,7 @@
     overflow: hidden;
     gap: var(--om-space-3);
     padding: var(--om-space-5);
-    z-index: 76;
+    z-index: 141;
     box-sizing: border-box;
     width: min(520px, 92vw);
     max-height: min(72vh, 340px);

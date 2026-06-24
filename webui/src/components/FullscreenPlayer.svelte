@@ -24,6 +24,7 @@
   export let previewZoomPath: string;
   export let previewPanX: number;
   export let previewPanY: number;
+  export let previewPanDrag = false;
   export let previewFillWidthAlignPending: boolean;
 
   // Referencias a elementos DOM
@@ -37,6 +38,7 @@
   export let moveZoomBy: (dir: number) => void;
   export let clampPanToStage: () => void;
   export let alignFillWidthToTop: () => void;
+  export let togglePreviewZoomMode: () => void;
   export let zoomStep: (step: number) => void;
   export let applyZoomRotate: (deg: number) => void;
   export let applyZoomCrop: () => void;
@@ -47,6 +49,7 @@
   export let movePan: (e: PointerEvent) => void;
   export let endPan: (e: PointerEvent) => void;
   export let onZoomStageClick: (e: MouseEvent) => void;
+  export let onZoomImageClick: (e: MouseEvent) => void;
   export let onZoomVideoMeta: () => void;
   export let onZoomVideoError: (e: Event) => void;
   export let onZoomImageLoad: () => void;
@@ -67,12 +70,14 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="overlay overlay--zoom"
-    role="button"
-    tabindex="-1"
+    class:overlay--zoom-interacting={previewPanDrag}
+    role="presentation"
     aria-label={t("zoom.fullscreenCloseAria")}
-    on:click={() => (previewZoomOpen = false)}
+    on:click={(e) => {
+      if (e.target === e.currentTarget) previewZoomOpen = false;
+    }}
     on:keydown={(e) => {
-      if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
+      if (e.key === "Escape") {
         e.preventDefault();
         previewZoomOpen = false;
       }
@@ -96,14 +101,7 @@
             type="button"
             class="om-btn om-btn--ghost om-btn--compact"
             title={t("zoom.toggleFitTitle")}
-            on:click={() => {
-              previewZoomMode = previewZoomMode === "fit" ? "fillWidth" : "fit";
-              previewPanX = 0;
-              previewPanY = 0;
-              clampPanToStage();
-              previewFillWidthAlignPending = previewZoomMode === "fillWidth";
-              if (previewZoomMode === "fillWidth") alignFillWidthToTop();
-            }}
+            on:click={togglePreviewZoomMode}
           >
             {previewZoomMode === "fit" ? t("zoom.modeFit") : t("zoom.modeFillWidth")}
           </button>
@@ -114,10 +112,8 @@
             title={t("zoom.zoomResetTitle")}
             on:click={() => {
               previewZoomScale = 1;
-              if (previewZoomMode === "fit") {
-                previewPanX = 0;
-                previewPanY = 0;
-              }
+              previewPanX = 0;
+              previewPanY = 0;
             }}
           >{Math.round(previewZoomScale * 100)}%</button>
           <button type="button" class="om-btn om-btn--ghost om-btn--compact" title={t("zoom.zoomInTitle")} on:click={() => zoomStep(0.2)}>＋</button>
@@ -220,12 +216,12 @@
                 class="zoom-modal__img"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                class:zoom-modal__img--interacting={previewPanDrag}
                 bind:this={zoomVideoEl}
                 src={previewZoomFileUrl}
                 controls
                 playsinline
                 preload="auto"
-                style={`transform: ${zoomImgTransform};`}
                 on:loadedmetadata={onZoomVideoMeta}
                 on:error={onZoomVideoError}
               ></video>
@@ -234,10 +230,11 @@
                 class="zoom-modal__img"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                class:zoom-modal__img--interacting={previewPanDrag}
                 bind:this={zoomImgEl}
                 src={previewZoomFileUrl}
                 alt={previewZoomName}
-                style={`transform: ${zoomImgTransform};`}
+                on:click={onZoomImageClick}
                 on:load={onZoomImageLoad}
               />
             {:else if previewZoomDataUrl}
@@ -245,14 +242,15 @@
                 class="zoom-modal__img"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                class:zoom-modal__img--interacting={previewPanDrag}
                 bind:this={zoomImgEl}
                 src={previewZoomDataUrl}
                 alt={previewZoomName}
-                style={`transform: ${zoomImgTransform};`}
+                on:click={onZoomImageClick}
                 on:load={onZoomImageLoad}
               />
             {/if}
-            {#if zoomHudVisible}
+            {#if zoomHudVisible && !previewPanDrag}
               <div class="zoom-mini" bind:this={zoomMiniEl}>
                 <img
                   src={previewZoomMediaType === "svg" ? previewZoomFileUrl : previewZoomDataUrl}
@@ -372,28 +370,28 @@
     border-radius: var(--om-radius-sm);
   }
 .zoom-modal {
-    width: min(96vw, 1320px);
-    height: min(94vh, 980px);
-    height: min(94dvh, 980px);
-    max-height: 94vh;
-    max-height: 94dvh;
+    width: 100%;
+    height: 100%;
+    max-width: 100vw;
+    max-height: 100vh;
+    max-height: 100dvh;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
-    gap: var(--om-space-3);
+    gap: var(--om-space-1);
     overflow: hidden;
     min-height: 0;
     min-width: 0;
   }
 .zoom-modal--carousel-hidden {
-    gap: var(--om-space-2);
+    gap: 0;
     grid-template-rows: auto minmax(0, 1fr);
   }
 .zoom-modal__head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--om-space-3);
-    padding: 0 var(--om-space-2);
+    gap: var(--om-space-2);
+    padding: var(--om-space-1) var(--om-space-1);
     color: var(--om-text-primary);
     overflow: visible;
   }
@@ -439,20 +437,18 @@
     width: 100%;
     height: 100%;
     max-height: 100%;
-    min-height: 0;
-    display: grid;
-    place-items: center;
+    display: block;
     overflow: hidden;
-    border-radius: var(--om-radius-lg);
-    background: radial-gradient(130% 100% at 50% 40%, rgb(124 140 255 / 0.08), transparent 65%);
+    border-radius: 0;
+    background: transparent;
+    position: relative;
+    z-index: 1;
   }
 .zoom-modal__stage {
     width: 100%;
     height: 100%;
     min-height: 0;
     min-width: 0;
-    display: grid;
-    place-items: center;
     overflow: hidden;
     cursor: default;
     position: relative;
@@ -521,13 +517,17 @@
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
-    border-radius: var(--om-radius-md);
-    box-shadow: 0 16px 42px rgb(0 0 0 / 0.55);
-    background: rgb(0 0 0 / 0.22);
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
     transform-origin: center center;
-    transition: transform 0.08s linear;
     user-select: none;
     -webkit-user-drag: none;
+    touch-action: none;
+  }
+.zoom-modal__img--interacting {
+    transition: none !important;
+    will-change: transform;
   }
 .zoom-modal__img--fill-width {
     width: 100%;
@@ -535,28 +535,26 @@
     max-width: none;
     max-height: none;
     top: 0;
+    transform-origin: top center;
   }
 .zoom-modal__img--pannable {
     cursor: grab;
   }
-.zoom-modal__img--pannable:active {
+.zoom-modal__img--pannable.zoom-modal__img--interacting {
     cursor: grabbing;
   }
 .zoom-modal__carousel {
     display: flex;
-    gap: var(--om-space-2);
+    gap: var(--om-space-1);
     overflow-x: auto;
     overflow-y: hidden;
-    padding: var(--om-space-1) var(--om-space-2);
-    border-radius: var(--om-radius-md);
+    padding: var(--om-space-1);
+    border-radius: 0;
     background: rgb(255 255 255 / 0.04);
     flex: 0 0 auto;
+    min-height: 6.75rem;
     position: relative;
     z-index: 5;
-  }
-.zoom-modal__body {
-    position: relative;
-    z-index: 1;
   }
 .zoom-modal__carousel--hidden {
     display: none;
@@ -565,8 +563,8 @@
     border: 1px solid var(--om-border-subtle);
     border-radius: var(--om-radius-sm);
     padding: 0;
-    width: 72px;
-    height: 72px;
+    width: 96px;
+    height: 96px;
     flex: 0 0 auto;
     overflow: hidden;
     background: var(--om-surface-2);

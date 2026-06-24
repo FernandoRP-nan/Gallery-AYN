@@ -88,8 +88,12 @@
   let previewPanY = 0;
   let previewPanDrag = false;
   let previewPanMoved = false;
+  let previewPanPointerDown = false;
+  let previewPanDownX = 0;
+  let previewPanDownY = 0;
   let previewPanStartX = 0;
   let previewPanStartY = 0;
+  const PAN_DRAG_THRESHOLD_PX = 5;
   let previewZoomCarouselVisible = true;
   let previewZoomDestMode = false;
   let previewZoomCanUndoMove = false;
@@ -1862,11 +1866,63 @@
   }
 
 
+  function getZoomStageSize(): { w: number; h: number } | null {
+    if (!zoomStageEl) return null;
+    const sr = zoomStageEl.getBoundingClientRect();
+    return { w: Math.max(1, sr.width), h: Math.max(1, sr.height) };
+  }
+
+  function getFillWidthPanLimitY(): number {
+    const stage = getZoomStageSize();
+    const nw = Math.max(1, previewZoomNaturalW);
+    const nh = Math.max(1, previewZoomNaturalH);
+    if (!stage) return 0;
+    const layoutH = stage.w * (nh / nw);
+    const scaledH = layoutH * previewZoomScale;
+    return Math.max(0, scaledH - stage.h);
+  }
+
+  function getFitPanLimits(): { x: number; y: number } {
+    const stage = getZoomStageSize();
+    if (!stage) return { x: 0, y: 0 };
+    const nw = Math.max(1, previewZoomNaturalW);
+    const nh = Math.max(1, previewZoomNaturalH);
+    let layoutW = stage.w;
+    let layoutH = (stage.w * nh) / nw;
+    if (layoutH > stage.h) {
+      layoutH = stage.h;
+      layoutW = (stage.h * nw) / nh;
+    }
+    const scaledW = layoutW * previewZoomScale;
+    const scaledH = layoutH * previewZoomScale;
+    return {
+      x: Math.max(0, (scaledW - stage.w) / 2),
+      y: Math.max(0, (scaledH - stage.h) / 2),
+    };
+  }
+
+  function buildZoomImgTransform(): string {
+    if (previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100) {
+      return "translate(-50%, -50%)";
+    }
+    if (previewZoomMode === "fillWidth") {
+      return `translate(-50%, 0%) translate(0px, ${previewPanY}px) scale(${previewZoomScale})`;
+    }
+    return `translate(-50%, -50%) translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
+  }
+
+  /** Aplica transform directo al DOM durante pan (evita re-render de Svelte por frame). */
+  function syncZoomMediaTransform() {
+    const tf = buildZoomImgTransform();
+    if (zoomImgEl) zoomImgEl.style.transform = tf;
+    if (zoomVideoEl && previewZoomMediaType === "video") zoomVideoEl.style.transform = tf;
+  }
+
   function zoomStep(delta: number) {
     if (previewZoomMediaType === "video") return;
-    // Permite alejar más allá de 100% para que, si el stage efectivo es menor
-    // (por carrusel/cabecera), siempre puedas ver la imagen completa.
     previewZoomScale = Math.min(4, Math.max(0.5, Number((previewZoomScale + delta).toFixed(2))));
+    clampPanToStage();
+    syncZoomMediaTransform();
     touchZoomHud();
   }
 
@@ -1875,24 +1931,18 @@
   }
 
   function getPanLimits() {
-    const media = previewZoomMediaType === "video" ? zoomVideoEl : zoomImgEl;
-    if (!zoomStageEl || !media) return { x: 0, y: 0 };
-    const sr = zoomStageEl.getBoundingClientRect();
-    const ir = media.getBoundingClientRect();
-    const stageW = Math.max(1, sr.width);
-    const stageH = Math.max(1, sr.height);
-    const overflowX = (ir.width - stageW) / 2;
-    const overflowY = (ir.height - stageH) / 2;
     if (previewZoomMode === "fillWidth") {
-      return { x: 0, y: Math.max(0, ir.height - stageH) };
+      return { x: 0, y: getFillWidthPanLimitY() };
     }
-    return { x: Math.max(0, overflowX), y: Math.max(0, overflowY) };
+    return getFitPanLimits();
   }
 
   function clampPanToStage() {
     const limits = getPanLimits();
     const nextX = previewZoomMode === "fillWidth" ? 0 : clamp(previewPanX, -limits.x, limits.x);
-    const nextY = previewZoomMode === "fillWidth" ? clamp(previewPanY, -limits.y, 0) : clamp(previewPanY, -limits.y, limits.y);
+    // fillWidth: 0 = borde superior; negativo = desplazar hacia arriba para ver la parte inferior.
+    const nextY =
+      previewZoomMode === "fillWidth" ? clamp(previewPanY, -limits.y, 0) : clamp(previewPanY, -limits.y, limits.y);
     if (nextX !== previewPanX) previewPanX = nextX;
     if (nextY !== previewPanY) previewPanY = nextY;
   }
@@ -1902,6 +1952,19 @@
     previewPanX = 0;
     previewPanY = 0;
     previewFillWidthAlignPending = false;
+    syncZoomMediaTransform();
+  }
+
+  function togglePreviewZoomMode() {
+    const next: "fit" | "fillWidth" = previewZoomMode === "fit" ? "fillWidth" : "fit";
+    previewZoomMode = next;
+    previewPanX = 0;
+    previewPanY = 0;
+    previewZoomScale = 1;
+    previewFillWidthAlignPending = next === "fillWidth";
+    clampPanToStage();
+    syncZoomMediaTransform();
+    touchZoomHud();
   }
 
   // Snap a "100%" usando el mismo redondeo que muestra la UI.
@@ -1913,19 +1976,19 @@
   }
 
   // Siempre mantenemos pan dentro de los límites reales del DOM (overflow vs stage).
-  $: if (previewZoomOpen && zoomStageEl && (zoomImgEl || zoomVideoEl)) {
+  $: if (previewZoomOpen && !previewPanDrag && zoomStageEl && (zoomImgEl || zoomVideoEl)) {
     clampPanToStage();
     if (previewFillWidthAlignPending) {
       alignFillWidthToTop();
     }
   }
 
-  $: zoomImgTransform =
-    previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100
-      ? "translate(-50%, -50%)"
-      : previewZoomMode === "fillWidth"
-        ? `translate(-50%, 0%) translate(0px, ${previewPanY}px) scale(${previewZoomScale})`
-      : `translate(-50%, -50%) translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
+  $: zoomImgTransform = buildZoomImgTransform();
+
+  // Aplica transform al DOM cuando cambia escala/pan (excepto durante drag activo).
+  $: if (previewZoomOpen && !previewPanDrag && (zoomImgEl || zoomVideoEl)) {
+    syncZoomMediaTransform();
+  }
 
   function zoomWithWheel(e: WheelEvent) {
     if (previewZoomMediaType === "video") {
@@ -2074,24 +2137,33 @@
   function beginPan(e: PointerEvent) {
     if (previewZoomMediaType === "video") return;
     if (zoomCropMode) return;
+    const el = e.target as HTMLElement;
+    if (el.closest("button, a, video, .zoom-dest-chips, .zoom-mini")) return;
     // Si la imagen no desborda el stage, no hay nada que “panear”.
     const limits = getPanLimits();
     if (limits.x <= 0.5 && limits.y <= 0.5) return;
-    previewPanDrag = true;
+    previewPanPointerDown = true;
+    previewPanDrag = false;
     previewPanMoved = false;
+    previewPanDownX = e.clientX;
+    previewPanDownY = e.clientY;
     if (previewZoomMode === "fillWidth") {
-      previewPanX = 0;
       previewPanStartY = e.clientY - previewPanY;
     } else {
       previewPanStartX = e.clientX - previewPanX;
       previewPanStartY = e.clientY - previewPanY;
     }
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    touchZoomHud();
   }
 
   function movePan(e: PointerEvent) {
-    if (!previewPanDrag) return;
+    if (!previewPanPointerDown) return;
+    if (!previewPanDrag) {
+      const dx = e.clientX - previewPanDownX;
+      const dy = e.clientY - previewPanDownY;
+      if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
+      previewPanDrag = true;
+      zoomStageEl?.setPointerCapture?.(e.pointerId);
+    }
     if (previewZoomMode === "fillWidth") {
       const ny = e.clientY - previewPanStartY;
       if (Math.abs(ny - previewPanY) > 2) previewPanMoved = true;
@@ -2105,16 +2177,32 @@
       previewPanY = ny;
     }
     clampPanToStage();
-    touchZoomHud();
+    syncZoomMediaTransform();
   }
 
   function endPan(e: PointerEvent) {
+    const wasDragging = previewPanDrag;
+    previewPanPointerDown = false;
     previewPanDrag = false;
-    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    if (wasDragging) {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    }
+    syncZoomMediaTransform();
+    touchZoomHud();
   }
 
   function toggleZoomCarousel() {
     previewZoomCarouselVisible = !previewZoomCarouselVisible;
+  }
+
+  function onZoomImageClick(e: MouseEvent) {
+    e.stopPropagation();
+    if (zoomCropMode) return;
+    if (previewPanMoved) {
+      previewPanMoved = false;
+      return;
+    }
+    toggleZoomCarousel();
   }
 
   function onZoomStageClick(e: MouseEvent) {
@@ -2123,16 +2211,9 @@
       previewPanMoved = false;
       return;
     }
-    // Click en fondo del stage (blur): cerrar fullscreen.
-    if (e.target === e.currentTarget) {
-      if (previewZoomMode === "fillWidth") {
-        toggleZoomCarousel();
-        return;
-      }
-      previewZoomOpen = false;
-      return;
-    }
-    toggleZoomCarousel();
+    // Solo el fondo negro del stage (no la imagen): cerrar visor.
+    if (e.target !== e.currentTarget) return;
+    previewZoomOpen = false;
   }
 
   async function moveCurrentZoomToDestination(destPath: string) {
@@ -2229,16 +2310,26 @@
     if (!zoomImgEl) return;
     previewZoomNaturalW = Math.max(1, zoomImgEl.naturalWidth || 1);
     previewZoomNaturalH = Math.max(1, zoomImgEl.naturalHeight || 1);
+    if (previewZoomMode === "fillWidth") {
+      previewPanX = 0;
+      previewPanY = 0;
+      previewFillWidthAlignPending = false;
+    }
     clampPanToStage();
-    alignFillWidthToTop();
+    syncZoomMediaTransform();
   }
 
   function onZoomVideoMeta() {
     if (!zoomVideoEl) return;
     previewZoomNaturalW = Math.max(1, zoomVideoEl.videoWidth || 1);
     previewZoomNaturalH = Math.max(1, zoomVideoEl.videoHeight || 1);
+    if (previewZoomMode === "fillWidth") {
+      previewPanX = 0;
+      previewPanY = 0;
+      previewFillWidthAlignPending = false;
+    }
     clampPanToStage();
-    alignFillWidthToTop();
+    syncZoomMediaTransform();
   }
 
   async function onZoomVideoError(e: Event) {
@@ -2296,6 +2387,7 @@
   }
 
   $: zoomMiniRect = (() => {
+    if (previewPanDrag) return zoomMiniRect;
     // dependencias reactivas explícitas
     const _deps = [previewZoomScale, previewPanX, previewPanY, previewZoomMode, previewZoomPath];
     void _deps;
@@ -2550,11 +2642,10 @@
     }
   }
 
-  /** Clic en la tarjeta (sin botón): vista previa de carpeta; el drop sigue moviendo archivos. */
+  /** Clic en chip de destino: mover selección o abrir vista previa de carpeta. */
   function onDestCardClick(e: MouseEvent, path: string) {
     if (e.button !== 0) return;
     if (Date.now() < ignoreDestCardClickUntil) return;
-    if ((e.target as HTMLElement).closest("button")) return;
     const selectedCount = getSelectedGalleryPaths().length;
     if (selectedCount > 0) {
       askConfirmMoveSelected(path);
@@ -3547,70 +3638,65 @@
       on:click|stopPropagation
       on:keydown|stopPropagation
     >
-      <div class="gallery-item-ctx-menu__scroll">
-        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
-          >{t("contextGallery.copyPath")}</button
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
+        >{t("contextGallery.copyPath")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={!galleryItemCtxMenu.thumbDataUrl || !String(galleryItemCtxMenu.thumbDataUrl).startsWith("data:")}
+        on:click={() => void copyGalleryCtxFullImage()}
+        >{t("contextGallery.copyThumb")}</button
+      >
+      <div class="ctx-menu__submenu-wrap ctx-menu__submenu-wrap--expand">
+        <button
+          type="button"
+          class="dest-ctx-menu__item ctx-menu__submenu-trigger"
+          role="menuitem"
+          aria-haspopup="true"
+          aria-expanded="false"
+          disabled={destRows.length === 0}
+          title={destRows.length === 0 ? t("contextGallery.noDestinations") : undefined}
         >
+          <span>{t("contextGallery.moveTo")}</span>
+          <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">▾</span>
+        </button>
+        <div class="ctx-menu__submenu ctx-menu__submenu--expand om-panel om-panel--lift" role="menu" aria-label={t("contextGallery.moveTo")}>
+          {#if destRows.length === 0}
+            <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
+          {:else}
+            {#each destRows as d, di (d.path + "\0gctx\0" + di)}
+              <button
+                type="button"
+                class="dest-ctx-menu__item"
+                role="menuitem"
+                title={d.path}
+                on:click={() => void moveGalleryItemFromCtxTo(d.path)}
+                >{d.label}</button
+              >
+            {/each}
+          {/if}
+        </div>
+      </div>
+      {#if galleryItemCtxMenu.kind === "video"}
         <button
           type="button"
           class="dest-ctx-menu__item"
           role="menuitem"
-          disabled={!galleryItemCtxMenu.thumbDataUrl || !String(galleryItemCtxMenu.thumbDataUrl).startsWith("data:")}
-          on:click={() => void copyGalleryCtxFullImage()}
-          >{t("contextGallery.copyThumb")}</button
+          on:click={() => void openGalleryExternalFromCtx()}
+          >{t("contextGallery.openExternal")}</button
         >
-        <div
-          class="ctx-menu__submenu-wrap"
-          class:ctx-menu__submenu-wrap--left={galleryItemCtxMenu.submenuLeft}
-        >
-          <button
-            type="button"
-            class="dest-ctx-menu__item ctx-menu__submenu-trigger"
-            role="menuitem"
-            aria-haspopup="true"
-            aria-expanded="false"
-            disabled={destRows.length === 0}
-            title={destRows.length === 0 ? t("contextGallery.noDestinations") : undefined}
-          >
-            <span>{t("contextGallery.moveTo")}</span>
-            <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">▸</span>
-          </button>
-          <div class="ctx-menu__submenu om-panel om-panel--lift" role="menu" aria-label={t("contextGallery.moveTo")}>
-            {#if destRows.length === 0}
-              <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
-            {:else}
-              {#each destRows as d, di (d.path + "\0gctx\0" + di)}
-                <button
-                  type="button"
-                  class="dest-ctx-menu__item"
-                  role="menuitem"
-                  title={d.path}
-                  on:click={() => void moveGalleryItemFromCtxTo(d.path)}
-                  >{d.label}</button
-                >
-              {/each}
-            {/if}
-          </div>
-        </div>
-        {#if galleryItemCtxMenu.kind === "video"}
-          <button
-            type="button"
-            class="dest-ctx-menu__item"
-            role="menuitem"
-            on:click={() => void openGalleryExternalFromCtx()}
-            >{t("contextGallery.openExternal")}</button
-          >
-        {/if}
-        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
-          >{t("contextGallery.properties")}</button
-        >
-        <button
-          type="button"
-          class="dest-ctx-menu__item dest-ctx-menu__item--danger"
-          role="menuitem"
-          on:click={askDeleteGalleryItemFromCtx}>{t("contextGallery.delete")}</button
-        >
-      </div>
+      {/if}
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
+        >{t("contextGallery.properties")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item dest-ctx-menu__item--danger"
+        role="menuitem"
+        on:click={askDeleteGalleryItemFromCtx}>{t("contextGallery.delete")}</button
+      >
     </div>
   {/if}
 
@@ -3800,6 +3886,7 @@
     bind:previewZoomPath
     bind:previewPanX
     bind:previewPanY
+    previewPanDrag={previewPanDrag}
     bind:previewFillWidthAlignPending
     bind:zoomStageEl
     bind:zoomVideoEl
@@ -3809,6 +3896,7 @@
     {moveZoomBy}
     {clampPanToStage}
     {alignFillWidthToTop}
+    {togglePreviewZoomMode}
     {zoomStep}
     {applyZoomRotate}
     {applyZoomCrop}
@@ -3819,6 +3907,7 @@
     {movePan}
     {endPan}
     {onZoomStageClick}
+    {onZoomImageClick}
     {onZoomVideoMeta}
     {onZoomVideoError}
     {onZoomImageLoad}

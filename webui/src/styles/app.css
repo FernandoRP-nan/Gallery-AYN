@@ -1082,13 +1082,13 @@
 .ctx-menu-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 90;
+    z-index: 139;
     background: transparent;
   }
 
 .dest-ctx-menu {
     position: fixed;
-    z-index: 91;
+    z-index: 140;
     min-width: 11rem;
     padding: var(--om-space-2);
     display: flex;
@@ -1136,17 +1136,38 @@
 .gallery-item-ctx-menu {
     min-width: 12rem;
     max-width: 16rem;
-    max-height: min(70vh, 360px);
-    overflow: hidden;
+    overflow: visible;
   }
 
-.gallery-item-ctx-menu__scroll {
+.ctx-menu__submenu-wrap--expand {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    max-height: min(70vh, 340px);
+  }
+
+.ctx-menu__submenu--expand {
+    position: static;
+    left: auto;
+    right: auto;
+    top: auto;
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 100%;
+    max-width: 100%;
+    max-height: min(42vh, 260px);
     overflow-x: hidden;
     overflow-y: auto;
+    padding: var(--om-space-1);
+    margin-top: 1px;
+    box-sizing: border-box;
+    border: 1px solid rgb(255 255 255 / 0.1);
+    background: rgb(8 10 18 / 0.92);
+  }
+
+.ctx-menu__submenu-wrap--expand:hover .ctx-menu__submenu--expand,
+.ctx-menu__submenu-wrap--expand:focus-within .ctx-menu__submenu--expand {
+    display: flex;
   }
 
 .ctx-menu__submenu-wrap {
@@ -1287,10 +1308,21 @@
   }
 
 .overlay--zoom {
-    background: rgb(2 3 8 / 0.92);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    z-index: 60;
+    background: rgb(2 3 8 / 0.96);
+    /* Sin backdrop-filter: en Qt WebEngine relee todo el fondo en cada frame al hacer pan/zoom. */
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    /* Por encima de toolbar (80), pager (75) y modales; bajo LoadOverlay (150). */
+    z-index: 130;
+    isolation: isolate;
+    contain: paint;
+    place-items: stretch;
+    padding: 0;
+  }
+
+.overlay--zoom.overlay--zoom-interacting {
+    /* Evita repintar la app detrás durante pan/zoom activo. */
+    pointer-events: auto;
   }
 
 .trash-ico {
