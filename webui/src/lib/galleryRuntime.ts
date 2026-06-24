@@ -1,6 +1,11 @@
 import { get, writable } from "svelte/store";
 import type { GalleryItem } from "./api";
 import { countSelectedMedia, mergeItemsKeepingBestThumb } from "./galleryUtils";
+import {
+  removeGalleryThumbHq,
+  seedGalleryThumbHqFromItems,
+  stripHqFromGalleryItems,
+} from "./galleryThumbHqCache";
 
 export type GalleryMutationResponse = {
   state?: GalleryState;
@@ -46,8 +51,9 @@ export function getGalleryState(): GalleryState {
 }
 
 export function setGalleryPayload(state: GalleryState, nextItems: GalleryItem[]) {
-  galleryItems.set(nextItems);
-  galleryState.set({ ...state, selectedCount: countSelectedMedia(nextItems) });
+  seedGalleryThumbHqFromItems(nextItems);
+  galleryItems.set(stripHqFromGalleryItems(nextItems));
+  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
 }
 
 export function setGalleryState(state: GalleryState) {
@@ -68,8 +74,9 @@ export function updateGalleryItems(mutator: (items: GalleryItem[]) => GalleryIte
 }
 
 export function mergeGalleryItemsFromApi(nextItems: GalleryItem[], state?: GalleryState) {
+  seedGalleryThumbHqFromItems(nextItems);
   const merged = mergeItemsKeepingBestThumb(getGalleryItems(), nextItems);
-  galleryItems.set(merged);
+  galleryItems.set(stripHqFromGalleryItems(merged));
   if (state) {
     galleryState.set({ ...state, selectedCount: countSelectedMedia(merged) });
   } else {
@@ -101,6 +108,7 @@ export function applyGalleryRemovePathsDelta(state: GalleryState, removedPaths: 
     setGalleryStateFromApi(state);
     return;
   }
+  removeGalleryThumbHq(removed);
   updateGalleryItems((items) =>
     pruneOrphanGallerySections(items.filter((x) => !removed.has(x.path)))
   );

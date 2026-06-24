@@ -36,6 +36,7 @@
     type GalleryState,
   } from "./lib/galleryRuntime";
   import { disposeGalleryThumbs } from "./lib/galleryThumbs";
+  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems } from "./lib/galleryThumbHqCache";
   import { commitChromePagerState } from "./lib/chromeRemember";
   import { isGalleryMediaKind, mergeItemsKeepingBestThumb } from "./lib/galleryUtils";
   import {
@@ -104,7 +105,7 @@
   let zoomMoveWorkerRunning = false;
   let galleryMoveQueue: GalleryMoveJob[] = [];
   let galleryMoveWorkerRunning = false;
-  let galleryDeleteQueue: Array<{ paths: string[] }> = [];
+  let galleryDeleteQueue: GalleryDeleteJob[] = [];
   let galleryDeleteWorkerRunning = false;
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
@@ -575,13 +576,18 @@
     viewportOffsetPx: number;
   };
 
-  type GalleryMoveJob = {
+  type GalleryMutationSnapshot = {
     srcPaths: string[];
-    destPath: string;
     scrollAnchor: GalleryScrollAnchor;
     prevItems: GalleryItem[];
     prevState: GalleryState;
   };
+
+  type GalleryMoveJob = GalleryMutationSnapshot & {
+    destPath: string;
+  };
+
+  type GalleryDeleteJob = GalleryMutationSnapshot;
 
   function findGalleryTileByPath(path: string): HTMLElement | null {
     if (!galleryScrollEl || !path) return null;
@@ -654,7 +660,7 @@
     void galleryWorkspace?.afterGalleryMoveDelta(getGalleryItems(), thumbScale);
   }
 
-  function createGalleryMoveJobSnapshot(srcPaths: string[]): Omit<GalleryMoveJob, "destPath"> {
+  function createGalleryMoveJobSnapshot(srcPaths: string[]): GalleryMutationSnapshot {
     return {
       srcPaths,
       scrollAnchor: captureGalleryScrollAnchor(),
@@ -674,11 +680,12 @@
     }
   }
 
-  async function applyOptimisticGalleryRemove(snapshot: Omit<GalleryMoveJob, "destPath">) {
+  async function applyOptimisticGalleryRemove(snapshot: GalleryMutationSnapshot) {
     const pathSet = new Set(snapshot.srcPaths);
     const removedMedia = snapshot.prevItems.filter(
       (x) => isGalleryMediaKind(x.kind) && pathSet.has(x.path)
     ).length;
+    removeGalleryThumbHq(pathSet);
     updateGalleryItems((items) => items.filter((x) => !pathSet.has(x.path)));
     const s = snapshot.prevState;
     setGalleryState({
@@ -693,11 +700,16 @@
     await restoreGalleryScrollAnchor(snapshot.scrollAnchor);
   }
 
-  async function rollbackOptimisticGalleryMove(job: GalleryMoveJob) {
-    setGalleryItems(job.prevItems);
+  async function rollbackOptimisticGalleryMutation(job: GalleryMutationSnapshot) {
+    seedGalleryThumbHqFromItems(job.prevItems);
+    setGalleryItems(stripHqFromGalleryItems(job.prevItems));
     setGalleryState(job.prevState);
     syncGalleryUiAfterRemoval(new Set(job.srcPaths));
     await restoreGalleryScrollAnchor(job.scrollAnchor);
+  }
+
+  async function rollbackOptimisticGalleryMove(job: GalleryMoveJob) {
+    await rollbackOptimisticGalleryMutation(job);
   }
 
   async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
@@ -955,18 +967,11 @@
       .filter((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))
       .map((x) => x.path);
     if (selectedPaths.length === 0) return;
-    const selectedSet = new Set(selectedPaths);
-    updateGalleryItems((items) =>
-      items.filter((x) => !(isGalleryMediaKind(x.kind) && selectedSet.has(x.path)))
-    );
-    setGalleryState({
-      ...getGalleryState(),
-      total: Math.max(0, Number(getGalleryState()?.total ?? 0) - selectedPaths.length),
-      selectedCount: 0,
-      endIndex: Math.max(0, Number(getGalleryState()?.endIndex ?? 0) - selectedPaths.length),
-    });
-    enqueueDeletePaths(selectedPaths);
+    const snapshot = createGalleryMoveJobSnapshot(selectedPaths);
+    await applyOptimisticGalleryRemove(snapshot);
+    galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
     status = t("status.deleteQueued").replace("{n}", String(selectedPaths.length));
+    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
   }
 
   async function deleteCurrentZoomImage() {
@@ -974,9 +979,8 @@
     const curPath = previewZoomPath;
     const curIdx = zoomNavItems.findIndex((x) => x.path === curPath);
     const remainingNav = zoomNavItems.filter((x) => x.path !== curPath);
-    updateGalleryItems((items) =>
-      items.filter((x) => !(isGalleryMediaKind(x.kind) && x.path === curPath))
-    );
+    const snapshot = createGalleryMoveJobSnapshot([curPath]);
+    await applyOptimisticGalleryRemove(snapshot);
     if (remainingNav.length > 0) {
       const nextIdx = curIdx >= 0 ? Math.min(curIdx, remainingNav.length - 1) : 0;
       const nextItem = remainingNav[nextIdx];
@@ -985,8 +989,9 @@
     } else {
       previewZoomOpen = false;
     }
-    enqueueDeletePaths([curPath]);
+    galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
     status = t("status.deleteImageQueued");
+    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
   }
 
   function rememberPreviewVideoUrl(url: string) {
@@ -1753,15 +1758,22 @@
     const delSet = new Set(deleting);
     previewItems = previewItems.filter((x) => !delSet.has(x.path));
     previewSelectedPaths = [];
-    enqueueDeletePaths(deleting);
+    const snapshot = createGalleryMoveJobSnapshot(deleting);
+    await applyOptimisticGalleryRemove(snapshot);
+    galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
     status = t("status.deleteQueued").replace("{n}", String(deleting.length));
+    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
   }
 
   function enqueueDeletePaths(paths: string[]) {
     const normalized = (paths || []).map((x) => String(x).trim()).filter((x) => x.length > 0);
     if (normalized.length === 0) return;
-    galleryDeleteQueue = [...galleryDeleteQueue, { paths: normalized }];
-    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
+    void (async () => {
+      const snapshot = createGalleryMoveJobSnapshot(normalized);
+      await applyOptimisticGalleryRemove(snapshot);
+      galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
+      if (!galleryDeleteWorkerRunning) void processDeleteQueue();
+    })();
   }
 
   async function processDeleteQueue() {
@@ -1772,22 +1784,25 @@
         const [job, ...rest] = galleryDeleteQueue;
         galleryDeleteQueue = rest;
         try {
-          const out = await bridge.galleryDeletePaths(job.paths);
-          await applyGalleryItemsDelta(out);
+          const out = await bridge.galleryDeletePaths(job.srcPaths);
+          const deleted = Number(out.deleteResult?.deleted ?? 0);
+          const errors = Number(out.deleteResult?.errors ?? 0);
+          if (errors > 0 || deleted < job.srcPaths.length) {
+            await applyGalleryItemsDelta(out);
+          } else {
+            await reconcileGalleryMoveSuccess(out);
+          }
           if (previewOpen) {
-            const valid = new Set(
-              (out.items ?? []).filter((x: GalleryItem) => isGalleryMediaKind(x.kind)).map((x: GalleryItem) => x.path)
-            );
+            const valid = new Set(getGalleryItems().filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path));
             previewItems = previewItems.filter((x) => valid.has(x.path));
             previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
           }
-          const deleted = Number(out.deleteResult?.deleted ?? 0);
-          const errors = Number(out.deleteResult?.errors ?? 0);
           status = t("status.deleteBatchLine")
             .replace("{deleted}", String(deleted))
             .replace("{errPart}", errors ? t("status.deleteErrorsPart").replace("{errors}", String(errors)) : "")
             .replace("{queue}", String(galleryDeleteQueue.length));
         } catch (e: unknown) {
+          await rollbackOptimisticGalleryMutation(job);
           status = e instanceof Error ? e.message : t("status.deleteQueueError");
         }
       }
@@ -2897,7 +2912,7 @@
       const out = await trackLoad(bridge.galleryMovePath(src, destPath));
       const moved = Number(out.moveResult?.moved ?? 0);
       if (moved > 0) {
-        await reconcileGalleryMoveSuccess(out.state, out.items);
+        await reconcileGalleryMoveSuccess(out);
         status = t("contextGallery.movedOk");
       } else {
         await rollbackOptimisticGalleryMove(job);

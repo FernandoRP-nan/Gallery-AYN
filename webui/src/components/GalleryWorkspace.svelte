@@ -21,13 +21,13 @@
     getGalleryThumbHydrationToken,
     hydrateGalleryThumbsHq,
   } from "../lib/galleryThumbs";
+  import { hasGalleryThumbHq } from "../lib/galleryThumbHqCache";
   import { galleryChromeBusy } from "../lib/chromeRemember";
   import { galleryScrolling as galleryScrollingStore } from "../lib/galleryScrollState";
   import {
     countSelectedMedia,
     expandTimelineDayBreaks,
     isGalleryMediaKind,
-    mergeItemsKeepingBestThumb,
   } from "../lib/galleryUtils";
   import { galleryGridCellPx } from "../lib/thumbScale";
   import { t } from "../lib/i18n";
@@ -394,10 +394,8 @@
   }
 
   const selectPage = async () => {
-    const prevItems = getGalleryItems();
     const out = await bridge.gallerySelectPage();
-    setGalleryItems(mergeItemsKeepingBestThumb(prevItems, out.items));
-    setGalleryState(out.state);
+    mergeGalleryItemsFromApi(out.items, out.state);
     if (destinationsMode) {
       const items = getGalleryItems();
       const last = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
@@ -451,7 +449,8 @@
       (x) =>
         visiblePaths.has(x.path) &&
         (x.kind === "image" || x.kind === "video") &&
-        x.thumbQuality !== "hq"
+        x.thumbQuality !== "hq" &&
+        !hasGalleryThumbHq(x.path)
     );
   }
 

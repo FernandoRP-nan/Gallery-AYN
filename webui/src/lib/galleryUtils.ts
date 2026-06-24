@@ -1,4 +1,9 @@
 import type { GalleryItem } from "./api";
+import {
+  preserveItemThumbInCache,
+  hasGalleryThumbHq,
+  getGalleryThumbHq,
+} from "./galleryThumbHqCache";
 
 export function isGalleryMediaKind(kind: GalleryItem["kind"]): boolean {
   return kind === "image" || kind === "video";
@@ -28,7 +33,9 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
       return it;
     }
 
-    const prevQ = prev.thumbQuality ?? (prev.thumbDataUrl ? "hq" : undefined);
+    const prevQ = hasGalleryThumbHq(prev.path)
+      ? "hq"
+      : prev.thumbQuality ?? (prev.thumbDataUrl ? "hq" : undefined);
     const nextQ = it.thumbQuality ?? (it.thumbDataUrl ? "hq" : undefined);
     const prevScore = prevQ === "hq" ? 2 : prevQ === "lq" ? 1 : 0;
     const nextScore = nextQ === "hq" ? 2 : nextQ === "lq" ? 1 : 0;
@@ -37,10 +44,16 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
     let thumbQ = it.thumbQuality;
     let thumbLq = it.thumbLqDataUrl ?? prev.thumbLqDataUrl ?? null;
 
-    if (prevScore > nextScore && prev.thumbDataUrl) {
-      thumbUrl = prev.thumbDataUrl;
-      thumbQ = prev.thumbQuality ?? "hq";
-      thumbLq = prev.thumbLqDataUrl ?? thumbLq;
+    if (prevScore > nextScore) {
+      preserveItemThumbInCache(prev);
+      const cached = getGalleryThumbHq(prev.path);
+      thumbLq =
+        prev.thumbLqDataUrl ??
+        (prev.thumbQuality === "lq" ? prev.thumbDataUrl : null) ??
+        cached?.lqUrl ??
+        thumbLq;
+      thumbUrl = thumbLq;
+      thumbQ = thumbLq ? ("lq" as const) : undefined;
     }
 
     const hasChanges =

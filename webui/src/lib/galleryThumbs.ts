@@ -1,7 +1,11 @@
 import { get, writable } from "svelte/store";
 import { bridge } from "./api";
 import type { GalleryItem } from "./api";
-import { updateGalleryItems } from "./galleryRuntime";
+import {
+  setGalleryThumbHq,
+  clearGalleryThumbHqCache,
+} from "./galleryThumbHqCache";
+import { getGalleryItems } from "./galleryRuntime";
 import { galleryScrolling } from "./galleryScrollState";
 
 /** True mientras corre la hidratación HQ (para estabilizar el chrome de la UI). */
@@ -60,6 +64,7 @@ export function cancelPendingGalleryThumbFlush() {
 export function bumpGalleryThumbHydrationToken(): number {
   galleryThumbHydrationToken++;
   cancelPendingGalleryThumbFlush();
+  clearGalleryThumbHqCache();
   return galleryThumbHydrationToken;
 }
 
@@ -96,27 +101,14 @@ async function flushPendingGalleryThumbs(token: number) {
     return;
   }
 
-  updateGalleryItems((items) => {
-    let changed = false;
-    const next = items.map((x) => {
-      if (x.kind !== "image" && x.kind !== "video") return x;
-      const url = decoded.get(x.path);
-      if (!url) return x;
-      if (x.thumbQuality === "hq" && x.thumbDataUrl === url) return x;
-      changed = true;
-      const lq =
-        x.thumbQuality === "lq" && x.thumbDataUrl
-          ? x.thumbDataUrl
-          : x.thumbLqDataUrl ?? null;
-      return {
-        ...x,
-        thumbLqDataUrl: lq,
-        thumbDataUrl: url,
-        thumbQuality: "hq" as const,
-      };
-    });
-    return changed ? next : items;
-  });
+  for (const [path, url] of decoded) {
+    const it = getGalleryItems().find((x) => x.path === path);
+    const lq =
+      it?.thumbLqDataUrl ??
+      (it?.thumbQuality === "lq" ? it?.thumbDataUrl : null) ??
+      null;
+    setGalleryThumbHq(path, url, lq);
+  }
 
   if (pendingGalleryThumbHq.size > 0) scheduleGalleryThumbFlush(token);
 }

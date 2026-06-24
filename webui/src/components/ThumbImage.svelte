@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { galleryThumbHqFor } from "../lib/galleryThumbHqCache";
+
   /** Miniatura con capas LQ→HQ estilo Google Photos: la LQ permanece hasta que la HQ decodifica. */
+  export let itemPath = "";
   export let thumbDataUrl: string;
   export let thumbQuality: "lq" | "hq" | undefined = undefined;
   export let thumbLqDataUrl: string | null | undefined = null;
@@ -8,8 +11,12 @@
   let hqDecoded = false;
   let trackedHqUrl = "";
 
-  $: hqUrl = thumbQuality === "hq" ? thumbDataUrl : null;
+  $: hqStore = itemPath ? galleryThumbHqFor(itemPath) : null;
+  $: cached = hqStore ? $hqStore : null;
+
+  $: hqUrl = cached?.hqUrl ?? (thumbQuality === "hq" ? thumbDataUrl : null);
   $: lqUrl =
+    cached?.lqUrl ??
     thumbLqDataUrl ??
     (thumbQuality === "lq" ? thumbDataUrl : null);
   /** Sin placeholder LQ: mostrar HQ de inmediato (p. ej. caché del servidor). */

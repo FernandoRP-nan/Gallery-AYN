@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "../lib/i18n";
   import { videoFormatLabel } from "../lib/galleryUtils";
+  import { hasGalleryThumbHq } from "../lib/galleryThumbHqCache";
   import ThumbImage from "./ThumbImage.svelte";
 
   export let it: any;
@@ -96,9 +97,10 @@
     }}
     on:contextmenu={(e) => onGalleryItemContextMenu(e, it)}
   >
-    {#if it.thumbDataUrl}
+    {#if it.thumbDataUrl || (isGalleryMediaKind(it.kind) && hasGalleryThumbHq(it.path))}
       <ThumbImage
-        thumbDataUrl={it.thumbDataUrl}
+        itemPath={it.path}
+        thumbDataUrl={it.thumbDataUrl ?? ""}
         thumbQuality={it.thumbQuality}
         thumbLqDataUrl={it.thumbLqDataUrl}
         freezeTransitions={galleryScrolling || galleryBusy}
