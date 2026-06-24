@@ -471,6 +471,30 @@
     line-height: 1;
     opacity: 0.88;
   }
+.tile-video-format {
+    position: absolute;
+    right: calc(var(--om-space-2) + 1px);
+    bottom: calc(var(--om-space-2) + 1px);
+    z-index: 2;
+    pointer-events: none;
+    padding: 0.14rem 0.42rem;
+    border-radius: 4px;
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    line-height: 1.15;
+    color: #fff;
+    background: rgb(0 0 0 / 0.74);
+    box-shadow: 0 1px 5px rgb(0 0 0 / 0.38);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+.tile:has(.tile__name) .tile-video-format {
+    bottom: calc(max(1.6rem, 20%) + var(--om-space-1));
+  }
+.app.app--tile-no-frame .tile-video-format {
+    right: var(--om-space-1);
+}
 .tile-svg-ph {
     font-size: 0.68rem;
     font-weight: 700;

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
+  import { videoFormatLabel } from '../lib/galleryUtils';
 
   export let galleryGridItems: any[];
   export let gridCellPx: number;
@@ -200,6 +201,12 @@
               </svg>
             {/if}
           </div>
+        {/if}
+        {#if it.kind === "video"}
+          {@const videoFmt = videoFormatLabel(it.path || it.name)}
+          {#if videoFmt}
+            <span class="tile-video-format" aria-hidden="true">{videoFmt}</span>
+          {/if}
         {/if}
         {#if showThumbLabels || !isGalleryMediaKind(it.kind)}<span class="tile__name" class:tile__name--folder={!isGalleryMediaKind(it.kind)}>{it.name}</span>{/if}
       </div>
