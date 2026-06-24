@@ -31,6 +31,7 @@
     setGalleryItems,
     syncSelectedCountFromItems,
     updateGalleryItems,
+    type GalleryState,
   } from "./lib/galleryRuntime";
   import { disposeGalleryThumbs } from "./lib/galleryThumbs";
   import { commitChromePagerState } from "./lib/chromeRemember";
@@ -99,7 +100,7 @@
   let previewZoomCanUndoMove = false;
   let zoomMoveQueue: Array<{ srcPath: string; destPath: string }> = [];
   let zoomMoveWorkerRunning = false;
-  let galleryMoveQueue: Array<{ srcPaths: string[]; destPath: string }> = [];
+  let galleryMoveQueue: GalleryMoveJob[] = [];
   let galleryMoveWorkerRunning = false;
   let galleryDeleteQueue: Array<{ paths: string[] }> = [];
   let galleryDeleteWorkerRunning = false;
@@ -572,6 +573,14 @@
     viewportOffsetPx: number;
   };
 
+  type GalleryMoveJob = {
+    srcPaths: string[];
+    destPath: string;
+    scrollAnchor: GalleryScrollAnchor;
+    prevItems: GalleryItem[];
+    prevState: GalleryState;
+  };
+
   function findGalleryTileByPath(path: string): HTMLElement | null {
     if (!galleryScrollEl || !path) return null;
     for (const tile of galleryScrollEl.querySelectorAll<HTMLElement>("[data-item-path]")) {
@@ -631,6 +640,58 @@
       /* merge ya aplicado */
     }
     await restoreGalleryScrollAnchor(anchor);
+  }
+
+  async function reconcileGalleryMoveSuccess(state: any, nextItems: GalleryItem[]) {
+    mergeGalleryItemsFromApi(nextItems, state);
+    await tick();
+    void galleryWorkspace?.afterGalleryMoveDelta(getGalleryItems(), thumbScale);
+  }
+
+  function createGalleryMoveJobSnapshot(srcPaths: string[]): Omit<GalleryMoveJob, "destPath"> {
+    return {
+      srcPaths,
+      scrollAnchor: captureGalleryScrollAnchor(),
+      prevItems: getGalleryItems(),
+      prevState: { ...getGalleryState() },
+    };
+  }
+
+  function syncGalleryUiAfterRemoval(removedPaths: Set<string>) {
+    const nav = getGalleryNavigablePaths();
+    if (galleryCursorPath && removedPaths.has(galleryCursorPath)) {
+      galleryCursorPath = nav[0] ?? null;
+    }
+    if (destinationsMode) {
+      const last = [...getGalleryItems()].reverse().find((x) => isGalleryMediaKind(x.kind));
+      setSelectedPreviewFromPath(last?.path ?? null);
+    }
+  }
+
+  async function applyOptimisticGalleryRemove(snapshot: Omit<GalleryMoveJob, "destPath">) {
+    const pathSet = new Set(snapshot.srcPaths);
+    const removedMedia = snapshot.prevItems.filter(
+      (x) => isGalleryMediaKind(x.kind) && pathSet.has(x.path)
+    ).length;
+    updateGalleryItems((items) => items.filter((x) => !pathSet.has(x.path)));
+    const s = snapshot.prevState;
+    setGalleryState({
+      ...s,
+      selectedCount: 0,
+      total: Math.max(0, Number(s.total ?? 0) - removedMedia),
+      endIndex: Math.max(0, Number(s.endIndex ?? 0) - removedMedia),
+      totalElements: Math.max(0, Number(s.totalElements ?? s.total ?? 0) - removedMedia),
+    });
+    syncGalleryUiAfterRemoval(pathSet);
+    await tick();
+    await restoreGalleryScrollAnchor(snapshot.scrollAnchor);
+  }
+
+  async function rollbackOptimisticGalleryMove(job: GalleryMoveJob) {
+    setGalleryItems(job.prevItems);
+    setGalleryState(job.prevState);
+    syncGalleryUiAfterRemoval(new Set(job.srcPaths));
+    await restoreGalleryScrollAnchor(job.scrollAnchor);
   }
 
   async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
@@ -1342,12 +1403,19 @@
         galleryMoveQueue = rest;
         try {
           const out = await bridge.destinationMovePaths(job.srcPaths, job.destPath);
-          await applyGalleryItemsDelta(out.state, out.items);
+          const moved = Number(out.moveResult?.moved ?? 0);
+          const errors = Number(out.moveResult?.errors ?? 0);
+          if (errors > 0 || moved < job.srcPaths.length) {
+            await applyGalleryItemsDelta(out.state, out.items);
+          } else {
+            await reconcileGalleryMoveSuccess(out.state, out.items);
+          }
           status = t("status.moveBatchLine")
             .replace("{moved}", String(out.moveResult?.moved ?? 0))
             .replace("{errors}", String(out.moveResult?.errors ?? 0))
             .replace("{queue}", String(galleryMoveQueue.length));
         } catch (e: unknown) {
+          await rollbackOptimisticGalleryMove(job);
           status = e instanceof Error ? e.message : t("status.moveQueueError");
         }
       }
@@ -1382,18 +1450,11 @@
       status = t("status.noImagesToMove");
       return;
     }
-    const selectedSet = new Set(selectedPaths);
-    updateGalleryItems((items) =>
-      items.map((it) =>
-        isGalleryMediaKind(it.kind) && selectedSet.has(it.path) ? { ...it, selected: false } : it
-      )
-    );
-    setGalleryState({
-      ...getGalleryState(),
-      selectedCount: Math.max(0, Number(getGalleryState()?.selectedCount ?? 0) - selectedPaths.length),
-    });
-    galleryMoveQueue = [...galleryMoveQueue, { srcPaths: selectedPaths, destPath: path }];
-    status = t("status.imagesEnqueued")
+    const snapshot = createGalleryMoveJobSnapshot(selectedPaths);
+    await applyOptimisticGalleryRemove(snapshot);
+    const job: GalleryMoveJob = { ...snapshot, destPath: path };
+    galleryMoveQueue = [...galleryMoveQueue, job];
+    status = t("status.imagesMoving")
       .replace("{n}", String(selectedPaths.length))
       .replace("{queue}", String(galleryMoveQueue.length));
     if (!galleryMoveWorkerRunning) {
@@ -2818,12 +2879,21 @@
     if (!galleryItemCtxMenu) return;
     const src = galleryItemCtxMenu.path;
     closeGalleryItemCtxMenu();
+    const snapshot = createGalleryMoveJobSnapshot([src]);
+    await applyOptimisticGalleryRemove(snapshot);
+    const job: GalleryMoveJob = { ...snapshot, destPath };
     try {
       const out = await trackLoad(bridge.galleryMovePath(src, destPath));
-      applyGalleryRefreshFromMove(out.state, out.items);
       const moved = Number(out.moveResult?.moved ?? 0);
-      status = moved > 0 ? t("contextGallery.movedOk") : t("contextGallery.moveFailed");
+      if (moved > 0) {
+        await reconcileGalleryMoveSuccess(out.state, out.items);
+        status = t("contextGallery.movedOk");
+      } else {
+        await rollbackOptimisticGalleryMove(job);
+        status = t("contextGallery.moveFailed");
+      }
     } catch (e: unknown) {
+      await rollbackOptimisticGalleryMove(job);
       status = e instanceof Error ? e.message : t("contextGallery.moveFailed");
     }
   }

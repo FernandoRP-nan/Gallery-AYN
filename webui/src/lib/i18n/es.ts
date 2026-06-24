@@ -222,6 +222,7 @@ export const es = {
     moveQueueError: "Error al procesar cola de movimientos",
     noImagesToMove: "No hay imágenes seleccionadas para mover",
     imagesEnqueued: "Encoladas {n} imágenes · cola {queue}",
+    imagesMoving: "Moviendo {n} archivos · cola {queue}",
     thumbScaleError: "No se pudo aplicar el tamaño de miniaturas",
     markerInvalidPath: "Ruta inválida para marcador",
     selectModalFirst: "Selecciona elementos del modal primero",
