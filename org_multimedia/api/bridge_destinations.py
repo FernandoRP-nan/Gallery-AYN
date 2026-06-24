@@ -168,6 +168,7 @@ class DestinationsBridgeMixin:
         dest_dir.mkdir(parents=True, exist_ok=True)
         moved = 0
         errors = 0
+        moved_paths: list[str] = []
         with self.lock:
             for src in list(self.selected):
                 try:
@@ -177,10 +178,14 @@ class DestinationsBridgeMixin:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(src), str(target))
                     moved += 1
+                    moved_paths.append(str(src))
                 except Exception:
                     errors += 1
             self.selected.clear()
-        data = self.gallery_reload(clear_thumb_cache=False)
+        if errors > 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(moved_paths)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
@@ -190,6 +195,7 @@ class DestinationsBridgeMixin:
         dest_dir.mkdir(parents=True, exist_ok=True)
         moved = 0
         errors = 0
+        moved_paths: list[str] = []
         unique_raw: list[str] = []
         seen: set[str] = set()
         for raw in src_paths or []:
@@ -210,11 +216,15 @@ class DestinationsBridgeMixin:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(src), str(target))
                     moved += 1
+                    moved_paths.append(str(src))
                 except Exception:
                     errors += 1
             moved_src = {Path(x).expanduser().resolve() for x in unique_raw}
             self.selected = {p for p in self.selected if p not in moved_src and p.exists()}
-        data = self.gallery_reload(clear_thumb_cache=False)
+        if errors > 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(moved_paths)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 

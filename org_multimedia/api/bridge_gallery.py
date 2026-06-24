@@ -544,24 +544,52 @@ class GalleryBridgeMixin:
         if not self.gallery_folder:
             return {"state": self._gallery_state(), "items": []}
         with self.lock:
-            prev_unlimited_loaded = int(self.gallery_unlimited_loaded or 0)
-            if clear_thumb_cache:
-                self._clear_thumb_cache()
-            folder = self.gallery_folder
-            self.subfolders = list_subdirs(folder)
-            self.ordered_paths = self._scan_ordered_paths(folder)
-            self._schedule_gallery_total_bytes_recompute()
-            self._clamp_page()
-            if self._is_unlimited_mode():
-                total = len(self.ordered_paths)
-                if self._is_grouped_mode():
-                    self.gallery_unlimited_loaded = total
-                else:
-                    # Preservar cuánto había cargado el usuario (scroll infinito), no resetear al primer lote.
-                    batch = self._unlimited_batch_size()
-                    keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
-                    self.gallery_unlimited_loaded = min(total, max(batch, keep))
+            self._gallery_reindex_core(clear_thumb_cache=clear_thumb_cache)
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
+
+    def _gallery_reindex_core(self, *, clear_thumb_cache: bool) -> None:
+        prev_unlimited_loaded = int(self.gallery_unlimited_loaded or 0)
+        if clear_thumb_cache:
+            self._clear_thumb_cache()
+        folder = self.gallery_folder
+        self.subfolders = list_subdirs(folder)
+        self.ordered_paths = self._scan_ordered_paths(folder)
+        self._schedule_gallery_total_bytes_recompute()
+        self._clamp_page()
+        if self._is_unlimited_mode():
+            total = len(self.ordered_paths)
+            if self._is_grouped_mode():
+                self.gallery_unlimited_loaded = total
+            else:
+                batch = self._unlimited_batch_size()
+                keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
+                self.gallery_unlimited_loaded = min(total, max(batch, keep))
+
+    def gallery_reindex_delta(self, removed_paths: list[str] | None = None) -> dict:
+        """Reindexa metadatos tras quitar archivos; evita serializar toda la rejilla si no hace falta."""
+        if not self.gallery_folder:
+            return {"state": self._gallery_state(), "removedPaths": [], "delta": True}
+        with self.lock:
+            self._gallery_reindex_core(clear_thumb_cache=False)
+            normalized: list[str] = []
+            for raw in removed_paths or []:
+                s = str(raw).strip()
+                if not s:
+                    continue
+                try:
+                    normalized.append(str(Path(s).expanduser().resolve()))
+                except OSError:
+                    normalized.append(s)
+            out: dict = {
+                "state": self._gallery_state(),
+                "removedPaths": normalized,
+                "delta": True,
+            }
+            # Agrupado / línea de tiempo: la estructura de secciones puede cambiar → items completos.
+            if self._is_grouped_mode() or self._is_timeline_mode():
+                out["items"] = self._build_gallery_items()
+                out["delta"] = False
+            return out
 
     def gallery_refresh_items(self) -> dict:
         """Solo reconstruye estado e ítems (sin reescaneo): útil tras toggle de selección."""

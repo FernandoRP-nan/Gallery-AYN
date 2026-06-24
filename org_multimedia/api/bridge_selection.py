@@ -207,16 +207,21 @@ class SelectionBridgeMixin:
         """Elimina del disco las imágenes seleccionadas en la galería."""
         deleted = 0
         errors = 0
+        deleted_paths: list[str] = []
         with self.lock:
             for src in list(self.selected):
                 try:
                     if src.is_file():
                         src.unlink()
                         deleted += 1
+                        deleted_paths.append(str(src))
                 except Exception:
                     errors += 1
             self.selected.clear()
-        data = self.gallery_reload(clear_thumb_cache=False)
+        if errors > 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(deleted_paths)
         data["deleteResult"] = {"deleted": deleted, "errors": errors}
         return data
 
@@ -224,6 +229,7 @@ class SelectionBridgeMixin:
         """Elimina una lista explícita de rutas (p. ej. imagen actual en fullscreen)."""
         deleted = 0
         errors = 0
+        deleted_paths: list[str] = []
         unique_raw = []
         seen: set[str] = set()
         for raw in paths or []:
@@ -239,10 +245,14 @@ class SelectionBridgeMixin:
                     if src.is_file():
                         src.unlink()
                         deleted += 1
+                        deleted_paths.append(str(src))
                 except Exception:
                     errors += 1
             self.selected = {p for p in self.selected if p.exists()}
-        data = self.gallery_reload(clear_thumb_cache=False)
+        if errors > 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(deleted_paths)
         data["deleteResult"] = {"deleted": deleted, "errors": errors}
         return data
 
@@ -250,6 +260,7 @@ class SelectionBridgeMixin:
         """Mueve una sola imagen a un destino desde fullscreen."""
         moved = 0
         errors = 0
+        moved_paths: list[str] = []
         src = Path(src_path).expanduser().resolve()
         dest_dir = Path(dest_path).expanduser().resolve()
         try:
@@ -259,10 +270,14 @@ class SelectionBridgeMixin:
                 if src.resolve() != target.resolve():
                     shutil.move(str(src), str(target))
                     moved = 1
+                    moved_paths.append(str(src))
                     self._last_gallery_move = (target, src)
         except Exception:
             errors = 1
-        data = self.gallery_reload(clear_thumb_cache=False)
+        if errors > 0 or moved == 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(moved_paths)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 

@@ -22,6 +22,7 @@
   import PagerBar from "./components/PagerBar.svelte";
   import PreviewImage from "./components/PreviewImage.svelte";
   import {
+    applyGalleryMutationResponse,
     getGalleryItems,
     getGalleryState,
     mergeGalleryItemsFromApi,
@@ -31,6 +32,7 @@
     setGalleryItems,
     syncSelectedCountFromItems,
     updateGalleryItems,
+    type GalleryMutationResponse,
     type GalleryState,
   } from "./lib/galleryRuntime";
   import { disposeGalleryThumbs } from "./lib/galleryThumbs";
@@ -142,7 +144,7 @@
   let zoomCropStartY = 0;
   let zoomCropCurX = 0;
   let zoomCropCurY = 0;
-  let deferredZoomMoveRefresh: { state: any; items: GalleryItem[] } | null = null;
+  let deferredZoomMoveRefresh: GalleryMutationResponse | null = null;
   let galleryScrollAtTop = true;
   let previewThumbHydrationToken = 0;
   let previewVisible = true;
@@ -629,10 +631,14 @@
     requestAnimationFrame(apply);
   }
 
-  /** Tras mover/eliminar: merge sin recarga total de miniaturas ni salto de scroll. */
-  async function applyGalleryItemsDelta(state: any, nextItems: GalleryItem[]) {
+  /** Tras mover/eliminar: merge o delta sin recarga total de miniaturas ni salto de scroll. */
+  async function applyGalleryItemsDelta(out: GalleryMutationResponse) {
     const anchor = captureGalleryScrollAnchor();
-    mergeGalleryItemsFromApi(nextItems, state);
+    if (Array.isArray(out.items)) {
+      mergeGalleryItemsFromApi(out.items, out.state);
+    } else {
+      applyGalleryMutationResponse(out);
+    }
     try {
       await tick();
       await galleryWorkspace?.afterGalleryMoveDelta(getGalleryItems(), thumbScale);
@@ -642,8 +648,8 @@
     await restoreGalleryScrollAnchor(anchor);
   }
 
-  async function reconcileGalleryMoveSuccess(state: any, nextItems: GalleryItem[]) {
-    mergeGalleryItemsFromApi(nextItems, state);
+  async function reconcileGalleryMoveSuccess(out: GalleryMutationResponse) {
+    applyGalleryMutationResponse(out);
     await tick();
     void galleryWorkspace?.afterGalleryMoveDelta(getGalleryItems(), thumbScale);
   }
@@ -1406,9 +1412,9 @@
           const moved = Number(out.moveResult?.moved ?? 0);
           const errors = Number(out.moveResult?.errors ?? 0);
           if (errors > 0 || moved < job.srcPaths.length) {
-            await applyGalleryItemsDelta(out.state, out.items);
+            await applyGalleryItemsDelta(out);
           } else {
-            await reconcileGalleryMoveSuccess(out.state, out.items);
+            await reconcileGalleryMoveSuccess(out);
           }
           status = t("status.moveBatchLine")
             .replace("{moved}", String(out.moveResult?.moved ?? 0))
@@ -1767,7 +1773,7 @@
         galleryDeleteQueue = rest;
         try {
           const out = await bridge.galleryDeletePaths(job.paths);
-          await applyGalleryItemsDelta(out.state ?? getGalleryState(), out.items ?? getGalleryItems());
+          await applyGalleryItemsDelta(out);
           if (previewOpen) {
             const valid = new Set(
               (out.items ?? []).filter((x: GalleryItem) => isGalleryMediaKind(x.kind)).map((x: GalleryItem) => x.path)
@@ -1881,8 +1887,8 @@
       .catch(() => undefined);
   }
 
-  function applyGalleryRefreshFromMove(state: any, nextItems: GalleryItem[]) {
-    void applyGalleryItemsDelta(state, nextItems);
+  function applyGalleryRefreshFromMove(out: GalleryMutationResponse) {
+    void applyGalleryItemsDelta(out);
   }
 
   function startPreviewLongPress(path: string) {
@@ -2395,9 +2401,14 @@
           const out = await bridge.galleryMovePath(job.srcPath, job.destPath);
           if (previewZoomOpen) {
             // Evita refrescar la grilla detrás del fullscreen en cada movimiento.
-            deferredZoomMoveRefresh = { state: out.state, items: out.items };
+            deferredZoomMoveRefresh = {
+              state: out.state,
+              items: out.items,
+              removedPaths: out.removedPaths,
+              delta: out.delta,
+            };
           } else {
-            applyGalleryRefreshFromMove(out.state, out.items);
+            applyGalleryRefreshFromMove(out);
           }
           const moved = Number(out.moveResult?.moved ?? 0);
           const errors = Number(out.moveResult?.errors ?? 0);
@@ -3069,7 +3080,7 @@
   }
 
   $: if (!previewZoomOpen && deferredZoomMoveRefresh) {
-    applyGalleryRefreshFromMove(deferredZoomMoveRefresh.state, deferredZoomMoveRefresh.items);
+    void applyGalleryItemsDelta(deferredZoomMoveRefresh);
     deferredZoomMoveRefresh = null;
   }
 

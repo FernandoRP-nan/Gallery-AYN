@@ -2,6 +2,13 @@ import { get, writable } from "svelte/store";
 import type { GalleryItem } from "./api";
 import { countSelectedMedia, mergeItemsKeepingBestThumb } from "./galleryUtils";
 
+export type GalleryMutationResponse = {
+  state?: GalleryState;
+  items?: GalleryItem[];
+  removedPaths?: string[];
+  delta?: boolean;
+};
+
 export type GalleryState = {
   page: number;
   totalPages: number;
@@ -68,6 +75,48 @@ export function mergeGalleryItemsFromApi(nextItems: GalleryItem[], state?: Galle
   } else {
     syncSelectedCountFromItems();
   }
+}
+
+/** Elimina rutas del store local y sincroniza metadatos (respuesta delta del API). */
+function pruneOrphanGallerySections(items: GalleryItem[]): GalleryItem[] {
+  const out: GalleryItem[] = [];
+  let pendingSection: GalleryItem | null = null;
+  for (const it of items) {
+    if (it.kind === "section" || it.kind === "day_break") {
+      pendingSection = it;
+      continue;
+    }
+    if (pendingSection) {
+      out.push(pendingSection);
+      pendingSection = null;
+    }
+    out.push(it);
+  }
+  return out;
+}
+
+export function applyGalleryRemovePathsDelta(state: GalleryState, removedPaths: string[]) {
+  const removed = new Set(removedPaths.filter(Boolean));
+  if (removed.size === 0) {
+    setGalleryStateFromApi(state);
+    return;
+  }
+  updateGalleryItems((items) =>
+    pruneOrphanGallerySections(items.filter((x) => !removed.has(x.path)))
+  );
+  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
+}
+
+export function applyGalleryMutationResponse(out: GalleryMutationResponse) {
+  if (out?.delta && Array.isArray(out.removedPaths) && !out.items) {
+    if (out.state) applyGalleryRemovePathsDelta(out.state, out.removedPaths);
+    return;
+  }
+  if (Array.isArray(out?.items)) {
+    mergeGalleryItemsFromApi(out.items, out.state);
+    return;
+  }
+  if (out?.state) setGalleryStateFromApi(out.state);
 }
 
 export function syncSelectedCountFromItems() {
