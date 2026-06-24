@@ -11,6 +11,8 @@ export type GalleryItem = {
   /** Tinte de fondo (#rrggbb) según color medio de la sección (agrupar por carpeta). */
   sectionTintHex?: string;
   thumbDataUrl?: string | null;
+  /** Placeholder LQ conservado durante el crossfade a HQ. */
+  thumbLqDataUrl?: string | null;
   thumbQuality?: "lq" | "hq";
   selected?: boolean;
   /** Miniaturas del contenido interior (solo kind === "folder", hasta 4 elementos). */

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
   import { videoFormatLabel } from '../lib/galleryUtils';
+  import ThumbImage from './ThumbImage.svelte';
 
   export let galleryGridItems: any[];
   export let gridCellPx: number;
@@ -151,13 +152,11 @@
         on:contextmenu={(e) => onGalleryItemContextMenu(e, it)}
       >
         {#if it.thumbDataUrl}
-          <img
-            src={it.thumbDataUrl}
-            alt=""
-            class:thumb--lq={it.thumbQuality === "lq"}
-            draggable={false}
-            loading={it.thumbQuality === "lq" ? "eager" : "lazy"}
-            decoding="async"
+          <ThumbImage
+            thumbDataUrl={it.thumbDataUrl}
+            thumbQuality={it.thumbQuality}
+            thumbLqDataUrl={it.thumbLqDataUrl}
+            freezeTransitions={galleryScrolling || galleryBusy}
           />
         {:else if it.kind === "folder" && it.folderPreviewUrls && it.folderPreviewUrls.length > 0}
           <!-- Mosaico de miniaturas del contenido de la carpeta -->
@@ -418,7 +417,6 @@
     border-left-color: transparent;
     border-right-color: transparent;
     box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
-    backdrop-filter: blur(10px);
     overflow-x: auto;
     overflow-y: hidden;
     box-sizing: border-box;

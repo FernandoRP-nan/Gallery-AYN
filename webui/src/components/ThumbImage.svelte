@@ -1,0 +1,55 @@
+<script lang="ts">
+  /** Miniatura con capas LQ→HQ estilo Google Photos: la LQ permanece hasta que la HQ decodifica. */
+  export let thumbDataUrl: string;
+  export let thumbQuality: "lq" | "hq" | undefined = undefined;
+  export let thumbLqDataUrl: string | null | undefined = null;
+  export let freezeTransitions = false;
+
+  let hqDecoded = false;
+  let trackedHqUrl = "";
+
+  $: hqUrl = thumbQuality === "hq" ? thumbDataUrl : null;
+  $: lqUrl =
+    thumbLqDataUrl ??
+    (thumbQuality === "lq" ? thumbDataUrl : null);
+  /** Sin placeholder LQ: mostrar HQ de inmediato (p. ej. caché del servidor). */
+  $: hqImmediate = Boolean(hqUrl) && !lqUrl;
+
+  $: if (hqUrl !== trackedHqUrl) {
+    trackedHqUrl = hqUrl ?? "";
+    hqDecoded = hqImmediate;
+  }
+
+  function onHqLoad() {
+    hqDecoded = true;
+  }
+</script>
+
+<div
+  class="thumb-stack"
+  class:thumb-stack--freeze={freezeTransitions}
+  class:thumb-stack--hq-ready={hqDecoded && Boolean(hqUrl)}
+>
+  {#if lqUrl && (!hqUrl || !hqDecoded)}
+    <img
+      class="thumb-stack__lq"
+      src={lqUrl}
+      alt=""
+      draggable={false}
+      loading="eager"
+      decoding="async"
+    />
+  {/if}
+  {#if hqUrl}
+    <img
+      class="thumb-stack__hq"
+      class:thumb-stack__hq--visible={hqDecoded}
+      src={hqUrl}
+      alt=""
+      draggable={false}
+      loading="lazy"
+      decoding="async"
+      on:load={onHqLoad}
+    />
+  {/if}
+</div>

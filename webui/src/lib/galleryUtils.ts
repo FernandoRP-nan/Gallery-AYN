@@ -35,16 +35,19 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
 
     let thumbUrl = it.thumbDataUrl;
     let thumbQ = it.thumbQuality;
+    let thumbLq = it.thumbLqDataUrl ?? prev.thumbLqDataUrl ?? null;
 
     if (prevScore > nextScore && prev.thumbDataUrl) {
       thumbUrl = prev.thumbDataUrl;
       thumbQ = prev.thumbQuality ?? "hq";
+      thumbLq = prev.thumbLqDataUrl ?? thumbLq;
     }
 
     const hasChanges =
       Boolean(prev.selected) !== Boolean(it.selected) ||
       prev.thumbDataUrl !== thumbUrl ||
       prev.thumbQuality !== thumbQ ||
+      prev.thumbLqDataUrl !== thumbLq ||
       prev.name !== it.name ||
       prev.kind !== it.kind;
 
@@ -54,6 +57,7 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
       ...prev,
       selected: it.selected,
       thumbDataUrl: thumbUrl,
+      thumbLqDataUrl: thumbLq,
       thumbQuality: thumbQ,
       name: it.name,
       kind: it.kind,

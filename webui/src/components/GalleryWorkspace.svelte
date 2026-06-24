@@ -22,6 +22,7 @@
     hydrateGalleryThumbsHq,
   } from "../lib/galleryThumbs";
   import { galleryChromeBusy } from "../lib/chromeRemember";
+  import { galleryScrolling as galleryScrollingStore } from "../lib/galleryScrollState";
   import {
     countSelectedMedia,
     expandTimelineDayBreaks,
@@ -213,11 +214,13 @@
     const el = e.currentTarget as HTMLElement | null;
     if (!el) return;
     galleryScrolling = true;
+    galleryScrollingStore.set(true);
     if (galleryScrollIdleTimer !== null) clearTimeout(galleryScrollIdleTimer);
     galleryScrollIdleTimer = setTimeout(() => {
       galleryScrolling = false;
+      galleryScrollingStore.set(false);
       galleryScrollIdleTimer = null;
-    }, 200);
+    }, 280);
     if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
     if (!nearBottom) return;
@@ -435,6 +438,7 @@
   onDestroy(() => {
     if (galleryScrollIdleTimer !== null) clearTimeout(galleryScrollIdleTimer);
     if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
+    galleryScrollingStore.set(false);
     galleryChromeBusy.set(false);
     disposeGalleryThumbs();
   });

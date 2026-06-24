@@ -199,7 +199,6 @@
     border-left-color: transparent;
     border-right-color: transparent;
     box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
-    backdrop-filter: blur(10px);
     overflow-x: auto;
     overflow-y: hidden;
     box-sizing: border-box;
@@ -283,6 +282,10 @@
     box-sizing: border-box;
     /* Estabiliza el aspect-ratio del contenedor para evitar bucles de redibujado */
     aspect-ratio: 1;
+    /* Virtualización CSS: omite pintura fuera del viewport (estilo Google Photos). */
+    content-visibility: auto;
+    contain-intrinsic-size: auto var(--cell, 120px);
+    contain: layout style paint;
     -webkit-user-select: none;
     user-select: none;
     background: linear-gradient(180deg, var(--om-surface-3) 0%, var(--om-surface-2) 100%);
@@ -348,6 +351,8 @@
     opacity: 1;
   }
 .tile.tile--active img,
+  .tile.tile--active .thumb-stack__lq,
+  .tile.tile--active .thumb-stack__hq,
   .tile.tile--active .folder-ph {
     /* Tinte azul real sobre el contenido (funciona igual en LQ/HQ). */
     filter: sepia(0.38) hue-rotate(168deg) saturate(1.85) contrast(1.1) brightness(1.04);
@@ -373,16 +378,26 @@
 .gallery--range-selecting .tile,
   .gallery--range-selecting .tile.selected img,
   .gallery--range-selecting .tile.selected .folder-ph,
+  .gallery--range-selecting .tile.selected .thumb-stack__lq,
+  .gallery--range-selecting .tile.selected .thumb-stack__hq,
   .gallery--scrolling .tile,
   .gallery--scrolling .tile img,
   .gallery--scrolling .tile .folder-ph,
+  .gallery--scrolling .tile .thumb-stack,
+  .gallery--scrolling .tile .thumb-stack__lq,
+  .gallery--scrolling .tile .thumb-stack__hq,
   .gallery--busy .tile,
   .gallery--busy .tile img,
-  .gallery--busy .tile .folder-ph {
+  .gallery--busy .tile .folder-ph,
+  .gallery--busy .tile .thumb-stack,
+  .gallery--busy .tile .thumb-stack__lq,
+  .gallery--busy .tile .thumb-stack__hq {
     transition: none;
   }
 .tile.selected img,
-  .tile.selected .folder-ph {
+  .tile.selected .folder-ph,
+  .tile.selected .thumb-stack__lq,
+  .tile.selected .thumb-stack__hq {
     transform: scale(0.9);
     transform-origin: center;
     transition: transform var(--om-transition);
@@ -394,6 +409,45 @@
     object-fit: cover;
     border-radius: var(--thumb-image-radius, var(--om-radius-sm));
     display: block;
+  }
+/* Capas LQ/HQ: crossfade sin cambiar src en un solo <img>. */
+  .thumb-stack {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: var(--thumb-image-radius, var(--om-radius-sm));
+    background: color-mix(in oklab, var(--om-surface-2) 80%, transparent);
+  }
+.thumb-stack__lq,
+  .thumb-stack__hq {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+    display: block;
+  }
+.thumb-stack__lq {
+    filter: blur(8px) saturate(0.85) contrast(0.92);
+    transform: scale(1.04);
+    opacity: 0.92;
+    z-index: 1;
+  }
+.thumb-stack__hq {
+    opacity: 0;
+    z-index: 2;
+    transition: opacity 0.24s ease;
+  }
+.thumb-stack__hq--visible,
+  .thumb-stack--hq-ready .thumb-stack__hq {
+    opacity: 1;
+  }
+.thumb-stack--freeze .thumb-stack__lq,
+  .thumb-stack--freeze .thumb-stack__hq {
+    transition: none;
   }
 .thumb--lq {
     filter: blur(8px) saturate(0.85) contrast(0.92);
@@ -453,9 +507,7 @@
     font-size: 0.7rem;
     line-height: 1.2;
     color: var(--om-text-primary);
-    background: linear-gradient(180deg, rgb(7 8 14 / 0.2) 0%, rgb(7 8 14 / 0.74) 100%);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    background: linear-gradient(180deg, rgb(7 8 14 / 0.38) 0%, rgb(7 8 14 / 0.82) 100%);
     box-sizing: border-box;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -484,10 +536,8 @@
     letter-spacing: 0.05em;
     line-height: 1.15;
     color: #fff;
-    background: rgb(0 0 0 / 0.74);
+    background: rgb(0 0 0 / 0.78);
     box-shadow: 0 1px 5px rgb(0 0 0 / 0.38);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
   }
 .tile:has(.tile__name) .tile-video-format {
     bottom: calc(max(1.6rem, 20%) + var(--om-space-1));

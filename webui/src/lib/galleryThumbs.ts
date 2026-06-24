@@ -1,7 +1,8 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { bridge } from "./api";
 import type { GalleryItem } from "./api";
 import { updateGalleryItems } from "./galleryRuntime";
+import { galleryScrolling } from "./galleryScrollState";
 
 /** True mientras corre la hidratación HQ (para estabilizar el chrome de la UI). */
 export const galleryThumbHydrating = writable(false);
@@ -10,7 +11,9 @@ let galleryThumbHydrationToken = 0;
 let pendingGalleryThumbHq = new Map<string, string>();
 let galleryThumbFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let galleryThumbFlushToken = 0;
-const THUMB_FLUSH_MS = 72;
+/** Intervalo de lote al aplicar HQ (ms). */
+const THUMB_FLUSH_MS = 96;
+const THUMB_FLUSH_SCROLL_RETRY_MS = 120;
 
 function prioritizePathsByViewport(paths: string[], selector: string, attrName: string): string[] {
   const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
@@ -35,6 +38,17 @@ function prioritizePathsByViewport(paths: string[], selector: string, attrName: 
   return [...visible, ...rest];
 }
 
+/** Precarga/decodifica data-URLs antes de tocar el DOM (evita parpadeo al cambiar src). */
+function preloadDataUrl(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.decoding = "async";
+    img.src = url;
+  });
+}
+
 export function cancelPendingGalleryThumbFlush() {
   pendingGalleryThumbHq.clear();
   if (galleryThumbFlushTimer !== null) {
@@ -53,35 +67,67 @@ export function getGalleryThumbHydrationToken(): number {
   return galleryThumbHydrationToken;
 }
 
-function flushPendingGalleryThumbs(token: number) {
+async function flushPendingGalleryThumbs(token: number) {
   if (galleryThumbHydrationToken !== token) {
     pendingGalleryThumbHq.clear();
     return;
   }
   if (pendingGalleryThumbHq.size === 0) return;
+
+  // Durante scroll activo: posponer el lote para no competir con el compositor.
+  if (get(galleryScrolling)) {
+    scheduleGalleryThumbFlush(token, THUMB_FLUSH_SCROLL_RETRY_MS);
+    return;
+  }
+
   const batch = pendingGalleryThumbHq;
   pendingGalleryThumbHq = new Map();
+
+  const decoded = new Map<string, string>();
+  await Promise.all(
+    [...batch.entries()].map(async ([path, url]) => {
+      if (await preloadDataUrl(url)) decoded.set(path, url);
+      else pendingGalleryThumbHq.set(path, url);
+    })
+  );
+
+  if (decoded.size === 0) {
+    if (pendingGalleryThumbHq.size > 0) scheduleGalleryThumbFlush(token);
+    return;
+  }
+
   updateGalleryItems((items) => {
     let changed = false;
     const next = items.map((x) => {
       if (x.kind !== "image" && x.kind !== "video") return x;
-      const url = batch.get(x.path);
+      const url = decoded.get(x.path);
       if (!url) return x;
       if (x.thumbQuality === "hq" && x.thumbDataUrl === url) return x;
       changed = true;
-      return { ...x, thumbDataUrl: url, thumbQuality: "hq" as const };
+      const lq =
+        x.thumbQuality === "lq" && x.thumbDataUrl
+          ? x.thumbDataUrl
+          : x.thumbLqDataUrl ?? null;
+      return {
+        ...x,
+        thumbLqDataUrl: lq,
+        thumbDataUrl: url,
+        thumbQuality: "hq" as const,
+      };
     });
     return changed ? next : items;
   });
+
+  if (pendingGalleryThumbHq.size > 0) scheduleGalleryThumbFlush(token);
 }
 
-function scheduleGalleryThumbFlush(token: number) {
+function scheduleGalleryThumbFlush(token: number, delayMs = THUMB_FLUSH_MS) {
   if (galleryThumbFlushTimer !== null) return;
   galleryThumbFlushToken = token;
   galleryThumbFlushTimer = setTimeout(() => {
     galleryThumbFlushTimer = null;
-    flushPendingGalleryThumbs(galleryThumbFlushToken);
-  }, THUMB_FLUSH_MS);
+    void flushPendingGalleryThumbs(galleryThumbFlushToken);
+  }, delayMs);
 }
 
 function queueGalleryThumbHq(path: string, thumbDataUrl: string, token: number) {
@@ -123,7 +169,7 @@ export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: num
       clearTimeout(galleryThumbFlushTimer);
       galleryThumbFlushTimer = null;
     }
-    flushPendingGalleryThumbs(token);
+    await flushPendingGalleryThumbs(token);
   } finally {
     galleryThumbHydrating.set(false);
   }

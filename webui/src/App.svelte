@@ -20,6 +20,7 @@
   import { galleryGridCellPx } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
   import PagerBar from "./components/PagerBar.svelte";
+  import PreviewImage from "./components/PreviewImage.svelte";
   import {
     getGalleryItems,
     getGalleryState,
@@ -52,6 +53,7 @@
     path: string;
     name: string;
     dataUrl: string | null;
+    placeholderUrl?: string | null;
     mediaType?: "image" | "video" | "svg";
     fileUrl?: string | null;
   } | null = null;
@@ -980,10 +982,12 @@
     const isSvg = row.path.toLowerCase().endsWith(".svg");
     const fallbackUrl =
       isVideo || isSvg ? buildMediaFileUrl(row.path) : null;
+    const thumbPlaceholder = row.thumbDataUrl ?? null;
     selectedPreview = {
       path: row.path,
       name: row.name,
-      dataUrl: isVideo ? null : row.thumbDataUrl ?? null,
+      dataUrl: isVideo ? null : thumbPlaceholder,
+      placeholderUrl: isVideo ? null : thumbPlaceholder,
       mediaType: isVideo ? "video" : isSvg ? "svg" : "image",
       fileUrl: isVideo ? null : fallbackUrl,
     };
@@ -3277,8 +3281,12 @@
                 src={selectedPreview.fileUrl}
                 alt={selectedPreview.name}
               />
-            {:else if selectedPreview?.dataUrl}
-              <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
+            {:else if selectedPreview?.dataUrl || selectedPreview?.placeholderUrl}
+              <PreviewImage
+                placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl}
+                fullUrl={selectedPreview.dataUrl}
+                alt={selectedPreview.name}
+              />
             {:else}
               <div class="preview__empty">{t("preview.emptySelect")}</div>
             {/if}
