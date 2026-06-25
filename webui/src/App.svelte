@@ -2480,7 +2480,13 @@
   function syncZoomMediaTransform() {
     const tf = buildZoomImgTransform();
     if (zoomImgEl) zoomImgEl.style.transform = tf;
-    if (zoomVideoEl && previewZoomMediaType === "video") zoomVideoEl.style.transform = tf;
+    if (zoomVideoEl && previewZoomMediaType === "video") {
+      if (previewZoomMode === "fit" && previewZoomScale === 1 && previewPanX === 0 && previewPanY === 0) {
+        zoomVideoEl.style.transform = "translate(-50%, -50%)";
+      } else {
+        zoomVideoEl.style.transform = tf;
+      }
+    }
   }
 
   function zoomStep(delta: number) {
@@ -2541,7 +2547,7 @@
   }
 
   // Siempre mantenemos pan dentro de los límites reales del DOM (overflow vs stage).
-  $: if (previewZoomOpen && !previewPanDrag && zoomStageEl && (zoomImgEl || zoomVideoEl)) {
+  $: if (previewZoomOpen && !previewPanDrag && zoomStageEl && zoomImgEl) {
     clampPanToStage();
     if (previewFillWidthAlignPending) {
       alignFillWidthToTop();
@@ -2551,7 +2557,19 @@
   $: zoomImgTransform = buildZoomImgTransform();
 
   // Aplica transform al DOM cuando cambia escala/pan (excepto durante drag activo).
-  $: if (previewZoomOpen && !previewPanDrag && (zoomImgEl || zoomVideoEl)) {
+  $: if (previewZoomOpen && !previewPanDrag && zoomImgEl) {
+    syncZoomMediaTransform();
+  }
+
+  // Vídeo en modo fit: sin transform reactivo (evita parpadeos con controles nativos).
+  $: if (
+    previewZoomOpen &&
+    !previewPanDrag &&
+    zoomVideoEl &&
+    previewZoomMediaType === "video" &&
+    previewZoomMode === "fillWidth"
+  ) {
+    clampPanToStage();
     syncZoomMediaTransform();
   }
 
@@ -2703,7 +2721,7 @@
     if (previewZoomMediaType === "video") return;
     if (zoomCropMode) return;
     const el = e.target as HTMLElement;
-    if (el.closest("button, a, video, .zoom-dest-chips, .zoom-mini")) return;
+    if (el.closest("button, a, video, .zoom-modal__dest-bar, .zoom-mini")) return;
     // Si la imagen no desborda el stage, no hay nada que “panear”.
     const limits = getPanLimits();
     if (limits.x <= 0.5 && limits.y <= 0.5) return;
@@ -2767,6 +2785,21 @@
       previewPanMoved = false;
       return;
     }
+    toggleZoomCarousel();
+  }
+
+  /** Clic en el área del vídeo (no en la banda de controles nativos) alterna el carrusel. */
+  function onZoomVideoClick(e: MouseEvent) {
+    e.stopPropagation();
+    if (zoomCropMode) return;
+    if (previewPanMoved) {
+      previewPanMoved = false;
+      return;
+    }
+    const video = e.currentTarget as HTMLVideoElement;
+    const rect = video.getBoundingClientRect();
+    const controlsBandPx = 56;
+    if (e.clientY > rect.bottom - controlsBandPx) return;
     toggleZoomCarousel();
   }
 
@@ -5005,6 +5038,7 @@
     {endPan}
     {onZoomStageClick}
     {onZoomImageClick}
+    {onZoomVideoClick}
     {onZoomVideoMeta}
     {onZoomVideoError}
     onZoomVideoCanPlay={onZoomVideoCanPlay}
