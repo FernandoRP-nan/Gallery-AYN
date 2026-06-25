@@ -9,6 +9,15 @@
   import { normalizePathForApi, buildMediaFileUrl } from "./lib/pathUtils";
   import { copyTextToClipboard } from "./lib/clipboardText";
   import { mergePreviewApiResult } from "./lib/previewUtils";
+  import {
+    computeMiniMapImageLayout,
+    computeMiniMapRectStyle,
+    computeMiniMapSize,
+    computeViewportNorm,
+    miniMapHasOverflow,
+    miniMapPointToNorm,
+    panFromMiniMapNorm,
+  } from "./lib/zoomMiniMap";
   import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, type MediaPlaybackInfo } from "./lib/mediaUrl";
   import {
     formatVideoDiagnosticReport,
@@ -21,6 +30,7 @@
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
   import PagerBar from "./components/PagerBar.svelte";
   import PreviewZoomPanel from "./components/PreviewZoomPanel.svelte";
+  import PreviewVideoIdle from "./components/PreviewVideoIdle.svelte";
   import {
     applyGalleryMutationResponse,
     getGalleryItems,
@@ -130,6 +140,9 @@
   let previewZoomPath = "";
   let previewZoomName = "";
   let previewZoomDataUrl: string | null = null;
+  /** Miniatura estable para el minimapa (no cambia al alternar resolución nativa). */
+  let previewZoomMiniSrc: string | null = null;
+  let miniMapDrag = false;
   let previewZoomScale = 1;
   let previewZoomMode: "fit" | "fillWidth" = "fit";
   let previewFillWidthAlignPending = false;
@@ -170,6 +183,14 @@
   let previewVideoPlayback: MediaPlaybackInfo | null = null;
   let previewZoomPlayback: MediaPlaybackInfo | null = null;
   let previewVideoPreparing = false;
+  /** true tras pulsar reproducir; evita precargar al seleccionar o saltar entre vídeos. */
+  let previewVideoArmed = false;
+  let previewVideoSession = 0;
+  let previewZoomVideoArmed = false;
+  let previewZoomVideoSession = 0;
+  let previewZoomVideoPreparing = false;
+  let previewZoomThumbUrl: string | null = null;
+  let videoTranscodeJobs: Array<{ id: string; path: string; name: string; format: string }> = [];
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
@@ -369,6 +390,12 @@
       list.push({
         id: "organizer",
         label: orgDetail ? `${t("pager.processOrganizer")}: ${orgDetail}` : t("pager.processOrganizer"),
+      });
+    }
+    for (const job of videoTranscodeJobs) {
+      list.push({
+        id: `transcode-${job.id}`,
+        label: `${t("pager.processVideoTranscode")}: ${job.name}`,
       });
     }
     return list;
@@ -1344,11 +1371,13 @@
     const isSvg = row.path.toLowerCase().endsWith(".svg");
     const fallbackUrl = isVideo ? null : buildMediaFileUrl(row.path);
     const thumbPlaceholder = row.thumbDataUrl ?? null;
+    previewVideoSession += 1;
+    previewVideoArmed = false;
     selectedPreview = {
       path: row.path,
       name: row.name,
       dataUrl: isVideo ? null : thumbPlaceholder,
-      placeholderUrl: isVideo ? null : thumbPlaceholder,
+      placeholderUrl: thumbPlaceholder,
       mediaType: isVideo ? "video" : isSvg ? "svg" : "image",
       fileUrl: isVideo ? null : fallbackUrl,
     };
@@ -1358,9 +1387,9 @@
     previewVideoTriedUrls = [];
     previewVideoSrc = isVideo ? "" : fallbackUrl ?? "";
     previewVideoPlayback = null;
-    previewVideoPreparing = isVideo;
+    previewVideoPreparing = false;
     previewVideoDiagLoading = false;
-    if (isVideo || isSvg) {
+    if (isSvg) {
       void resolveMediaPlaybackInfo(row.path)
         .then((info) => {
           if (!selectedPreview || selectedPreview.path !== row.path) return;
@@ -1369,41 +1398,69 @@
           if (!url) return;
           if (!sameMediaUrl(previewVideoSrc, url)) previewVideoSrc = url;
           rememberPreviewVideoUrl(url);
-          previewVideoPreparing = Boolean(
-            info.needsTranscode &&
-              info.transcodeUrl &&
-              sameMediaUrl(url, info.transcodeUrl) &&
-              !info.playbackViaBlob
-          );
           selectedPreview = {
             ...selectedPreview,
             fileUrl: url,
-            mediaType: isVideo ? "video" : "svg",
+            mediaType: "svg",
           };
         })
         .catch(() => {
           if (!selectedPreview || selectedPreview.path !== row.path || !fallbackUrl) return;
           previewVideoSrc = fallbackUrl;
-          previewVideoPreparing = false;
           selectedPreview = { ...selectedPreview, fileUrl: fallbackUrl };
         });
     }
-    requestAnimationFrame(() => {
-      bridge
-        .galleryPreview(row.path, 1200, 900)
-        .then((pr) => {
-          selectedPreview = mergePreviewApiResult(selectedPreview ?? {}, pr, row.path, row.kind);
-          if (selectedPreview.mediaType === "video" || selectedPreview.mediaType === "svg") {
-            const nextUrl = selectedPreview.fileUrl ?? previewVideoSrc;
-            if (nextUrl && !sameMediaUrl(nextUrl, previewVideoSrc)) {
-              if (!isDataPlaybackUrl(previewVideoSrc) || isDataPlaybackUrl(nextUrl)) {
-                previewVideoSrc = nextUrl;
-              }
-            }
-          }
-        })
-        .catch(() => undefined);
-    });
+    if (!isVideo) {
+      requestAnimationFrame(() => {
+        bridge
+          .galleryPreview(row.path, 1200, 900)
+          .then((pr) => {
+            selectedPreview = mergePreviewApiResult(selectedPreview ?? {}, pr, row.path, row.kind);
+          })
+          .catch(() => undefined);
+      });
+    }
+  }
+
+  async function startPreviewVideoPlayback() {
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (!path || selectedPreview?.mediaType !== "video") return;
+    const session = ++previewVideoSession;
+    previewVideoArmed = true;
+    previewVideoPreparing = true;
+    previewVideoError = "";
+    previewVideoErrorDetails = "";
+    try {
+      const info = await resolveMediaPlaybackInfo(path, { warm: true, tryBlob: true });
+      if (session !== previewVideoSession || selectedPreview?.path !== path) return;
+      previewVideoPlayback = info;
+      const url = pickInitialPlaybackUrl(info);
+      if (url) {
+        previewVideoSrc = url;
+        rememberPreviewVideoUrl(url);
+      }
+      previewVideoPreparing = Boolean(
+        info.needsTranscode &&
+          info.transcodeUrl &&
+          url &&
+          sameMediaUrl(url, info.transcodeUrl) &&
+          !info.playbackViaBlob
+      );
+      selectedPreview = { ...selectedPreview, fileUrl: url ?? null };
+    } catch {
+      if (session !== previewVideoSession) return;
+      previewVideoPreparing = false;
+      previewVideoError = t("preview.videoPlaybackError");
+    }
+  }
+
+  async function pollVideoTranscodeJobs() {
+    try {
+      const out = await bridge.galleryTranscodeActive();
+      videoTranscodeJobs = out?.jobs ?? [];
+    } catch {
+      videoTranscodeJobs = [];
+    }
   }
 
   function buildPreviewVideoErrorCopyText(): string {
@@ -2065,12 +2122,17 @@
     // Importante: no mostrar el thumbnail "cuadrado" (recortado) como si fuera la imagen completa.
     // La vista principal debe venir de `galleryPreview` (contain) para garantizar que en "Completa" se vea 100% sin recortes.
     previewZoomDataUrl = null;
+    previewZoomMiniSrc = it.thumbDataUrl ?? null;
     previewZoomMediaType =
       it.kind === "video" ? "video" : it.path.toLowerCase().endsWith(".svg") ? "svg" : "image";
+    previewZoomThumbUrl = it.thumbDataUrl ?? null;
+    previewZoomVideoArmed = false;
+    previewZoomVideoPreparing = false;
+    previewZoomVideoSession += 1;
     const zoomFallbackUrl = buildMediaFileUrl(it.path);
-    previewZoomFileUrl = zoomFallbackUrl;
+    previewZoomFileUrl = previewZoomMediaType === "svg" ? zoomFallbackUrl : null;
     previewZoomPlayback = null;
-    if (previewZoomMediaType === "video" || previewZoomMediaType === "svg") {
+    if (previewZoomMediaType === "svg") {
       void resolveMediaPlaybackInfo(it.path)
         .then((info) => {
           if (previewZoomOpen && previewZoomPath === it.path) {
@@ -2103,33 +2165,56 @@
         z.path === path ? { ...z, thumbDataUrl, thumbQuality: "hq" as const } : z
       );
     });
-    bridge
-      .galleryPreview(it.path, 2200, 1600)
-      .then((pr) => {
-        if (previewZoomOpen && previewZoomPath === it.path) {
-          const merged = mergePreviewApiResult(
-            {
-              path: it.path,
-              name: it.name,
-              mediaType: previewZoomMediaType,
-              fileUrl: previewZoomFileUrl,
-              dataUrl: previewZoomDataUrl,
-            },
-            pr,
-            it.path,
-            it.kind
-          );
-          previewZoomMediaType = merged.mediaType ?? previewZoomMediaType;
-          const nextUrl = merged.fileUrl ?? previewZoomFileUrl;
-          if (nextUrl) {
-            if (!isDataPlaybackUrl(previewZoomFileUrl) || isDataPlaybackUrl(nextUrl)) {
-              previewZoomFileUrl = nextUrl;
+    if (previewZoomMediaType !== "video") {
+      bridge
+        .galleryPreview(it.path, 2200, 1600)
+        .then((pr) => {
+          if (previewZoomOpen && previewZoomPath === it.path) {
+            const merged = mergePreviewApiResult(
+              {
+                path: it.path,
+                name: it.name,
+                mediaType: previewZoomMediaType,
+                fileUrl: previewZoomFileUrl,
+                dataUrl: previewZoomDataUrl,
+              },
+              pr,
+              it.path,
+              it.kind
+            );
+            previewZoomMediaType = merged.mediaType ?? previewZoomMediaType;
+            const nextUrl = merged.fileUrl ?? previewZoomFileUrl;
+            if (nextUrl) {
+              if (!isDataPlaybackUrl(previewZoomFileUrl) || isDataPlaybackUrl(nextUrl)) {
+                previewZoomFileUrl = nextUrl;
+              }
             }
+            previewZoomDataUrl = merged.dataUrl ?? previewZoomDataUrl;
+            if (merged.dataUrl) previewZoomMiniSrc = merged.dataUrl;
           }
-          previewZoomDataUrl = merged.dataUrl ?? previewZoomDataUrl;
-        }
-      })
-      .catch(() => undefined);
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  async function startZoomVideoPlayback() {
+    const path = String(previewZoomPath ?? "").trim();
+    if (!path || previewZoomMediaType !== "video") return;
+    const session = ++previewZoomVideoSession;
+    previewZoomVideoArmed = true;
+    previewZoomVideoPreparing = true;
+    try {
+      const info = await resolveMediaPlaybackInfo(path, { warm: true, tryBlob: true });
+      if (session !== previewZoomVideoSession || previewZoomPath !== path || !previewZoomOpen) return;
+      previewZoomPlayback = info;
+      const url = pickInitialPlaybackUrl(info);
+      if (url) previewZoomFileUrl = url;
+    } catch {
+      if (session !== previewZoomVideoSession) return;
+      previewZoomFileUrl = buildMediaFileUrl(path);
+    } finally {
+      if (session === previewZoomVideoSession) previewZoomVideoPreparing = false;
+    }
   }
 
   function applyGalleryRefreshFromMove(out: GalleryMutationResponse) {
@@ -2695,6 +2780,21 @@
     }
     clampPanToStage();
     syncZoomMediaTransform();
+    if (previewZoomMode === "fillWidth" && zoomStageEl) {
+      const sr = zoomStageEl.getBoundingClientRect();
+      if (
+        miniMapHasOverflow(
+          previewZoomMode,
+          previewZoomScale,
+          sr.width,
+          sr.height,
+          previewZoomNaturalW,
+          previewZoomNaturalH
+        )
+      ) {
+        touchZoomHud();
+      }
+    }
   }
 
   function onZoomVideoMeta() {
@@ -2760,44 +2860,129 @@
     zoomHudVisible = true;
     if (zoomHudTimer) clearTimeout(zoomHudTimer);
     zoomHudTimer = setTimeout(() => {
-      zoomHudVisible = false;
-    }, 1200);
+      if (!previewPanPointerDown && !previewPanDrag && !miniMapDrag) {
+        zoomHudVisible = false;
+      }
+    }, 2600);
   }
 
-  $: zoomMiniRect = (() => {
-    if (previewPanDrag) return zoomMiniRect;
-    // dependencias reactivas explícitas
-    const _deps = [previewZoomScale, previewPanX, previewPanY, previewZoomMode, previewZoomPath];
-    void _deps;
-    if (!zoomStageEl || !zoomImgEl || !zoomMiniEl) return "display:none;";
+  function navigateFromMiniMap(e: PointerEvent) {
+    if (previewZoomMediaType !== "image" || !zoomStageEl || !zoomMiniEl) return;
+    e.preventDefault();
+    e.stopPropagation();
     const sr = zoomStageEl.getBoundingClientRect();
-    const cr = zoomMiniEl.getBoundingClientRect();
-    const cw = Math.max(1, cr.width);
-    const ch = Math.max(1, cr.height);
-    const nW = Math.max(1, previewZoomNaturalW);
-    const nH = Math.max(1, previewZoomNaturalH);
+    const mr = zoomMiniEl.getBoundingClientRect();
+    const { width, height } = computeMiniMapSize(
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      sr.width,
+      sr.height
+    );
+    const layout = computeMiniMapImageLayout(width, height, previewZoomNaturalW, previewZoomNaturalH);
+    const norm = miniMapPointToNorm(layout, e.clientX - mr.left, e.clientY - mr.top);
+    if (!norm) return;
+    const next = panFromMiniMapNorm(
+      previewZoomMode,
+      previewZoomScale,
+      previewPanX,
+      previewPanY,
+      sr.width,
+      sr.height,
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      norm.normX,
+      norm.normY
+    );
+    previewPanX = next.panX;
+    previewPanY = next.panY;
+    syncZoomMediaTransform();
+    touchZoomHud();
+  }
 
-    // La miniatura usa object-fit: contain dentro del contenedor.
-    const miniScale = Math.min(cw / nW, ch / nH);
-    const imgW = nW * miniScale;
-    const imgH = nH * miniScale;
-    const ox = (cw - imgW) / 2;
-    const oy = (ch - imgH) / 2;
+  function beginMiniMapPan(e: PointerEvent) {
+    if (previewZoomMediaType !== "image") return;
+    miniMapDrag = true;
+    navigateFromMiniMap(e);
+    zoomMiniEl?.setPointerCapture?.(e.pointerId);
+  }
 
-    // Fallback general (funciona bien cuando ya hay zoom o pan).
-    const ir = zoomImgEl.getBoundingClientRect();
-    const iw = Math.max(1, ir.width);
-    const ih = Math.max(1, ir.height);
-    const x0 = Math.max(0, Math.min(1, (sr.left - ir.left) / iw));
-    const y0 = Math.max(0, Math.min(1, (sr.top - ir.top) / ih));
-    const x1 = Math.max(0, Math.min(1, (sr.right - ir.left) / iw));
-    const y1 = Math.max(0, Math.min(1, (sr.bottom - ir.top) / ih));
+  function moveMiniMapPan(e: PointerEvent) {
+    if (!miniMapDrag) return;
+    navigateFromMiniMap(e);
+  }
 
-    const left = ox + x0 * imgW;
-    const top = oy + y0 * imgH;
-    const width = Math.max(3, (x1 - x0) * imgW);
-    const height = Math.max(3, (y1 - y0) * imgH);
-    return `left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
+  function endMiniMapPan(e: PointerEvent) {
+    if (!miniMapDrag) return;
+    miniMapDrag = false;
+    zoomMiniEl?.releasePointerCapture?.(e.pointerId);
+    touchZoomHud();
+  }
+
+  $: zoomMiniMapStyle = (() => {
+    const _deps = [previewZoomNaturalW, previewZoomNaturalH, previewZoomPath];
+    void _deps;
+    if (!zoomStageEl || previewZoomNaturalW <= 1) {
+      return "width:130px;height:88px;";
+    }
+    const sr = zoomStageEl.getBoundingClientRect();
+    const { width, height } = computeMiniMapSize(
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      sr.width,
+      sr.height
+    );
+    return `width:${width}px;height:${height}px;`;
+  })();
+
+  $: zoomMiniActive =
+    previewZoomMediaType === "image" &&
+    previewZoomNaturalW > 1 &&
+    Boolean(zoomStageEl) &&
+    (() => {
+      const sr = zoomStageEl!.getBoundingClientRect();
+      return miniMapHasOverflow(
+        previewZoomMode,
+        previewZoomScale,
+        sr.width,
+        sr.height,
+        previewZoomNaturalW,
+        previewZoomNaturalH
+      );
+    })() &&
+    (zoomHudVisible || previewPanDrag || previewPanPointerDown || miniMapDrag);
+
+  $: zoomMiniRect = (() => {
+    const _deps = [
+      previewZoomScale,
+      previewPanX,
+      previewPanY,
+      previewZoomMode,
+      previewZoomPath,
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      zoomMiniMapStyle,
+    ];
+    void _deps;
+    if (!zoomStageEl || previewZoomNaturalW <= 1) return "display:none;";
+    const sr = zoomStageEl.getBoundingClientRect();
+    const { width, height } = computeMiniMapSize(
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      sr.width,
+      sr.height
+    );
+    const layout = computeMiniMapImageLayout(width, height, previewZoomNaturalW, previewZoomNaturalH);
+    const viewport = computeViewportNorm(
+      previewZoomMode,
+      previewZoomScale,
+      previewPanX,
+      previewPanY,
+      sr.width,
+      sr.height,
+      previewZoomNaturalW,
+      previewZoomNaturalH
+    );
+    return computeMiniMapRectStyle(layout, viewport);
   })();
 
   const saveThumbScale = async () => {
@@ -3444,6 +3629,7 @@
     }
     pollTimer = window.setInterval(() => {
       pollOrganizer().catch(() => undefined);
+      pollVideoTranscodeJobs().catch(() => undefined);
     }, 1100);
   });
 
@@ -3789,7 +3975,7 @@
 
           <aside class="preview om-panel app-chrome app-chrome--preview">
             {#if selectedPreview?.mediaType === "video"}
-              {#if previewVideoSrc || selectedPreview?.fileUrl}
+              {#if previewVideoArmed && (previewVideoSrc || selectedPreview?.fileUrl)}
                 <!-- svelte-ignore a11y_media_has_caption -->
                 {#key mediaUrlKey(previewVideoSrc || selectedPreview?.fileUrl || "")}
                   <video
@@ -3797,12 +3983,19 @@
                     src={previewVideoSrc || selectedPreview.fileUrl}
                     controls
                     playsinline
-                    preload="auto"
+                    preload="metadata"
                     on:loadstart={onPreviewVideoLoadStart}
                     on:error={onPreviewVideoError}
                     on:canplay={onPreviewVideoCanPlay}
                   ></video>
                 {/key}
+              {:else}
+                <PreviewVideoIdle
+                  posterUrl={selectedPreview.placeholderUrl ?? null}
+                  name={selectedPreview.name}
+                  preparing={previewVideoPreparing}
+                  onPlay={() => void startPreviewVideoPlayback()}
+                />
               {/if}
               {#if previewVideoPreparing || previewVideoError}
                 <div
@@ -4416,6 +4609,12 @@
     bind:zoomImgTransform
     bind:zoomHudVisible
     bind:zoomMiniRect
+    {zoomMiniMapStyle}
+    {zoomMiniActive}
+    {previewZoomMiniSrc}
+    {beginMiniMapPan}
+    {moveMiniMapPan}
+    {endMiniMapPan}
     bind:zoomCropMarqueeStyle
     bind:destToolbarItems={destToolbarVisibleItems}
     {destToolbarCanGoBack}
@@ -4463,6 +4662,10 @@
     {onDestChipDragEnd}
     {onDestDrop}
     {openPreviewZoom}
+    previewZoomVideoArmed={previewZoomVideoArmed}
+    previewZoomThumbUrl={previewZoomThumbUrl}
+    previewZoomVideoPreparing={previewZoomVideoPreparing}
+    onZoomVideoPlay={() => void startZoomVideoPlayback()}
   />
 </main>
 

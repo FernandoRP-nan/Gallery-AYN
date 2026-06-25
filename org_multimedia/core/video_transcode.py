@@ -11,6 +11,31 @@ from pathlib import Path
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
+_TRANSCODE_SEM = threading.Semaphore(1)
+_WARM_TOKENS: set[str] = set()
+_WARM_GUARD = threading.Lock()
+_ACTIVE_JOBS: dict[str, dict[str, str]] = {}
+_ACTIVE_GUARD = threading.Lock()
+
+
+def list_active_transcode_jobs() -> list[dict[str, str]]:
+    with _ACTIVE_GUARD:
+        return list(_ACTIVE_JOBS.values())
+
+
+def _set_active_job(token: str, source: Path, fmt: str) -> None:
+    with _ACTIVE_GUARD:
+        _ACTIVE_JOBS[token] = {
+            "id": token,
+            "path": str(source),
+            "name": source.name,
+            "format": fmt,
+        }
+
+
+def _clear_active_job(token: str) -> None:
+    with _ACTIVE_GUARD:
+        _ACTIVE_JOBS.pop(token, None)
 
 
 def transcode_cache_dir() -> Path:
@@ -260,10 +285,15 @@ def ensure_transcoded_webm(source: Path) -> Path:
     if _webm_cache_valid(out):
         return out
     token = out.stem
-    with _lock_for(token):
-        if _webm_cache_valid(out):
-            return out
-        _transcode_to_webm(source.resolve(), out)
+    with _TRANSCODE_SEM:
+        with _lock_for(token):
+            if _webm_cache_valid(out):
+                return out
+            _set_active_job(token, source.resolve(), "webm")
+            try:
+                _transcode_to_webm(source.resolve(), out)
+            finally:
+                _clear_active_job(token)
     return out
 
 
@@ -302,13 +332,25 @@ def publish_mp4_playback_name(source: Path) -> str:
 
 
 def warm_webm_transcode_async(source: Path) -> None:
-    _remember_webm_source(source)
+    resolved = source.resolve()
+    _remember_webm_source(resolved)
+    out = transcode_webm_output_path(resolved)
+    if _webm_cache_valid(out):
+        return
+    token = out.stem
+    with _WARM_GUARD:
+        if token in _WARM_TOKENS:
+            return
+        _WARM_TOKENS.add(token)
 
     def _worker() -> None:
         try:
-            ensure_transcoded_webm(source.resolve())
+            ensure_transcoded_webm(resolved)
         except Exception:
             pass
+        finally:
+            with _WARM_GUARD:
+                _WARM_TOKENS.discard(token)
 
     threading.Thread(target=_worker, daemon=True, name="om-transcode-webm-warm").start()
 
@@ -319,10 +361,15 @@ def ensure_transcoded_mp4(source: Path) -> Path:
     if out.is_file() and out.stat().st_size > 512:
         return out
     token = out.stem
-    with _lock_for(token):
-        if out.is_file() and out.stat().st_size > 512:
-            return out
-        _transcode_to_mp4(source.resolve(), out)
+    with _TRANSCODE_SEM:
+        with _lock_for(token):
+            if out.is_file() and out.stat().st_size > 512:
+                return out
+            _set_active_job(token, source.resolve(), "mp4")
+            try:
+                _transcode_to_mp4(source.resolve(), out)
+            finally:
+                _clear_active_job(token)
     return out
 
 
@@ -350,12 +397,24 @@ def resolve_transcode_source(filename: str) -> Path | None:
 
 def warm_transcode_async(source: Path) -> None:
     """Precalienta la caché de transcodificación sin bloquear la UI."""
-    _remember_transcode_source(source)
+    resolved = source.resolve()
+    _remember_transcode_source(resolved)
+    out = transcode_output_path(resolved)
+    if out.is_file() and out.stat().st_size > 512:
+        return
+    token = out.stem
+    with _WARM_GUARD:
+        if token in _WARM_TOKENS:
+            return
+        _WARM_TOKENS.add(token)
 
     def _worker() -> None:
         try:
-            ensure_transcoded_mp4(source.resolve())
+            ensure_transcoded_mp4(resolved)
         except Exception:
             pass
+        finally:
+            with _WARM_GUARD:
+                _WARM_TOKENS.discard(token)
 
     threading.Thread(target=_worker, daemon=True, name="om-transcode-warm").start()

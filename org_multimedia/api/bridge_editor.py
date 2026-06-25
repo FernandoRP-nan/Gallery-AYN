@@ -208,7 +208,7 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
         return None
 
 class EditorBridgeMixin:
-    def gallery_media_url(self, path: str) -> dict:
+    def gallery_media_url(self, path: str, warm: bool = False) -> dict:
         """URL de streaming para vídeo/SVG (ruta corta /om-media/…)."""
         from ..core.fs_path import resolve_file_path
 
@@ -218,7 +218,8 @@ class EditorBridgeMixin:
             return {"path": path, "fileUrl": None, "mimeType": None}
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
-            warm_viewer_playback_async(p)
+            if warm:
+                warm_viewer_playback_async(p)
             cache = viewer_playback_cache_status(p)
             return {
                 "path": str(p),
@@ -239,6 +240,12 @@ class EditorBridgeMixin:
                 "mimeType": "image/svg+xml",
             }
         return {"path": str(p), "fileUrl": None, "transcodeUrl": None, "needsTranscode": False, "mimeType": None}
+
+    def gallery_transcode_active(self) -> dict:
+        from ..core.video_transcode import list_active_transcode_jobs
+
+        jobs = list_active_transcode_jobs()
+        return {"jobs": jobs, "count": len(jobs)}
 
     def gallery_video_diagnostics(self, path: str, test_transcode: bool = False) -> dict:
         """Diagnóstico detallado cuando falla la reproducción en el visor integrado."""
@@ -299,7 +306,6 @@ class EditorBridgeMixin:
             }
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
-            warm_viewer_playback_async(p)
             cache = viewer_playback_cache_status(p)
             return {
                 "path": str(p),

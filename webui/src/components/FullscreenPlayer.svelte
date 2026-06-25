@@ -2,6 +2,7 @@
   import { t } from '../lib/i18n';
   import type { DestToolbarItem } from '../lib/itemTree';
   import { pickImageDisplaySrc } from '../lib/imageZoomView';
+  import PreviewVideoIdle from './PreviewVideoIdle.svelte';
 
   // Bindings y estado
   export let previewZoomOpen: boolean;
@@ -18,6 +19,12 @@
   export let zoomImgTransform: string;
   export let zoomHudVisible: boolean;
   export let zoomMiniRect: string;
+  export let zoomMiniMapStyle: string;
+  export let zoomMiniActive: boolean;
+  export let previewZoomMiniSrc: string | null;
+  export let beginMiniMapPan: (e: PointerEvent) => void;
+  export let moveMiniMapPan: (e: PointerEvent) => void;
+  export let endMiniMapPan: (e: PointerEvent) => void;
   export let zoomCropMarqueeStyle: string | null;
   export let destToolbarItems: DestToolbarItem[] = [];
   export let destToolbarCanGoBack = false;
@@ -69,6 +76,10 @@
   export let onDestChipDragEnd: () => void;
   export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
   export let openPreviewZoom: (it: any, opts: any) => void;
+  export let previewZoomVideoArmed = false;
+  export let previewZoomThumbUrl: string | null = null;
+  export let previewZoomVideoPreparing = false;
+  export let onZoomVideoPlay: () => void;
 
   $: previewZoomImageSrc =
     previewZoomMediaType === "image"
@@ -211,7 +222,7 @@
         </div>
       </header>
       <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
-        {#if (previewZoomMediaType === "video" && previewZoomFileUrl) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
+        {#if (previewZoomMediaType === "video" && (previewZoomVideoArmed ? previewZoomFileUrl : previewZoomThumbUrl)) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
@@ -225,7 +236,15 @@
             on:pointercancel={endPan}
             on:click={onZoomStageClick}
           >
-            {#if previewZoomMediaType === "video" && previewZoomFileUrl}
+            {#if previewZoomMediaType === "video" && !previewZoomVideoArmed}
+              <PreviewVideoIdle
+                posterUrl={previewZoomThumbUrl}
+                name={previewZoomName}
+                preparing={previewZoomVideoPreparing}
+                compact={true}
+                onPlay={onZoomVideoPlay}
+              />
+            {:else if previewZoomMediaType === "video" && previewZoomFileUrl}
               <!-- svelte-ignore a11y_media_has_caption -->
               <video
                 class="zoom-modal__img"
@@ -236,7 +255,7 @@
                 src={previewZoomFileUrl}
                 controls
                 playsinline
-                preload="auto"
+                preload="metadata"
                 on:loadedmetadata={onZoomVideoMeta}
                 on:error={onZoomVideoError}
               ></video>
@@ -265,13 +284,24 @@
                 on:load={onZoomImageLoad}
               />
             {/if}
-            {#if zoomHudVisible && !previewPanDrag}
-              <div class="zoom-mini" bind:this={zoomMiniEl}>
+            {#if zoomMiniActive && (previewZoomMiniSrc || previewZoomDataUrl)}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="zoom-mini"
+                style={zoomMiniMapStyle}
+                bind:this={zoomMiniEl}
+                role="application"
+                aria-label={t("zoom.miniMapAria")}
+                on:pointerdown={beginMiniMapPan}
+                on:pointermove={moveMiniMapPan}
+                on:pointerup={endMiniMapPan}
+                on:pointercancel={endMiniMapPan}
+                on:click|stopPropagation
+              >
                 <img
-                  src={previewZoomMediaType === "svg"
-                    ? previewZoomFileUrl
-                    : previewZoomImageSrc ?? previewZoomDataUrl}
+                  src={previewZoomMiniSrc ?? previewZoomDataUrl ?? ""}
                   alt=""
+                  decoding="async"
                 />
                 <div class="zoom-mini__rect" style={zoomMiniRect}></div>
               </div>
@@ -616,14 +646,17 @@
     position: absolute;
     right: 12px;
     bottom: 12px;
-    width: 130px;
-    height: 88px;
+    max-width: min(200px, 24vw);
+    max-height: min(380px, 58vh);
     border-radius: var(--om-radius-sm);
     overflow: hidden;
     border: 1px solid rgb(255 255 255 / 0.28);
-    background: rgb(7 8 15 / 0.72);
+    background: rgb(7 8 15 / 0.82);
     box-shadow: 0 10px 22px rgb(0 0 0 / 0.45);
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: crosshair;
+    touch-action: none;
+    z-index: 4;
   }
 .zoom-mini img {
     width: 100%;
@@ -632,6 +665,9 @@
     display: block;
     filter: saturate(0.92);
     background: rgb(0 0 0 / 0.28);
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
   }
 .zoom-mini__rect {
     position: absolute;

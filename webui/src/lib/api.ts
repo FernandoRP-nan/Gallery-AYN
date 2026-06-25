@@ -105,6 +105,7 @@ const devMockApi: WebApi = {
     needsTranscode: false,
     mimeType: null as string | null,
   }),
+  gallery_transcode_active: async () => ({ jobs: [] as Array<{ id: string; path: string; name: string; format: string }>, count: 0 }),
   gallery_video_playback_blob: async () => ({ ok: false, error: "mock" }),
   gallery_video_diagnostics: async () => ({
     path: "",
@@ -238,7 +239,9 @@ export const bridge = {
   galleryInvertSelection: () => call<any>("gallery_invert_selection"),
   galleryPreview: (path: string, width: number, height: number) =>
     call<any>("gallery_preview", normalizePathForApi(path), width, height),
-  galleryMediaUrl: (path: string) => call<any>("gallery_media_url", normalizePathForApi(path)),
+  galleryMediaUrl: (path: string, warm = false) =>
+    call<any>("gallery_media_url", normalizePathForApi(path), warm),
+  galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string }>; count: number }>("gallery_transcode_active"),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
   galleryVideoPlaybackBlob: (path: string) =>

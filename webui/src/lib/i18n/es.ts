@@ -129,6 +129,7 @@ export const es = {
     processDeleteQueue: "Eliminando archivos ({n} en cola)",
     processZoomMove: "Moviendo desde visor ({n} en cola)",
     processOrganizer: "Organizando",
+    processVideoTranscode: "Transcodificando vídeo",
   },
   preview: {
     closeDestAria: "Cerrar vista previa del destino",
@@ -140,6 +141,7 @@ export const es = {
     videoCodecError:
       "Este vídeo no se pudo reproducir en el visor integrado. Prueba «Abrir con reproductor del sistema».",
     videoTranscoding: "Preparando vídeo para el visor integrado (la primera vez puede tardar un poco)…",
+    videoPlayTitle: "Reproducir vídeo (transcodifica si hace falta)",
     videoOpenExternal: "Abrir con reproductor del sistema",
     videoOpenExternalOk: "Abriendo con la aplicación predeterminada…",
     videoOpenExternalError: "No se pudo abrir el vídeo externamente",
@@ -457,6 +459,7 @@ export const es = {
     destinationsBtn: "Destinos",
     deleteCurrentTitle: "Eliminar imagen actual",
     stageAria: "Área de zoom y arrastre",
+    miniMapAria: "Minimapa: clic o arrastre para desplazar la vista",
     carouselAria: "Carrusel de miniaturas",
     previewLoading: "Cargando…",
   },

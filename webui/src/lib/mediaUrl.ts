@@ -44,14 +44,17 @@ async function resolveBlobPlaybackUrl(path: string, streamUrl: string): Promise<
   return null;
 }
 
-export async function resolveMediaPlaybackInfo(path: string): Promise<MediaPlaybackInfo> {
-  const out = await bridge.galleryMediaUrl(normalizePathForApi(path));
+export async function resolveMediaPlaybackInfo(
+  path: string,
+  opts?: { warm?: boolean; tryBlob?: boolean }
+): Promise<MediaPlaybackInfo> {
+  const out = await bridge.galleryMediaUrl(normalizePathForApi(path), Boolean(opts?.warm));
   const fileUrl = absolutizeMediaUrl(String(out?.fileUrl ?? ""));
   let transcodeUrl = absolutizeMediaUrl(String(out?.transcodeUrl ?? ""));
   const needsTranscode = Boolean(out?.needsTranscode);
   let playbackViaBlob = false;
 
-  if (needsTranscode && pywebviewActive()) {
+  if (needsTranscode && pywebviewActive() && opts?.tryBlob) {
     const dataUrl = await resolveBlobPlaybackUrl(path, transcodeUrl);
     if (dataUrl) {
       transcodeUrl = dataUrl;
