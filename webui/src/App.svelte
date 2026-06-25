@@ -19,7 +19,8 @@
     panFromMiniMapNorm,
   } from "./lib/zoomMiniMap";
   import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
-  import { canTranscodeVideo, tryAutoplayVideo } from "./lib/videoPlayback";
+  import { canTranscodeVideo, tryAutoplayVideo, waitForTranscodeCache } from "./lib/videoPlayback";
+  import { transcodeProgressForPath } from "./lib/videoTranscodeUi";
   import { scheduleNextZoomVideoWarm, cancelZoomVideoWarm } from "./lib/videoCarouselWarm";
   import {
     formatVideoDiagnosticReport,
@@ -245,6 +246,9 @@
   let deferredZoomMoveRefresh: GalleryMutationResponse | null = null;
   let galleryScrollAtTop = true;
   let previewVisible = true;
+  /** Vista previa visible antes de abrir fullscreen; null = no había zoom abierto. */
+  let previewVisibleBeforeZoom: boolean | null = null;
+  let prevPreviewZoomOpen = false;
   let destinationsMode = false;
   let folderBackStack: string[] = [];
   let folderForwardStack: string[] = [];
@@ -446,9 +450,50 @@
     return list;
   })();
 
-  $: if (!previewZoomOpen) {
-    cancelZoomCarouselHydration();
+  $: previewZoomTranscodeProgress = (() => {
+    if (!previewZoomVideoPreparing) return null;
+    const jobPct = transcodeProgressForPath(previewZoomPath, videoTranscodeJobs);
+    if (jobPct !== null) return jobPct;
+    if (previewZoomFileUrl) return 100;
+    return 0;
+  })();
+
+  function stopZoomVideoElement() {
+    const el = zoomVideoEl;
+    if (!el) return;
+    try {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function teardownPreviewZoom() {
+    const path = String(previewZoomPath ?? "").trim();
+    previewZoomVideoSession += 1;
+    stopVideoPreparePoll();
     cancelZoomVideoWarm();
+    cancelZoomCarouselHydration();
+    stopZoomVideoElement();
+    previewZoomVideoArmed = false;
+    previewZoomVideoLaunching = false;
+    previewZoomVideoPlayLocked = false;
+    previewZoomVideoPreparing = false;
+    previewZoomFileUrl = null;
+    previewPanPointerDown = false;
+    previewPanDrag = false;
+    previewPanMoved = false;
+    if (confirmDeleteOpen) closeConfirmDelete();
+    if (path) {
+      try {
+        await bridge.galleryTranscodeCancel(normalizePathForApi(path));
+      } catch {
+        /* ignore */
+      }
+      void pollVideoTranscodeJobs();
+    }
   }
 
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
@@ -2375,13 +2420,18 @@
     previewZoomVideoStatus = t("preview.videoStarting");
     previewZoomFileUrl = null;
 
-    void runZoomVideoPlayback(path);
+    void runZoomVideoPlayback(path, previewZoomVideoSession);
   }
 
-  async function runZoomVideoPlayback(pathAtStart: string) {
+  async function runZoomVideoPlayback(pathAtStart: string, sessionAtStart: number) {
+    const isZoomVideoActive = () =>
+      previewZoomOpen &&
+      previewZoomPath === pathAtStart &&
+      previewZoomVideoSession === sessionAtStart;
+
     try {
       const info = await resolveMediaPlaybackInfo(pathAtStart, { warm: true, tryBlob: false });
-      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+      if (!isZoomVideoActive()) return;
 
       if (!canTranscodeVideo(info)) {
         previewZoomVideoPlayLocked = false;
@@ -2390,6 +2440,34 @@
         previewZoomVideoPreparing = false;
         status = t("preview.videoFfmpegMissing");
         return;
+      }
+
+      previewZoomPlayback = info;
+      previewZoomVideoLaunching = false;
+      const needsTranscodeWait = Boolean(info.needsTranscode && !info.transcodeCached);
+
+      if (needsTranscodeWait) {
+        previewZoomVideoPreparing = true;
+        previewZoomFileUrl = null;
+        void pollVideoTranscodeJobs();
+        startVideoPreparePoll();
+
+        const ready = await waitForTranscodeCache(
+          pathAtStart,
+          () => !isZoomVideoActive()
+        );
+        if (!isZoomVideoActive()) return;
+        if (!ready) {
+          stopVideoPreparePoll();
+          previewZoomVideoPlayLocked = false;
+          previewZoomVideoLaunching = false;
+          previewZoomVideoArmed = false;
+          previewZoomVideoPreparing = false;
+          status = t("preview.videoTranscodeTimeout");
+          return;
+        }
+        stopVideoPreparePoll();
+        void pollVideoTranscodeJobs();
       }
 
       const url = pickInitialPlaybackUrl(info);
@@ -2401,17 +2479,17 @@
         return;
       }
 
-      previewZoomVideoLaunching = false;
-      previewZoomPlayback = info;
       previewZoomFileUrl = url;
-      previewZoomVideoStatus = playbackPrepareMessage(info);
-      previewZoomVideoPreparing = Boolean(info.needsTranscode && !info.transcodeCached);
-      void pollVideoTranscodeJobs();
-      if (previewZoomVideoPreparing) startVideoPreparePoll();
-      else previewZoomVideoPlayLocked = false;
-      void tick().then(() => tryAutoplayVideo(zoomVideoEl));
+      if (!needsTranscodeWait) {
+        previewZoomVideoPreparing = false;
+        previewZoomVideoPlayLocked = false;
+      }
+      void tick().then(() => {
+        if (!isZoomVideoActive()) return;
+        tryAutoplayVideo(zoomVideoEl);
+      });
     } catch {
-      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+      if (!isZoomVideoActive()) return;
       previewZoomVideoPlayLocked = false;
       previewZoomVideoLaunching = false;
       previewZoomVideoArmed = false;
@@ -2423,6 +2501,7 @@
   function onZoomVideoCanPlay() {
     previewZoomVideoPreparing = false;
     previewZoomVideoPlayLocked = false;
+    previewZoomVideoLaunching = false;
     stopVideoPreparePoll();
     tryAutoplayVideo(zoomVideoEl);
   }
@@ -2817,6 +2896,13 @@
   async function moveCurrentZoomToDestination(destPath: string) {
     if (!previewZoomPath) return;
     const currentPath = previewZoomPath;
+    stopZoomVideoElement();
+    previewZoomVideoSession += 1;
+    previewZoomVideoArmed = false;
+    previewZoomVideoLaunching = false;
+    previewZoomVideoPlayLocked = false;
+    previewZoomVideoPreparing = false;
+    previewZoomFileUrl = null;
     const currentIdx = zoomNavItems.findIndex((x) => x.path === currentPath);
     const remainingNav = zoomNavItems.filter((x) => x.path !== currentPath);
     // Fluidez: avanzar de inmediato en fullscreen y procesar move en cola.
@@ -3655,7 +3741,7 @@
             .replace("{errPart}", "")
             .replace("{queue}", "0");
         } catch (e: unknown) {
-          status = e instanceof Error ? e.message : t("contextGallery.renameError");
+          status = e instanceof Error ? e.message : t("status.deleteQueueError");
         }
       },
       { confirmLabel: t("contextGallery.confirmDeleteBtn") }
@@ -3917,6 +4003,18 @@
 
   $: if (!previewZoomOpen) {
     previewZoomSkipMoveConfirm = false;
+  }
+
+  $: {
+    if (previewZoomOpen && !prevPreviewZoomOpen) {
+      previewVisibleBeforeZoom = previewVisible;
+      if (previewVisible) previewVisible = false;
+    } else if (!previewZoomOpen && prevPreviewZoomOpen) {
+      if (previewVisibleBeforeZoom) previewVisible = true;
+      previewVisibleBeforeZoom = null;
+      void teardownPreviewZoom();
+    }
+    prevPreviewZoomOpen = previewZoomOpen;
   }
 
   $: if (previewZoomOpen && previewZoomCarouselVisible && zoomCarouselEl && previewZoomPath) {
@@ -5059,7 +5157,7 @@
     previewZoomVideoPlayLocked={previewZoomVideoPlayLocked}
     previewZoomThumbUrl={previewZoomThumbUrl}
     previewZoomVideoPreparing={previewZoomVideoPreparing}
-    previewZoomVideoStatus={previewZoomVideoStatus}
+    previewZoomTranscodeProgress={previewZoomTranscodeProgress}
     onZoomVideoPlay={requestZoomVideoPlay}
   />
 </main>

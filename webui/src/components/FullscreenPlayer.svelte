@@ -3,6 +3,8 @@
   import type { DestToolbarItem } from '../lib/itemTree';
   import { pickImageDisplaySrc } from '../lib/imageZoomView';
   import PreviewVideoIdle from './PreviewVideoIdle.svelte';
+  import VideoTranscodeOverlay from './VideoTranscodeOverlay.svelte';
+  import { onDestroy } from 'svelte';
 
   // Bindings y estado
   export let previewZoomOpen: boolean;
@@ -83,6 +85,7 @@
   export let previewZoomVideoPlayLocked = false;
   export let previewZoomThumbUrl: string | null = null;
   export let previewZoomVideoPreparing = false;
+  export let previewZoomTranscodeProgress: number | null = null;
   export let previewZoomVideoStatus = "";
   export let onZoomVideoPlay: () => void;
 
@@ -95,6 +98,18 @@
           previewZoomDataUrl
         )
       : null;
+
+  onDestroy(() => {
+    if (zoomVideoEl) {
+      try {
+        zoomVideoEl.pause();
+        zoomVideoEl.removeAttribute("src");
+        zoomVideoEl.load();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
 </script>
 
 {#if previewZoomOpen}
@@ -229,7 +244,7 @@
         </div>
       </header>
       <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
-        {#if (previewZoomMediaType === "video" && (previewZoomVideoArmed ? previewZoomFileUrl : previewZoomThumbUrl)) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
+        {#if (previewZoomMediaType === "video" && (previewZoomThumbUrl || previewZoomFileUrl || previewZoomVideoArmed || previewZoomVideoLaunching || previewZoomVideoPlayLocked)) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
@@ -243,7 +258,20 @@
             on:pointercancel={endPan}
             on:click={onZoomStageClick}
           >
-            {#if previewZoomMediaType === "video" && !previewZoomVideoArmed && !previewZoomVideoLaunching && !previewZoomVideoPlayLocked}
+            {#if previewZoomMediaType === "video" && previewZoomVideoPreparing && !previewZoomVideoArmed && !previewZoomVideoLaunching && !previewZoomVideoPlayLocked}
+              <div class="zoom-modal__video-shell zoom-modal__video-shell--preparing">
+                {#if previewZoomThumbUrl}
+                  <img
+                    class="zoom-modal__video-poster"
+                    src={previewZoomThumbUrl}
+                    alt=""
+                    decoding="async"
+                    draggable={false}
+                  />
+                {/if}
+                <VideoTranscodeOverlay progress={previewZoomTranscodeProgress} />
+              </div>
+            {:else if previewZoomMediaType === "video" && !previewZoomVideoArmed && !previewZoomVideoLaunching && !previewZoomVideoPlayLocked}
               <PreviewVideoIdle
                 posterUrl={previewZoomThumbUrl}
                 name={previewZoomName}
@@ -254,31 +282,42 @@
                 onPlay={onZoomVideoPlay}
               />
             {:else if previewZoomMediaType === "video" && (previewZoomVideoArmed || previewZoomVideoLaunching || previewZoomVideoPlayLocked)}
-              <div class="zoom-modal__video-shell">
-                <!-- svelte-ignore a11y_media_has_caption -->
-                <video
-                  class="zoom-modal__img"
-                  class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
-                  class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
-                  class:zoom-modal__img--interacting={previewPanDrag}
-                  bind:this={zoomVideoEl}
-                  src={previewZoomFileUrl || undefined}
-                  poster={previewZoomThumbUrl ?? undefined}
-                  controls={Boolean(previewZoomFileUrl)}
-                  playsinline
-                  preload="auto"
-                  on:click={onZoomVideoClick}
-                  on:loadedmetadata={onZoomVideoMeta}
-                  on:canplay={onZoomVideoCanPlay}
-                  on:error={onZoomVideoError}
-                ></video>
+              {#key previewZoomPath}
+              <div class="zoom-modal__video-shell" class:zoom-modal__video-shell--preparing={previewZoomVideoPreparing}>
                 {#if previewZoomVideoPreparing}
-                  <div class="zoom-modal__video-busy" aria-live="polite">
-                    <div class="zoom-modal__video-busy__spinner" aria-hidden="true"></div>
-                    <p>{previewZoomVideoStatus || t("preview.videoStarting")}</p>
-                  </div>
+                  {#if previewZoomThumbUrl}
+                    <img
+                      class="zoom-modal__video-poster"
+                      src={previewZoomThumbUrl}
+                      alt=""
+                      decoding="async"
+                      draggable={false}
+                    />
+                  {/if}
+                  <VideoTranscodeOverlay progress={previewZoomTranscodeProgress} />
+                {/if}
+                {#if previewZoomFileUrl}
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  <video
+                    class="zoom-modal__img"
+                    class:zoom-modal__img--hidden={previewZoomVideoPreparing}
+                    class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
+                    class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                    class:zoom-modal__img--interacting={previewPanDrag}
+                    bind:this={zoomVideoEl}
+                    src={previewZoomFileUrl}
+                    poster={previewZoomThumbUrl ?? undefined}
+                    controls={Boolean(previewZoomFileUrl) && !previewZoomVideoPreparing}
+                    playsinline
+                    preload="auto"
+                    on:click={onZoomVideoClick}
+                    on:loadedmetadata={onZoomVideoMeta}
+                    on:canplay={onZoomVideoCanPlay}
+                    on:error={onZoomVideoError}
+                  ></video>
                 {/if}
               </div>
+              {/key}
             {:else if previewZoomMediaType === "svg" && previewZoomFileUrl}
               <img
                 class="zoom-modal__img"
@@ -714,10 +753,26 @@
     position: relative;
     width: 100%;
     height: 100%;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
+  }
+
+  .zoom-modal__video-shell--preparing {
+    min-height: 100%;
+  }
+
+  .zoom-modal__video-poster {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    filter: brightness(0.72);
+    pointer-events: none;
   }
 
   .zoom-modal__video-shell :global(video.zoom-modal__img) {
@@ -725,41 +780,12 @@
     cursor: pointer;
   }
 
-  .zoom-modal__video-busy {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.65rem;
-    padding: 1rem;
-    background: rgb(0 0 0 / 0.52);
-    pointer-events: all;
-    z-index: 3;
-  }
-
-  .zoom-modal__video-busy p {
-    margin: 0;
-    font-size: 0.82rem;
-    line-height: 1.35;
-    text-align: center;
-    color: var(--om-text-muted);
-    max-width: 20rem;
-  }
-
-  .zoom-modal__video-busy__spinner {
-    width: 2.25rem;
-    height: 2.25rem;
-    border-radius: 999px;
-    border: 3px solid rgb(255 255 255 / 0.22);
-    border-top-color: var(--om-accent, #60a5fa);
-    animation: zoom-video-spin 0.75s linear infinite;
-  }
-
-  @keyframes zoom-video-spin {
-    to {
-      transform: rotate(360deg);
-    }
+  .zoom-modal__img--hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    opacity: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
   }
 </style>

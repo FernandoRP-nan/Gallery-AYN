@@ -110,6 +110,7 @@ const devMockApi: WebApi = {
     playbackFormat: "mp4",
   }),
   gallery_transcode_active: async () => ({ jobs: [] as Array<{ id: string; path: string; name: string; format: string }>, count: 0 }),
+  gallery_transcode_cancel: async (_path: string) => ({ ok: true, cancelled: false, path: _path }),
   gallery_video_playback_blob: async () => ({ ok: false, error: "mock" }),
   gallery_video_diagnostics: async () => ({
     path: "",
@@ -265,6 +266,7 @@ export const bridge = {
       normalizePathForApi(path)
     ),
   galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }>; count: number }>("gallery_transcode_active"),
+  galleryTranscodeCancel: (path: string) => call<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>("gallery_transcode_cancel", path),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
   galleryVideoPlaybackBlob: (path: string) =>
@@ -282,6 +284,10 @@ export const bridge = {
   galleryDeletePaths: (paths: string[]) => call<any>("gallery_delete_paths", paths),
   galleryMovePath: (srcPath: string, destPath: string) => call<any>("gallery_move_path", srcPath, destPath),
   galleryUndoLastMove: () => call<any>("gallery_undo_last_move"),
+  galleryRenamePath: (path: string, newName: string) =>
+    call<any>("gallery_rename_path", normalizePathForApi(path), newName),
+  galleryDeleteFolder: (path: string) =>
+    call<any>("gallery_delete_folder", normalizePathForApi(path)),
   galleryImageRotate: (path: string, degrees: number) => call<any>("gallery_image_rotate", path, degrees),
   galleryImageCropNormalized: (path: string, left: number, top: number, width: number, height: number) =>
     call<any>("gallery_image_crop_normalized", path, left, top, width, height),

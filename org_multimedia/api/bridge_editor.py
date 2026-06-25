@@ -304,6 +304,17 @@ class EditorBridgeMixin:
         jobs = list_active_transcode_jobs()
         return {"jobs": jobs, "count": len(jobs)}
 
+    def gallery_transcode_cancel(self, path: str) -> dict:
+        from ..core.fs_path import resolve_file_path
+        from ..core.video_transcode import cancel_transcode_for_path
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        cancelled = cancel_transcode_for_path(p)
+        return {"ok": True, "cancelled": cancelled, "path": str(p)}
+
     def gallery_video_profiles(self, path: str) -> dict:
         from ..core.fs_path import resolve_file_path
         from ..core.viewer_playback import video_playback_profiles, viewer_playback_strategy
