@@ -30,10 +30,15 @@ hiddenimports = [
     "org_multimedia.web_api",
     "org_multimedia.settings",
     "org_multimedia.bundle_paths",
+    "org_multimedia.windows_gui_env",
     "org_multimedia.cli",
     "org_multimedia.linux_gui_env",
     "org_multimedia.pywebview_bridge_return",
     "org_multimedia.pywebview_qt_json",
+    "clr",
+    "clr_loader",
+    "pythonnet",
+    "webview.platforms.winforms",
     "PIL",
     "PIL.Image",
 ]
@@ -43,10 +48,11 @@ try:
     from PyInstaller.utils.hooks import collect_all, collect_submodules
 
     hiddenimports += collect_submodules("org_multimedia")
-    d2, b2, h2 = collect_all("webview")
-    datas += d2
-    extra_binaries = b2
-    hiddenimports += h2
+    for pkg in ("webview", "pythonnet", "clr_loader"):
+        d2, b2, h2 = collect_all(pkg)
+        datas += d2
+        extra_binaries += b2
+        hiddenimports += h2
 except Exception:
     pass
 
@@ -77,7 +83,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -92,7 +98,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="GaleriaAYN",
 )

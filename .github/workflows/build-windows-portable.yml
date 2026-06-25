@@ -1,0 +1,66 @@
+name: Build Windows portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, mi-rama-recuperada]
+    paths:
+      - "webui/**"
+      - "org_multimedia/**"
+      - "packaging/**"
+      - "scripts/fetch-ffmpeg-windows.ps1"
+      - "GaleriaAYN.spec"
+      - "requirements.txt"
+      - ".github/workflows/build-windows-portable.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Build webui
+        working-directory: webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow pywebview -r requirements.txt
+
+      - name: PyInstaller
+        run: python -m PyInstaller --clean --noconfirm GaleriaAYN.spec
+
+      - name: Bundle ffmpeg
+        shell: pwsh
+        run: |
+          ./scripts/fetch-ffmpeg-windows.ps1
+          New-Item -ItemType Directory -Force -Path dist/GaleriaAYN/tools/ffmpeg | Out-Null
+          Copy-Item -Force tools/ffmpeg/ffmpeg.exe dist/GaleriaAYN/tools/ffmpeg/
+          Copy-Item -Force tools/ffmpeg/ffprobe.exe dist/GaleriaAYN/tools/ffmpeg/
+
+      - name: Zip portable folder
+        run: |
+          Compress-Archive -Path dist\GaleriaAYN\* -DestinationPath dist\GaleriaAYN-portable.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GaleriaAYN-windows-portable
+          path: dist/GaleriaAYN-portable.zip
+          retention-days: 30

@@ -16,6 +16,9 @@ def _notify_ui_failure(exc: BaseException) -> None:
     msg = (
         "No se pudo iniciar la interfaz web (PyWebView + Svelte).\n\n"
         "Comprueba en Windows:\n"
+        "• .NET Framework 4.7.2 o superior (Panel de control → Programas → Activar características de Windows).\n"
+        "• Si el zip se descargó de internet: clic derecho en el .zip → Propiedades → marcar «Desbloquear» "
+        "→ Aceptar → volver a extraer en una carpeta nueva.\n"
         "• Runtime WebView2 instalado (Edge WebView2).\n"
         "• El zip descomprimido entero en una carpeta real (Escritorio, etc.); "
         "no ejecutar el .exe desde dentro del .zip.\n"

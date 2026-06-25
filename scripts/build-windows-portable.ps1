@@ -27,6 +27,13 @@ pip install pyinstaller pillow pywebview
 
 python -m PyInstaller --clean --noconfirm "$Root\GaleriaAYN.spec"
 
+Write-Host "== ffmpeg (portable) ==" -ForegroundColor Cyan
+& "$Root\scripts\fetch-ffmpeg-windows.ps1"
+$DestFfmpeg = Join-Path $Root "dist\GaleriaAYN\tools\ffmpeg"
+New-Item -ItemType Directory -Force -Path $DestFfmpeg | Out-Null
+Copy-Item -Force (Join-Path $Root "tools\ffmpeg\ffmpeg.exe") (Join-Path $DestFfmpeg "ffmpeg.exe")
+Copy-Item -Force (Join-Path $Root "tools\ffmpeg\ffprobe.exe") (Join-Path $DestFfmpeg "ffprobe.exe")
+
 Write-Host ""
 Write-Host "Listo: $Root\dist\GaleriaAYN\GaleriaAYN.exe" -ForegroundColor Green
 Write-Host "Comprime la carpeta dist\GaleriaAYN en un .zip para compartir." -ForegroundColor Green

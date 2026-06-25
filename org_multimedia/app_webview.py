@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 from .bundle_paths import project_root
 from .linux_gui_env import prepare_linux_gui_env
+from .windows_gui_env import prepare_windows_gui_env
 
 from .pywebview_bridge_return import patch_js_bridge_return_value
 from .pywebview_qt_json import patch_qt_qjson_bridge
@@ -25,18 +25,10 @@ def _resolve_frontend_url() -> str:
     base = project_root()
     dist = base / "webui" / "dist" / "index.html"
     if dist.exists():
-        # Ruta absoluta (no file://): con http_server=True pywebview sirve por http://127.0.0.1 — mejor GPU/WebKit
-        # WebView2 puede cachear agresivamente entre versiones; ?v=mtime fuerza recarga al actualizar el .exe.
-        try:
-            v = str(int(dist.stat().st_mtime_ns))
-        except OSError:
-            v = "0"
-        uri = dist.resolve().as_uri()
-        parts = urlsplit(uri)
-        query = f"v={v}"
-        if parts.query:
-            query = f"{parts.query}&{query}"
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+        # Ruta de disco absoluta (no file://): con http_server=True pywebview expone dist/ en
+        # http://127.0.0.1:puerto. Si se pasa file://, WebView2 carga el archivo directo y suele
+        # mostrar ERR_FILE_NOT_FOUND en el portable de Windows.
+        return str(dist.resolve())
     # En ejecutable empaquetado no hay fallback a Vite: si falta dist/, otro proceso en :5173
     # podría mostrar una UI antigua o ajena y parecer "versión incorrecta".
     if getattr(sys, "frozen", False):
@@ -51,6 +43,7 @@ def _resolve_frontend_url() -> str:
 
 def main() -> None:
     prepare_linux_gui_env()
+    prepare_windows_gui_env()
     import webview  # type: ignore
 
     patch_js_bridge_return_value()

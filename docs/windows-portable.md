@@ -34,9 +34,23 @@ El objetivo es una **carpeta** `dist/GaleriaAYN/` con `GaleriaAYN.exe` y DLLs, q
 ## Qué necesitan tus amigos (solo quien recibe el zip)
 
 - **Windows 10/11** de 64 bits.
+- **.NET Framework 4.7.2 o superior** (PyWebView en Windows usa pythonnet). En Windows 10/11 suele estar ya instalado; si falta: Panel de control → Programas → Activar o desactivar las características de Windows → **.NET Framework 3.5 (incluye 4.x)**.
 - **WebView2** (Microsoft Edge WebView2 Runtime). En la mayoría de equipos ya está instalado; si la ventana no carga la interfaz, que instalen el runtime desde Microsoft: buscar “WebView2 Runtime Download”.
+- Si el **.zip se descargó** (WhatsApp, correo, navegador): antes de extraer, clic derecho en el `.zip` → **Propiedades** → marcar **Desbloquear** → Aceptar. Si ya lo extrajo sin desbloquear, borre la carpeta, desbloquee el zip y vuelva a extraer (o ejecute de nuevo un build reciente del programa, que intenta desbloquear solo al arrancar).
 
 Opcional: **Visual C++ Redistributable** (x64) si Windows avisa de DLLs faltantes: [VC++ Redistributable](https://learn.microsoft.com/es-es/cpp/windows/latest-supported-vc-redist).
+
+### Vídeos (.avi, .mkv, etc.) no reproducen / «ffmpeg no encontrado»
+
+El visor integrado **transcodifica** formatos que WebView2 no reproduce directamente (p. ej. AVI de 700 MB). Para eso hace falta **ffmpeg** y **ffprobe**:
+
+1. **Builds oficiales (CI o `build-windows-portable.ps1`):** el script descarga ffmpeg essentials y lo copia a `tools\ffmpeg\` **junto a `GaleriaAYN.exe`**. No hace falta instalar nada extra si usas el zip generado así.
+2. **Manual (solo si compilaste sin el script):** crear `tools\ffmpeg\` junto al `.exe` y copiar `ffmpeg.exe` y `ffprobe.exe` desde [gyan.dev/ffmpeg](https://www.gyan.dev/ffmpeg/builds/) («release essentials»).
+3. **Alternativa:** instalar ffmpeg en el sistema y añadirlo al **PATH** de Windows, o definir `ORGANIZADOR_FFMPEG_DIR` apuntando a la carpeta que contiene `ffmpeg.exe`.
+
+Los **MP4 H.264** suelen reproducirse sin ffmpeg. Para cualquier otro formato, sin ffmpeg verás un mensaje claro en la app; usa **Abrir con reproductor del sistema** como alternativa.
+
+En **Ajustes → Vídeo** puedes elegir perfil rápido/calidad, altura máxima y aceleración por hardware (NVENC/QSV/AMF). La **primera reproducción** de un vídeo grande puede tardar (transcodificación en «Procesos activos» con % de avance); las siguientes usan caché en `%LOCALAPPDATA%` o `%USERPROFILE%\.cache\organizador-ayn\om-transcode\`.
 
 ### «Failed to load Python DLL» / `python312.dll` / ruta con `Temp` y `.zip`
 
@@ -45,6 +59,24 @@ Eso casi siempre significa **no** estar usando la carpeta descomprimida:
 1. **No abrir el `.exe` desde dentro del archivo `.zip`** (Explorador de archivos muestra el zip como carpeta, pero los archivos viven en una ruta temporal tipo `...\AppData\Local\Temp\..._GaleriaAYN.zip.ca6\...`). Ahí faltan DLLs o no cargan bien → `LoadLibrary: No se puede encontrar el módulo especificado`.
 2. **Solución:** clic derecho en el `.zip` → **Extraer todo…** → elegir por ejemplo `Escritorio\GaleriaAYN\` → entrar en esa carpeta y ejecutar **`GaleriaAYN.exe`**. Debe existir junto al `.exe` la carpeta **`_internal`** con las DLL.
 3. Si tras extraer bien sigue el error, instalar **Visual C++ Redistributable x64** (enlace arriba).
+
+### «No se encuentra el archivo» / `ERR_FILE_NOT_FOUND` al abrir la ventana
+
+La interfaz se sirve por **http://127.0.0.1** (servidor embebido), no como `file://`. Si ves esta página en blanco con ese código:
+
+1. **Extraer el zip completo** (misma regla que arriba: no ejecutar desde dentro del `.zip`).
+2. Comprobar que en `_internal\webui\dist\` existen `index.html` y la carpeta `assets\`.
+3. **Reconstruir el portable** con el script actual (`.\scripts\build-windows-portable.ps1`): builds anteriores a la corrección de rutas podían fallar así en Windows.
+4. Si persiste: instalar **WebView2 Runtime** y revisar que el antivirus no bloquee la carpeta.
+
+### `Python.Runtime.dll` / `Failed to resolve Python.Runtime.Loader.Initialize`
+
+No es un fallo de WebView2: es **pythonnet** (.NET) al cargar la ventana nativa de PyWebView.
+
+1. **Desbloquear el zip** (muy frecuente): clic derecho en el `.zip` → Propiedades → **Desbloquear** → extraer de nuevo en carpeta vacía. Windows marca los archivos descargados y .NET no puede cargar `Python.Runtime.dll`.
+2. Comprobar **.NET Framework ≥ 4.7.2** (ver requisitos arriba).
+3. Usar un **build reciente** del portable (el programa desbloquea `_internal` al iniciar; builds viejos no).
+4. Ruta sin rarezas: evitar ejecutar desde `Downloads\GaleriaAYN (1)\` mezclando varias copias; una carpeta limpia p. ej. `C:\GaleriaAYN\` suele ir mejor.
 
 ## Actualizar el portable después de cambios en el código
 
