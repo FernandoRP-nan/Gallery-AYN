@@ -630,6 +630,16 @@
     return navGen;
   }
 
+  /** Recarga o cambio de página en la misma carpeta: conserva caché HQ del cliente. */
+  function beginGalleryRefresh(): number {
+    const navGen = bumpGalleryNavigationGeneration();
+    bumpGalleryThumbHydrationToken(false);
+    galleryMoveQueue = [];
+    galleryDeleteQueue = [];
+    galleryWorkspace?.cancelBackgroundWork();
+    return navGen;
+  }
+
   /** Tras cargar ítems: hidrata miniaturas HQ en GalleryWorkspace (aislado de la rejilla). */
   async function afterGalleryDataLoaded() {
     try {
@@ -910,21 +920,21 @@
 
   /** Recarga ítems de la galería. Por defecto sin overlay global (la rejilla ya da feedback). */
   const reload = async (opts?: { silent?: boolean; loadingMessage?: string }) => {
-    const navGen = beginGalleryNavigation();
+    const navGen = beginGalleryRefresh();
     const p = bridge.galleryReload();
     const silent = opts?.silent !== false;
     const out = silent ? await p : await trackLoad(p, opts?.loadingMessage ?? t("load.loading"));
     if (!isGalleryNavigationCurrent(navGen)) return;
     setGalleryPayload(out.state, out.items);
-    void afterGalleryDataLoaded();
+    await afterGalleryDataLoaded();
   };
 
   const goPage = async (page: number) => {
-    const navGen = beginGalleryNavigation();
+    const navGen = beginGalleryRefresh();
     const out = await trackLoad(bridge.galleryGoPage(page));
     if (!isGalleryNavigationCurrent(navGen)) return;
     setGalleryPayload(out.state, out.items);
-    void afterGalleryDataLoaded();
+    await afterGalleryDataLoaded();
     pageJumpDraft = out.state.page;
     commitChromePagerState();
   };

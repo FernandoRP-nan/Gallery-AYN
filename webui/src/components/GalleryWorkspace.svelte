@@ -429,10 +429,10 @@
     }
   };
 
-  /** Tras cargar carpeta / recargar. La invalidación de hidratación ocurre en beginGalleryNavigation(). */
+  /** Tras cargar carpeta / recargar. La invalidación de hidratación ocurre en beginGalleryNavigation/Refresh(). */
   export async function afterGalleryPayloadLoaded(items: GalleryItem[], scale: number) {
     await tick();
-    void hydrateGalleryThumbsHq(items, scale, getGalleryThumbHydrationToken());
+    await hydrateGalleryThumbsHq(items, scale, getGalleryThumbHydrationToken());
     if (thumbsPerPage === 0) {
       await tick();
       void maybeAutoLoadMoreForViewport();
