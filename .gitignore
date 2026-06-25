@@ -1,6 +1,26 @@
-# Salida PyInstaller (solo carpeta en la raíz del repo)
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# PyInstaller (solo carpeta en la raíz del repo)
 /dist/
 /build/
-*.egg-info/
-__pycache__/
-*.pyc
+
+# Frontend
+webui/node_modules/
+webui/.vite/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Caché local de la app (no versionar datos de usuario)
+*.log
