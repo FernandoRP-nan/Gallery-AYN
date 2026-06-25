@@ -69,7 +69,7 @@
     isGalleryNavigationCurrent,
   } from "./lib/gallerySession";
   import { commitChromePagerState } from "./lib/chromeRemember";
-  import { isGalleryMediaKind, mergeItemsKeepingBestThumb } from "./lib/galleryUtils";
+  import { isGalleryMediaKind, isGallerySelectableKind, mergeItemsKeepingBestThumb } from "./lib/galleryUtils";
   import {
     applyUiThemeToDocument,
     normalizeUiTheme,
@@ -1285,14 +1285,35 @@
   }
 
   async function deleteSelectedGalleryItems() {
-    const selectedPaths = getGalleryItems()
-      .filter((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))
-      .map((x) => x.path);
-    if (selectedPaths.length === 0) return;
-    const snapshot = createGalleryMoveJobSnapshot(selectedPaths);
+    const selected = getGalleryItems().filter(
+      (x) => isGallerySelectableKind(x.kind) && Boolean(x.selected)
+    );
+    if (selected.length === 0) return;
+    const paths = selected.map((x) => x.path);
+    const hasFolders = selected.some((x) => x.kind === "folder");
+
+    if (hasFolders) {
+      try {
+        const out = await trackLoad(bridge.galleryDeletePaths(paths));
+        setGalleryPayload(out.state, out.items ?? []);
+        await afterGalleryDataLoaded();
+        resetGalleryInteractionLocks();
+        const deleted = Number(out.deleteResult?.deleted ?? 0);
+        const errors = Number(out.deleteResult?.errors ?? 0);
+        status = t("status.deleteBatchLine")
+          .replace("{deleted}", String(deleted))
+          .replace("{errPart}", errors ? t("status.deleteErrorsPart").replace("{errors}", String(errors)) : "")
+          .replace("{queue}", "0");
+      } catch (e: unknown) {
+        status = e instanceof Error ? e.message : t("status.deleteQueueError");
+      }
+      return;
+    }
+
+    const snapshot = createGalleryMoveJobSnapshot(paths);
     await applyOptimisticGalleryRemove(snapshot);
     galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
-    status = t("status.deleteQueued").replace("{n}", String(selectedPaths.length));
+    status = t("status.deleteQueued").replace("{n}", String(paths.length));
     if (!galleryDeleteWorkerRunning) void processDeleteQueue();
   }
 
@@ -2270,6 +2291,7 @@
           } else {
             await reconcileGalleryMoveSuccess(out);
           }
+          resetGalleryInteractionLocks();
           if (previewOpen) {
             const valid = new Set(getGalleryItems().filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path));
             previewItems = previewItems.filter((x) => valid.has(x.path));
@@ -3343,8 +3365,17 @@
   }
 
   function endDragSessionAfterGesture() {
-    suppressNextGalleryClick = true;
     endDragSession();
+    suppressNextGalleryClick = true;
+    queueMicrotask(() => {
+      suppressNextGalleryClick = false;
+    });
+  }
+
+  function resetGalleryInteractionLocks() {
+    suppressNextGalleryClick = false;
+    endDragSession();
+    galleryWorkspace?.resetGalleryInteractionState?.();
   }
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
@@ -3582,8 +3613,9 @@
       async () => {
         try {
           const out = await trackLoad(bridge.galleryDeleteFolder(p));
-          setGalleryPayload(out.state, out.items);
+          setGalleryPayload(out.state, out.items ?? []);
           await afterGalleryDataLoaded();
+          resetGalleryInteractionLocks();
           status = t("status.deleteBatchLine")
             .replace("{deleted}", "1")
             .replace("{errPart}", "")
@@ -4046,7 +4078,8 @@
     if (!isTypingEl && shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.deleteAction)) {
       const hasPreviewSelectionForDelete = previewOpen && previewSelectedPaths.length > 0;
       const hasGallerySelectionForDelete =
-        Number(getGalleryState()?.selectedCount ?? 0) > 0 || getGalleryItems().some((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
+        Number(getGalleryState()?.selectedCount ?? 0) > 0 ||
+        getGalleryItems().some((x) => isGallerySelectableKind(x.kind) && Boolean(x.selected));
       if (previewZoomOpen && previewZoomPath) {
         e.preventDefault();
         openConfirmDelete(t("confirm.deleteImageTitle"), t("confirm.deleteImageDetail"), deleteCurrentZoomImage);
@@ -4074,7 +4107,8 @@
     if (!shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.escape)) return;
     const hasPreviewSelection = previewSelectedPaths.length > 0 || previewRangeSelecting;
     const hasGallerySelection =
-      Number(getGalleryState()?.selectedCount ?? 0) > 0 || getGalleryItems().some((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
+      Number(getGalleryState()?.selectedCount ?? 0) > 0 ||
+        getGalleryItems().some((x) => isGallerySelectableKind(x.kind) && Boolean(x.selected));
     if (hasPreviewSelection || hasGallerySelection) {
       e.preventDefault();
       if (hasPreviewSelection) {

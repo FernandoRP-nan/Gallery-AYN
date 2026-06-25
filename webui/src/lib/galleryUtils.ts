@@ -9,6 +9,11 @@ export function isGalleryMediaKind(kind: GalleryItem["kind"]): boolean {
   return kind === "image" || kind === "video";
 }
 
+/** Seleccionable en modo edición (incluye subcarpetas; no folder_up ni secciones). */
+export function isGallerySelectableKind(kind: GalleryItem["kind"]): boolean {
+  return kind === "image" || kind === "video" || kind === "folder";
+}
+
 /** Extensión del archivo en mayúsculas (p. ej. MP4) para la insignia en miniaturas de vídeo. */
 export function videoFormatLabel(pathOrName: string): string | null {
   const raw = String(pathOrName ?? "").trim();
@@ -145,4 +150,8 @@ export function expandTimelineDayBreaks(raw: GalleryItem[], timeline: boolean, c
 
 export function countSelectedMedia(items: GalleryItem[]): number {
   return items.filter((x) => isGalleryMediaKind(x.kind) && x.selected).length;
+}
+
+export function countSelectedGalleryItems(items: GalleryItem[]): number {
+  return items.filter((x) => isGallerySelectableKind(x.kind) && x.selected).length;
 }

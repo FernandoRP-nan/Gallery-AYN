@@ -1,6 +1,6 @@
 import { get, writable } from "svelte/store";
 import type { GalleryItem } from "./api";
-import { countSelectedMedia, mergeItemsKeepingBestThumb } from "./galleryUtils";
+import { countSelectedGalleryItems, mergeItemsKeepingBestThumb } from "./galleryUtils";
 import {
   removeGalleryThumbHq,
   seedGalleryThumbHqFromItems,
@@ -53,16 +53,16 @@ export function getGalleryState(): GalleryState {
 export function setGalleryPayload(state: GalleryState, nextItems: GalleryItem[]) {
   seedGalleryThumbHqFromItems(nextItems);
   galleryItems.set(stripHqFromGalleryItems(nextItems));
-  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
+  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(getGalleryItems()) });
 }
 
 export function setGalleryState(state: GalleryState) {
-  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
+  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(getGalleryItems()) });
 }
 
 /** Fusiona metadatos del API sin pisar el conteo de selección local. */
 export function setGalleryStateFromApi(state: GalleryState) {
-  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
+  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(getGalleryItems()) });
 }
 
 export function setGalleryItems(nextItems: GalleryItem[]) {
@@ -78,7 +78,7 @@ export function mergeGalleryItemsFromApi(nextItems: GalleryItem[], state?: Galle
   const merged = mergeItemsKeepingBestThumb(getGalleryItems(), nextItems);
   galleryItems.set(stripHqFromGalleryItems(merged));
   if (state) {
-    galleryState.set({ ...state, selectedCount: countSelectedMedia(merged) });
+    galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(merged) });
   } else {
     syncSelectedCountFromItems();
   }
@@ -112,7 +112,7 @@ export function applyGalleryRemovePathsDelta(state: GalleryState, removedPaths: 
   updateGalleryItems((items) =>
     pruneOrphanGallerySections(items.filter((x) => !removed.has(x.path)))
   );
-  galleryState.set({ ...state, selectedCount: countSelectedMedia(getGalleryItems()) });
+  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(getGalleryItems()) });
 }
 
 export function applyGalleryMutationResponse(out: GalleryMutationResponse) {
@@ -128,7 +128,7 @@ export function applyGalleryMutationResponse(out: GalleryMutationResponse) {
 }
 
 export function syncSelectedCountFromItems() {
-  const n = countSelectedMedia(getGalleryItems());
+  const n = countSelectedGalleryItems(getGalleryItems());
   galleryState.update((s) => ({ ...s, selectedCount: n }));
 }
 

@@ -226,10 +226,11 @@ class SelectionBridgeMixin:
         return data
 
     def gallery_delete_paths(self, paths: list[str]) -> dict:
-        """Elimina una lista explícita de rutas (p. ej. imagen actual en fullscreen)."""
+        """Elimina una lista explícita de rutas (archivos o carpetas)."""
         deleted = 0
         errors = 0
         deleted_paths: list[str] = []
+        folder_deleted = False
         unique_raw = []
         seen: set[str] = set()
         for raw in paths or []:
@@ -242,14 +243,18 @@ class SelectionBridgeMixin:
             for raw in unique_raw:
                 try:
                     src = Path(raw).expanduser().resolve()
-                    if src.is_file():
+                    if src.is_dir():
+                        shutil.rmtree(src)
+                        deleted += 1
+                        folder_deleted = True
+                    elif src.is_file():
                         src.unlink()
                         deleted += 1
                         deleted_paths.append(str(src))
                 except Exception:
                     errors += 1
             self.selected = {p for p in self.selected if p.exists()}
-        if errors > 0:
+        if folder_deleted or errors > 0:
             data = self.gallery_reload(clear_thumb_cache=False)
         else:
             data = self.gallery_reindex_delta(deleted_paths)

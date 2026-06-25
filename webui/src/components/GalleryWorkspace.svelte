@@ -25,9 +25,10 @@
   import { galleryChromeBusy } from "../lib/chromeRemember";
   import { galleryScrolling as galleryScrollingStore } from "../lib/galleryScrollState";
   import {
-    countSelectedMedia,
+    countSelectedGalleryItems,
     expandTimelineDayBreaks,
     isGalleryMediaKind,
+    isGallerySelectableKind,
   } from "../lib/galleryUtils";
   import { galleryGridCellPx } from "../lib/thumbScale";
   import { t } from "../lib/i18n";
@@ -179,7 +180,7 @@
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
   $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
   $: galleryGridItems = expandTimelineDayBreaks($galleryItems, timelineView, gridCellPx);
-  $: liveSelectedCount = countSelectedMedia($galleryItems);
+  $: liveSelectedCount = countSelectedGalleryItems($galleryItems);
 
   $: galleryHasSelection = liveSelectedCount > 0;
 
@@ -244,6 +245,34 @@
     dispatch("preview", { path });
   }
 
+  /** Restablece gestos de selección/arrastre que pueden bloquear clics en la rejilla. */
+  export function resetGalleryInteractionState() {
+    if (galleryRangeRaf !== null) {
+      cancelAnimationFrame(galleryRangeRaf);
+      galleryRangeRaf = null;
+    }
+    galleryRangeSelecting = false;
+    galleryRangeSuppressClick = false;
+    galleryRangeAnchorPath = null;
+    galleryRangeBaseSelectedPaths = [];
+    galleryRangeBaseSelectedSet = null;
+    galleryRangeDraftSelectedPaths = null;
+    galleryRangeDraftSelectedSet = null;
+    galleryRangeCurrentPath = null;
+    galleryRangePendingPath = null;
+    galleryActionBusy = false;
+  }
+
+  async function openFolderTile(it: GalleryItem) {
+    if (galleryActionBusy) return;
+    galleryActionBusy = true;
+    try {
+      await navigateToFolder(it.path, { pushHistory: true });
+    } finally {
+      galleryActionBusy = false;
+    }
+  }
+
   async function clickGalleryItem(it: GalleryItem) {
     if (galleryRangeSuppressClick) return;
     if (suppressNextGalleryClick) return;
@@ -251,14 +280,27 @@
 
     if (it.kind === "section" || it.kind === "day_break") return;
 
-    if (it.kind === "folder" || it.kind === "folder_up") {
-      if (galleryActionBusy) return;
-      galleryActionBusy = true;
-      try {
-        await navigateToFolder(it.path, { pushHistory: true });
-      } finally {
-        galleryActionBusy = false;
+    if (it.kind === "folder_up") {
+      await openFolderTile(it);
+      return;
+    }
+
+    if (it.kind === "folder") {
+      if (destinationsMode) {
+        if (galleryActionBusy) return;
+        galleryActionBusy = true;
+        try {
+          const nextSelected = !it.selected;
+          patchGallerySelection((items) =>
+            items.map((x) => (x.path === it.path ? { ...x, selected: nextSelected } : x))
+          );
+          galleryCursorPath = it.path;
+        } finally {
+          galleryActionBusy = false;
+        }
+        return;
       }
+      await openFolderTile(it);
       return;
     }
 
@@ -287,12 +329,12 @@
     }
   }
 
-  function getVisibleGalleryMediaPaths(): string[] {
-    return $galleryItems.filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path);
+  function getVisibleSelectablePaths(): string[] {
+    return $galleryItems.filter((x) => isGallerySelectableKind(x.kind)).map((x) => x.path);
   }
 
   function isGalleryTileSelected(it: GalleryItem): boolean {
-    if (!isGalleryMediaKind(it.kind)) return false;
+    if (!isGallerySelectableKind(it.kind)) return false;
     if (!galleryFloatChromeActive) return false;
     if (galleryRangeSelecting && galleryRangeDraftSelectedSet) {
       return galleryRangeDraftSelectedSet.has(it.path);
@@ -301,15 +343,15 @@
   }
 
   function applyGalleryRangeSelection(fromPath: string, toPath: string, mode: "select" | "deselect") {
-    const imagePaths = getVisibleGalleryMediaPaths();
-    const a = imagePaths.indexOf(fromPath);
-    const b = imagePaths.indexOf(toPath);
+    const selectablePaths = getVisibleSelectablePaths();
+    const a = selectablePaths.indexOf(fromPath);
+    const b = selectablePaths.indexOf(toPath);
     if (a < 0 || b < 0) return;
     const lo = Math.min(a, b);
     const hi = Math.max(a, b);
     const draft = new Set(galleryRangeBaseSelectedSet ?? []);
     for (let i = lo; i <= hi; i++) {
-      const p = imagePaths[i];
+      const p = selectablePaths[i];
       if (!p) continue;
       if (mode === "select") draft.add(p);
       else draft.delete(p);
@@ -335,11 +377,11 @@
   }
 
   function onGalleryTilePointerDown(e: PointerEvent, it: GalleryItem) {
-    if (!destinationsMode || !isGalleryMediaKind(it.kind)) return;
+    if (!destinationsMode || !isGallerySelectableKind(it.kind)) return;
     if (e.ctrlKey) return;
     e.preventDefault();
     const baseSelected = $galleryItems
-      .filter((x) => isGalleryMediaKind(x.kind) && x.selected)
+      .filter((x) => isGallerySelectableKind(x.kind) && x.selected)
       .map((x) => x.path);
     galleryRangeBaseSelectedPaths = baseSelected;
     galleryRangeBaseSelectedSet = new Set(baseSelected);
@@ -376,7 +418,7 @@
 
     if (addPaths.length > 0 || removePaths.length > 0) {
       patchGallerySelection((items) =>
-        items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: draft.has(x.path) } : x))
+        items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: draft.has(x.path) } : x))
       );
       if (destinationsMode) {
         const items = getGalleryItems();
@@ -408,6 +450,9 @@
   const selectPage = async () => {
     const out = await bridge.gallerySelectPage();
     mergeGalleryItemsFromApi(out.items, out.state);
+    patchGallerySelection((items) =>
+      items.map((x) => (x.kind === "folder" ? { ...x, selected: true } : x))
+    );
     if (destinationsMode) {
       const items = getGalleryItems();
       const last = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
@@ -417,14 +462,14 @@
 
   const clearSelection = async () => {
     patchGallerySelection((items) =>
-      items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: false } : x))
+      items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x))
     );
     galleryState.update((s) => ({ ...s, selectedCount: 0 }));
   };
 
   const invertSelection = async () => {
     patchGallerySelection((items) =>
-      items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: !x.selected } : x))
+      items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: !x.selected } : x))
     );
     if (destinationsMode) {
       const items = getGalleryItems();

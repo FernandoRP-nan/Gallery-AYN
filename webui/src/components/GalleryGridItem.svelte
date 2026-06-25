@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n";
-  import { videoFormatLabel } from "../lib/galleryUtils";
+  import { videoFormatLabel, isGalleryMediaKind, isGallerySelectableKind } from "../lib/galleryUtils";
   import { hasGalleryThumbHq } from "../lib/galleryThumbHqCache";
   import ThumbImage from "./ThumbImage.svelte";
 
@@ -19,7 +19,6 @@
 
   export let navigateToFolder: (path: string, opts: any) => void;
   export let onSectionFolderDrop: (e: DragEvent, folder: string) => void;
-  export let isGalleryMediaKind: (kind: string) => boolean;
   export let onGalleryTilePointerDown: (e: PointerEvent, it: any) => void;
   export let onGalleryTilePointerEnter: (path: string) => void;
   export let onTileDragStart: (e: DragEvent, it: any) => void;
@@ -72,7 +71,7 @@
     data-item-path={it.path}
     class:selected={
       galleryFloatChromeActive &&
-      isGalleryMediaKind(it.kind) &&
+      isGallerySelectableKind(it.kind) &&
       (galleryRangeSelecting && galleryRangeDraftSelectedSet
         ? galleryRangeDraftSelectedSet.has(it.path)
         : Boolean(it.selected))
@@ -86,7 +85,11 @@
       if (galleryRangeSuppressClick) return;
       clickItem(it);
     }}
-    on:dblclick={() => {
+    on:dblclick|stopPropagation={() => {
+      if (it.kind === "folder" || it.kind === "folder_up") {
+        void navigateToFolder(it.path, { pushHistory: true });
+        return;
+      }
       if (isGalleryMediaKind(it.kind)) openZoomFromGallery(it);
     }}
     on:keydown={(e) => {
