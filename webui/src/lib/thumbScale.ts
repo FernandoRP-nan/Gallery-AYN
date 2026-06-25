@@ -15,6 +15,11 @@ export function galleryGridCellPx(scale: number): number {
   return galleryThumbPx(scale) + 36;
 }
 
+/** True si el backend generaría miniaturas con distinto tamaño en píxeles. */
+export function thumbQualityRefreshNeeded(oldScale: number, newScale: number): boolean {
+  return galleryThumbPx(oldScale) !== galleryThumbPx(newScale);
+}
+
 /** Coincide con org_multimedia.web_api._thumb_px_from_dest_scale */
 const D_LO = 0.7;
 const D_HI = 2.1;

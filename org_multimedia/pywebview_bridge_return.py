@@ -19,7 +19,34 @@ from typing import Any
 
 from webview.dom import _dnd_state
 
+from .core.fs_path import normalize_path_string
+
 logger = logging.getLogger("pywebview")
+
+
+def _normalize_bridge_params(param: Any) -> Any:
+    if isinstance(param, list):
+        return [_normalize_bridge_value(x) for x in param]
+    if isinstance(param, dict):
+        return {k: _normalize_bridge_value(v) for k, v in param.items()}
+    return _normalize_bridge_value(param)
+
+
+def _looks_like_fs_path(value: str) -> bool:
+    s = value.strip()
+    if not s or s.startswith(("http://", "https://", "data:")):
+        return False
+    return s.startswith(("/", "~", "file:")) or "\\" in s
+
+
+def _normalize_bridge_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return normalize_path_string(value) if _looks_like_fs_path(value) else value
+    if isinstance(value, list):
+        return [_normalize_bridge_value(x) for x in value]
+    if isinstance(value, dict):
+        return {k: _normalize_bridge_value(v) for k, v in value.items()}
+    return value
 
 
 def patch_js_bridge_return_value() -> None:
@@ -119,7 +146,7 @@ def patch_js_bridge_return_value() -> None:
 
         if func is not None:
             try:
-                func_params = param
+                func_params = _normalize_bridge_params(param)
                 thread = Thread(target=_call)
                 thread.start()
             except Exception:

@@ -11,6 +11,24 @@ export default defineConfig(() => ({
   },
   server: {
     host: "127.0.0.1",
-    port: 5173
+    port: 5173,
+    proxy: {
+      "/media": {
+        target: "http://127.0.0.1:51234",
+        changeOrigin: true
+      },
+      "/om-media": {
+        target: "http://127.0.0.1:51234",
+        changeOrigin: true
+      },
+      "/om-transcode": {
+        target: "http://127.0.0.1:51234",
+        changeOrigin: true
+      },
+      "/om-webm": {
+        target: "http://127.0.0.1:51234",
+        changeOrigin: true
+      }
+    }
   }
 }));

@@ -207,23 +207,30 @@ class SelectionBridgeMixin:
         """Elimina del disco las imágenes seleccionadas en la galería."""
         deleted = 0
         errors = 0
+        deleted_paths: list[str] = []
         with self.lock:
             for src in list(self.selected):
                 try:
                     if src.is_file():
                         src.unlink()
                         deleted += 1
+                        deleted_paths.append(str(src))
                 except Exception:
                     errors += 1
             self.selected.clear()
-        data = self.gallery_reload()
+        if errors > 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(deleted_paths)
         data["deleteResult"] = {"deleted": deleted, "errors": errors}
         return data
 
     def gallery_delete_paths(self, paths: list[str]) -> dict:
-        """Elimina una lista explícita de rutas (p. ej. imagen actual en fullscreen)."""
+        """Elimina una lista explícita de rutas (archivos o carpetas)."""
         deleted = 0
         errors = 0
+        deleted_paths: list[str] = []
+        folder_deleted = False
         unique_raw = []
         seen: set[str] = set()
         for raw in paths or []:
@@ -236,13 +243,21 @@ class SelectionBridgeMixin:
             for raw in unique_raw:
                 try:
                     src = Path(raw).expanduser().resolve()
-                    if src.is_file():
+                    if src.is_dir():
+                        shutil.rmtree(src)
+                        deleted += 1
+                        folder_deleted = True
+                    elif src.is_file():
                         src.unlink()
                         deleted += 1
+                        deleted_paths.append(str(src))
                 except Exception:
                     errors += 1
             self.selected = {p for p in self.selected if p.exists()}
-        data = self.gallery_reload()
+        if folder_deleted or errors > 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(deleted_paths)
         data["deleteResult"] = {"deleted": deleted, "errors": errors}
         return data
 
@@ -250,6 +265,7 @@ class SelectionBridgeMixin:
         """Mueve una sola imagen a un destino desde fullscreen."""
         moved = 0
         errors = 0
+        moved_paths: list[str] = []
         src = Path(src_path).expanduser().resolve()
         dest_dir = Path(dest_path).expanduser().resolve()
         try:
@@ -259,10 +275,14 @@ class SelectionBridgeMixin:
                 if src.resolve() != target.resolve():
                     shutil.move(str(src), str(target))
                     moved = 1
+                    moved_paths.append(str(src))
                     self._last_gallery_move = (target, src)
         except Exception:
             errors = 1
-        data = self.gallery_reload()
+        if errors > 0 or moved == 0:
+            data = self.gallery_reload(clear_thumb_cache=False)
+        else:
+            data = self.gallery_reindex_delta(moved_paths)
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
@@ -282,6 +302,40 @@ class SelectionBridgeMixin:
                 self._last_gallery_move = None
             except Exception:
                 errors = 1
-        data = self.gallery_reload()
+        data = self.gallery_reload(clear_thumb_cache=False)
         data["moveResult"] = {"moved": moved, "errors": errors}
+        return data
+
+    def gallery_rename_path(self, path: str, new_name: str) -> dict:
+        """Renombra archivo o carpeta (solo el nombre, no la ruta completa)."""
+        raw_name = str(new_name or "").strip()
+        if not raw_name:
+            raise ValueError("El nombre no puede estar vacío.")
+        src = Path(path).expanduser().resolve()
+        if not src.exists():
+            raise ValueError("No se encontró el elemento.")
+        if src.is_file() and "." not in raw_name and src.suffix:
+            raw_name = raw_name + src.suffix
+        target = src.parent / raw_name
+        if target.exists():
+            raise ValueError("Ya existe un elemento con ese nombre.")
+        try:
+            src.rename(target)
+        except OSError as exc:
+            raise ValueError(f"No se pudo renombrar: {exc}") from exc
+        data = self.gallery_reload(clear_thumb_cache=False)
+        data["renameResult"] = {"previousPath": str(src), "newPath": str(target), "newName": target.name}
+        return data
+
+    def gallery_delete_folder(self, path: str) -> dict:
+        """Elimina una carpeta y todo su contenido."""
+        folder = Path(path).expanduser().resolve()
+        if not folder.is_dir():
+            raise ValueError("La ruta no es una carpeta.")
+        try:
+            shutil.rmtree(folder)
+        except OSError as exc:
+            raise ValueError(f"No se pudo eliminar la carpeta: {exc}") from exc
+        data = self.gallery_reload(clear_thumb_cache=False)
+        data["deleteResult"] = {"deleted": 1, "errors": 0}
         return data

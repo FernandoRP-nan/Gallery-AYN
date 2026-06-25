@@ -33,7 +33,7 @@ from ..core.gallery_paths import (
     sort_image_paths,
 )
 
-from ..core.section_color import accent_hex_from_paths
+from ..core.fs_path import normalize_path_string, resolve_dir_path
 
 _MONTH_NAMES_ES = (
     "",
@@ -162,18 +162,50 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
     except Exception:
         return None
 
+_VIDEO_SETTINGS_KEYS = frozenset(
+    {
+        "video_transcode_preset",
+        "video_transcode_max_height",
+        "video_transcode_max_width",
+        "video_transcode_hw",
+    }
+)
+
+_THUMB_SETTINGS_KEYS = frozenset(
+    {
+        "gallery_thumb_scale",
+        "gallery_thumb_quality_preset",
+    }
+)
+
+
 class SystemBridgeMixin:
     def get_initial_state(self) -> dict:
+        dest_payload = self._destinations_payload() if hasattr(self, "_destinations_payload") else {"destinations": [], "toolbarFolderId": ""}
+        marker_payload = self._markers_payload() if hasattr(self, "_markers_payload") else {"markers": [], "toolbarFolderId": "", "pinnedFolders": []}
         return {
             "settings": self.settings,
             "gallery": self._gallery_state(),
-            "destinations": list(self._destinations_list()),
+            "destinations": dest_payload.get("destinations", []),
+            "destToolbarFolderId": dest_payload.get("toolbarFolderId", ""),
+            "markers": marker_payload.get("markers", []),
+            "markerToolbarFolderId": marker_payload.get("toolbarFolderId", ""),
+            "pinnedFolders": marker_payload.get("pinnedFolders", []),
         }
 
     def settings_patch(self, data: dict) -> dict:
+        before = {k: self.settings.get(k) for k in _VIDEO_SETTINGS_KEYS}
         self.settings.update(data)
         save_app_settings(self.settings)
-        return {"settings": self.settings}
+        after = {k: self.settings.get(k) for k in _VIDEO_SETTINGS_KEYS}
+        cleared = 0
+        if before != after:
+            from ..core.video_transcode import invalidate_transcode_cache
+
+            cleared = invalidate_transcode_cache()
+        if any(k in data for k in _THUMB_SETTINGS_KEYS) and hasattr(self, "_clear_thumb_cache"):
+            self._clear_thumb_cache()
+        return {"settings": self.settings, "transcodeCacheCleared": cleared}
 
     def dialog_pick_folder(self, start_path: str = "") -> dict:
         """Abre el selector de carpeta del sistema (ventana PyWebView)."""
@@ -189,9 +221,8 @@ class SystemBridgeMixin:
         raw = (start_path or "").strip()
         if raw:
             try:
-                expanded = Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
-                if expanded.is_dir():
-                    directory = str(expanded)
+                expanded = resolve_dir_path(raw)
+                directory = str(expanded)
             except (OSError, ValueError):
                 directory = ""
         result = win.create_file_dialog(FileDialog.FOLDER, directory=directory)
@@ -219,6 +250,10 @@ class SystemBridgeMixin:
         self.settings["gallery_recent_folders"] = unique[:20]
 
     def _pinned_folders(self) -> list[str]:
+        if hasattr(self, "_markers_tree"):
+            from ..core.item_tree import flatten_marker_paths
+
+            return flatten_marker_paths(self._markers_tree())
         pins = self.settings.get("gallery_pinned_folders")
         if not isinstance(pins, list):
             pins = []
@@ -226,7 +261,9 @@ class SystemBridgeMixin:
         return [str(x) for x in pins if str(x).strip()]
 
     def gallery_pin_folder(self, raw_path: str) -> dict:
-        p = str(Path(raw_path).expanduser().resolve())
+        if hasattr(self, "markers_add"):
+            return self.markers_add(raw_path, "", "")
+        p = str(resolve_dir_path(raw_path))
         pins = self._pinned_folders()
         if p not in pins:
             pins.insert(0, p)
@@ -235,8 +272,29 @@ class SystemBridgeMixin:
         return {"pinnedFolders": list(self.settings.get("gallery_pinned_folders", []))}
 
     def gallery_unpin_folder(self, raw_path: str) -> dict:
-        p = str(Path(raw_path).expanduser().resolve())
+        p = str(resolve_dir_path(raw_path))
         pins = [x for x in self._pinned_folders() if x != p]
         self.settings["gallery_pinned_folders"] = pins
         save_app_settings(self.settings)
         return {"pinnedFolders": pins}
+
+    def gallery_open_external(self, path: str) -> dict:
+        """Abre el archivo con la aplicación predeterminada del sistema (p. ej. Dragon Player)."""
+        import subprocess
+
+        from ..core.fs_path import resolve_file_path
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        try:
+            subprocess.Popen(
+                ["xdg-open", str(p)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}

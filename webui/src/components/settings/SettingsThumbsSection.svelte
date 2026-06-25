@@ -3,6 +3,7 @@
 
   export let settingsThumbPresetIdx: number;
   export let settingsThumbScaleDraft: number;
+  export let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
   export let thumbGapPx: number;
   export let thumbImageRadiusPx: number;
   export let thumbTileRadiusPx: number;
@@ -57,6 +58,16 @@
     step="0.01"
     bind:value={settingsThumbScaleDraft}
   />
+
+  <label class="field-label" for="set-thumb-quality">{t("settings.thumbQualityLabel")}</label>
+  <select id="set-thumb-quality" class="om-input" bind:value={galleryThumbQualityPreset}>
+    <option value="balanced">{t("settings.thumbQualityBalanced")}</option>
+    <option value="sharp">{t("settings.thumbQualitySharp")}</option>
+    <option value="hidpi">{t("settings.thumbQualityHidpi")}</option>
+    <option value="performance">{t("settings.thumbQualityPerformance")}</option>
+  </select>
+  <p class="settings-hint">{t("settings.thumbQualityHint")}</p>
+
   <label class="field-label" for="set-thumb-gap"
     >{t("settings.thumbGap")} {Math.round(thumbGapPx)}px</label
   >

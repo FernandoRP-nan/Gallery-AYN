@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { t } from "../lib/i18n";
+  export let message = "";
 </script>
 
 <div class="load-overlay" aria-busy="true" aria-live="polite">
   <div class="load-overlay__spinner"></div>
-  <span class="load-overlay__text">{t("load.loading")}</span>
+  {#if message}
+    <span class="load-overlay__text">{message}</span>
+  {/if}
 </div>
 
 <style>

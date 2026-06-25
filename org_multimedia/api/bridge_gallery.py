@@ -33,6 +33,7 @@ from ..core.gallery_paths import (
     sort_image_paths,
 )
 
+from ..core.fs_path import resolve_dir_path
 from ..core.section_color import accent_hex_from_paths
 
 _MONTH_NAMES_ES = (
@@ -162,6 +163,47 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
     except Exception:
         return None
 
+# Número de miniaturas del contenido de carpeta que se envían al frontend.
+_FOLDER_PREVIEW_COUNT = 4
+
+
+def _folder_preview_thumbs(
+    folder: Path,
+    count: int,
+    thumb_px: int,
+) -> list[str | None]:
+    """Devuelve hasta `count` data-URLs LQ del primer nivel (imágenes y vídeos)."""
+    from ..core.thumb_quality_options import thumb_encode_params
+    from .bridge_editor import _video_thumb_jpeg_data_url_square
+
+    if Image is None:
+        return []
+    enc = thumb_encode_params(max(32, thumb_px // 2), "lq")
+    thumb_cell = enc.size_px
+    candidates: list[Path] = []
+    try:
+        for p in folder.iterdir():
+            if not p.is_file():
+                continue
+            ext = p.suffix.lower()
+            if ext in MediaOrganizer.IMAGE_EXTENSIONS and ext != ".svg":
+                candidates.append(p)
+            elif ext in MediaOrganizer.VIDEO_EXTENSIONS:
+                candidates.append(p)
+    except OSError:
+        return []
+    candidates.sort(key=lambda x: str(x).lower())
+    urls: list[str | None] = []
+    for p in candidates[:count]:
+        ext = p.suffix.lower()
+        if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            url = _video_thumb_jpeg_data_url_square(p, thumb_cell, quality=enc.jpeg_quality)
+        else:
+            url = _thumb_jpeg_data_url_square(p, thumb_cell, quality=enc.jpeg_quality)
+        urls.append(url)
+    return urls
+
+
 class GalleryBridgeMixin:
     def _is_grouped_mode(self) -> bool:
         return bool(self.settings.get("gallery_group_by_folder", False))
@@ -219,9 +261,21 @@ class GalleryBridgeMixin:
         self.gallery_page = max(0, min(self.gallery_page, tp - 1))
 
     def _slice(self) -> tuple[int, int]:
-        if self._is_grouped_mode() or self._is_timeline_mode():
+        if self._is_grouped_mode():
             total = len(self.ordered_paths)
             return 0, total
+        if self._is_timeline_mode():
+            total = len(self.ordered_paths)
+            if not self._is_unlimited_mode():
+                return 0, total
+            if total <= 0:
+                return 0, 0
+            loaded = self.gallery_unlimited_loaded
+            if loaded <= 0:
+                loaded = min(total, self._unlimited_batch_size())
+            loaded = max(0, min(total, loaded))
+            self.gallery_unlimited_loaded = loaded
+            return 0, loaded
         if self._is_unlimited_mode():
             total = len(self.ordered_paths)
             if total <= 0:
@@ -238,35 +292,60 @@ class GalleryBridgeMixin:
         return s, e
 
     @staticmethod
-    def _path_mtime_iso(p: Path) -> str:
+    def _path_date_ts(p: Path, field: str = "mtime") -> float:
         try:
-            ts = p.stat().st_mtime
+            st = p.stat()
+            return float(st.st_ctime if field == "ctime" else st.st_mtime)
+        except OSError:
+            return 0.0
+
+    @staticmethod
+    def _path_date_iso(p: Path, field: str = "mtime") -> str:
+        try:
+            ts = GalleryBridgeMixin._path_date_ts(p, field)
             return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
         except OSError:
             return ""
 
     @staticmethod
-    def _path_year_month(p: Path) -> tuple[int, int]:
+    def _path_year_month(p: Path, field: str = "mtime") -> tuple[int, int]:
         try:
-            ts = p.stat().st_mtime
+            ts = GalleryBridgeMixin._path_date_ts(p, field)
             dt = datetime.datetime.fromtimestamp(ts)
             return (dt.year, dt.month)
         except OSError:
             return (1970, 1)
 
+    def _timeline_date_field(self) -> str:
+        """Campo de fecha para línea de tiempo según el criterio primario de orden."""
+        mode = str(self.settings.get("gallery_sort_mode", "mtime:desc"))
+        primary = mode.split(",")[0].strip().split(":")[0].lower()
+        if primary in ("ctime", "creacion", "creation", "created"):
+            return "ctime"
+        return "mtime"
+
+    def _timeline_sort_mode(self) -> str:
+        """Modo de orden para timeline; fuerza mtime/ctime si el primario no es fecha."""
+        mode = str(self.settings.get("gallery_sort_mode", "mtime:desc"))
+        primary = mode.split(",")[0].strip().split(":")[0].lower()
+        if primary in ("mtime", "date", "fecha", "ctime", "creacion", "creation", "created"):
+            return mode
+        return "mtime:desc,name:asc"
+
     def _compute_timeline_spans(self, ordered: list[Path]) -> list[tuple[int, int, str, str]]:
-        """Rangos por (año, mes) sobre una lista ya ordenada por fecha de modificación."""
+        """Rangos por (año, mes) sobre una lista ya ordenada por fecha."""
         if not ordered:
             return []
+        date_field = self._timeline_date_field()
         spans: list[tuple[int, int, str, str]] = []
         i = 0
         while i < len(ordered):
-            y, m = self._path_year_month(ordered[i])
+            y, m = self._path_year_month(ordered[i], date_field)
             j = i + 1
-            while j < len(ordered) and self._path_year_month(ordered[j]) == (y, m):
+            while j < len(ordered) and self._path_year_month(ordered[j], date_field) == (y, m):
                 j += 1
             key = f"{y}-{m:02d}"
-            label = f"{_MONTH_NAMES_ES[m]} {y}"
+            label = f"{_MONTH_NAMES_ES[m].capitalize()} {y}"
             spans.append((i, j, key, label))
             i = j
         return spans
@@ -278,6 +357,7 @@ class GalleryBridgeMixin:
         selected_frozenset: frozenset[Path],
         *,
         timeline_meta: bool = False,
+        timeline_date_field: str = "mtime",
     ) -> list[dict]:
         def _one_image_item(p: Path) -> dict:
             ext = p.suffix.lower()
@@ -287,11 +367,11 @@ class GalleryBridgeMixin:
                 "name": p.name,
                 "path": str(p),
                 "selected": p in selected_frozenset,
-                "thumbDataUrl": None if is_video else self._thumb_data_url_cached(p, thumb_px, "lq"),
+                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
                 "thumbQuality": "lq",
             }
             if timeline_meta:
-                d["mtimeIso"] = self._path_mtime_iso(p)
+                d["mtimeIso"] = self._path_date_iso(p, timeline_date_field)
             return d
 
         if not slice_paths:
@@ -328,7 +408,7 @@ class GalleryBridgeMixin:
         if self._is_timeline_mode():
             include = bool(self.settings.get("gallery_include_subfolders", False))
             raw = scan_media_recursive(folder) if include else scan_media_flat(folder)
-            ordered = sort_image_paths(raw, "mtime")
+            ordered = sort_image_paths(raw, self._timeline_sort_mode())
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
             return ordered
         include = bool(self.settings.get("gallery_include_subfolders", False))
@@ -339,14 +419,25 @@ class GalleryBridgeMixin:
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
         return sort_image_paths(raw, sort_mode)
 
+    def _gallery_media_counts(self) -> tuple[int, int]:
+        """Devuelve (imágenes, vídeos) en ordered_paths."""
+        videos = 0
+        for p in self.ordered_paths:
+            if p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS:
+                videos += 1
+        return len(self.ordered_paths) - videos, videos
+
     def _gallery_state(self) -> dict:
         total = len(self.ordered_paths)
+        total_images, total_videos = self._gallery_media_counts()
         tp = self._total_pages()
         self._clamp_page()
         s, e = self._slice()
         return {
             "folder": str(self.gallery_folder) if self.gallery_folder else "",
             "total": total,
+            "totalImages": total_images,
+            "totalVideos": total_videos,
             "totalElements": total + len(self.subfolders),
             "totalBytes": int(self.gallery_total_bytes),
             "page": self.gallery_page + 1,
@@ -384,24 +475,70 @@ class GalleryBridgeMixin:
             items.extend(self._build_image_items(slice_paths, thumb_px, selected_frozenset))
         return items
 
-    def _build_gallery_items_timeline(self) -> list[dict]:
+    def _build_timeline_items_for_range(self, range_start: int, range_end: int) -> list[dict]:
+        """Ítems de línea de tiempo para un rango de índices en ordered_paths (carga progresiva)."""
         items: list[dict] = []
+        if range_start >= range_end:
+            return items
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
-        for start, end, key, label in self._gallery_timeline_spans:
-            items.append(
-                {
-                    "kind": "section",
-                    "name": label,
-                    "path": f"section:timeline:{key}",
-                    "sectionFolder": "",
-                    "thumbDataUrl": None,
-                }
-            )
-            slice_paths = self.ordered_paths[start:end]
+        for span_start, span_end, key, label in self._gallery_timeline_spans:
+            if span_end <= range_start:
+                continue
+            if span_start >= range_end:
+                break
+            clip_start = max(span_start, range_start)
+            clip_end = min(span_end, range_end)
+            if clip_start >= clip_end:
+                continue
+            if clip_start == span_start:
+                items.append(
+                    {
+                        "kind": "section",
+                        "name": label,
+                        "path": f"section:timeline:{key}",
+                        "sectionFolder": "",
+                        "thumbDataUrl": None,
+                    }
+                )
+            slice_paths = self.ordered_paths[clip_start:clip_end]
             items.extend(
-                self._build_image_items(slice_paths, thumb_px, selected_frozenset, timeline_meta=True)
+                self._build_image_items(
+                    slice_paths,
+                    thumb_px,
+                    selected_frozenset,
+                    timeline_meta=True,
+                    timeline_date_field=self._timeline_date_field(),
+                )
             )
+        return items
+
+    def _build_folder_items(self, thumb_px: int) -> list[dict]:
+        """Tiles de subcarpetas inmediatas (navegación)."""
+        if not self.subfolders:
+            return []
+
+        def _folder_item(sub: Path) -> dict:
+            preview_urls = _folder_preview_thumbs(sub, _FOLDER_PREVIEW_COUNT, thumb_px)
+            return {
+                "kind": "folder",
+                "name": sub.name,
+                "path": str(sub),
+                "thumbDataUrl": None,
+                "folderPreviewUrls": preview_urls,
+            }
+
+        max_w = min(8, max(1, len(self.subfolders)))
+        with ThreadPoolExecutor(max_workers=max_w) as pool:
+            return list(pool.map(_folder_item, self.subfolders))
+
+    def _build_gallery_items_timeline(self) -> list[dict]:
+        s, e = self._slice()
+        thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+        items: list[dict] = []
+        if s == 0 and self.gallery_folder is not None:
+            items.extend(self._build_folder_items(thumb_px))
+        items.extend(self._build_timeline_items_for_range(s, e))
         return items
 
     def _build_gallery_items(self) -> list[dict]:
@@ -412,8 +549,10 @@ class GalleryBridgeMixin:
         s, e = self._slice()
         items: list[dict] = []
         if self.gallery_page == 0 and self.gallery_folder is not None:
-            for sub in self.subfolders:
-                items.append({"kind": "folder", "name": sub.name, "path": str(sub), "thumbDataUrl": None})
+            thumb_px = _thumb_px_from_gallery_scale(
+                float(self.settings.get("gallery_thumb_scale", 1.0))
+            )
+            items.extend(self._build_folder_items(thumb_px))
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         slice_paths = self.ordered_paths[s:e]
         selected_frozenset = frozenset(self.selected)
@@ -421,9 +560,7 @@ class GalleryBridgeMixin:
         return items
 
     def gallery_load_folder(self, raw_path: str) -> dict:
-        folder = Path(os.path.expandvars(os.path.expanduser(raw_path.strip()))).resolve()
-        if not folder.is_dir():
-            raise ValueError(f"No existe o no es carpeta: {folder}")
+        folder = resolve_dir_path(raw_path)
         with self.lock:
             self._clear_thumb_cache()
             self.gallery_folder = folder
@@ -438,7 +575,7 @@ class GalleryBridgeMixin:
             self.gallery_unlimited_loaded = (
                 min(len(self.ordered_paths), self._unlimited_batch_size()) if self._is_unlimited_mode() else 0
             )
-            if (self._is_grouped_mode() or self._is_timeline_mode()) and self._is_unlimited_mode():
+            if self._is_grouped_mode() and self._is_unlimited_mode():
                 self.gallery_unlimited_loaded = len(self.ordered_paths)
             return {
                 "state": self._gallery_state(),
@@ -446,23 +583,57 @@ class GalleryBridgeMixin:
                 "recentFolders": list(self.settings.get("gallery_recent_folders", [])),
             }
 
-    def gallery_reload(self) -> dict:
+    def gallery_reload(self, *, clear_thumb_cache: bool = True) -> dict:
         """Reindexa archivos en la carpeta actual sin perder página ni selección (p. ej. tras mover archivos)."""
         if not self.gallery_folder:
             return {"state": self._gallery_state(), "items": []}
         with self.lock:
-            self._clear_thumb_cache()
-            folder = self.gallery_folder
-            self.subfolders = list_subdirs(folder)
-            self.ordered_paths = self._scan_ordered_paths(folder)
-            self._schedule_gallery_total_bytes_recompute()
-            self._clamp_page()
-            if self._is_unlimited_mode():
-                if self._is_grouped_mode() or self._is_timeline_mode():
-                    self.gallery_unlimited_loaded = len(self.ordered_paths)
-                else:
-                    self.gallery_unlimited_loaded = min(len(self.ordered_paths), self._unlimited_batch_size())
+            self._gallery_reindex_core(clear_thumb_cache=clear_thumb_cache)
             return {"state": self._gallery_state(), "items": self._build_gallery_items()}
+
+    def _gallery_reindex_core(self, *, clear_thumb_cache: bool) -> None:
+        prev_unlimited_loaded = int(self.gallery_unlimited_loaded or 0)
+        if clear_thumb_cache:
+            self._clear_thumb_cache()
+        folder = self.gallery_folder
+        self.subfolders = list_subdirs(folder)
+        self.ordered_paths = self._scan_ordered_paths(folder)
+        self._schedule_gallery_total_bytes_recompute()
+        self._clamp_page()
+        if self._is_unlimited_mode():
+            total = len(self.ordered_paths)
+            if self._is_grouped_mode():
+                self.gallery_unlimited_loaded = total
+            else:
+                batch = self._unlimited_batch_size()
+                keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
+                self.gallery_unlimited_loaded = min(total, max(batch, keep))
+
+    def gallery_reindex_delta(self, removed_paths: list[str] | None = None) -> dict:
+        """Reindexa metadatos tras quitar archivos; evita serializar toda la rejilla si no hace falta."""
+        if not self.gallery_folder:
+            return {"state": self._gallery_state(), "removedPaths": [], "delta": True}
+        with self.lock:
+            self._gallery_reindex_core(clear_thumb_cache=False)
+            normalized: list[str] = []
+            for raw in removed_paths or []:
+                s = str(raw).strip()
+                if not s:
+                    continue
+                try:
+                    normalized.append(str(Path(s).expanduser().resolve()))
+                except OSError:
+                    normalized.append(s)
+            out: dict = {
+                "state": self._gallery_state(),
+                "removedPaths": normalized,
+                "delta": True,
+            }
+            # Agrupado / línea de tiempo: la estructura de secciones puede cambiar → items completos.
+            if self._is_grouped_mode() or self._is_timeline_mode():
+                out["items"] = self._build_gallery_items()
+                out["delta"] = False
+            return out
 
     def gallery_refresh_items(self) -> dict:
         """Solo reconstruye estado e ítems (sin reescaneo): útil tras toggle de selección."""
@@ -484,7 +655,7 @@ class GalleryBridgeMixin:
         with self.lock:
             if not self.gallery_folder:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
-            if self._is_grouped_mode() or self._is_timeline_mode():
+            if self._is_grouped_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
             if not self._is_unlimited_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
@@ -497,13 +668,16 @@ class GalleryBridgeMixin:
             if start >= end:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
-            thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
-            selected_frozenset = frozenset(self.selected)
-            image_items = self._build_image_items(self.ordered_paths[start:end], thumb_px, selected_frozenset)
+            if self._is_timeline_mode():
+                batch_items = self._build_timeline_items_for_range(start, end)
+            else:
+                thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+                selected_frozenset = frozenset(self.selected)
+                batch_items = self._build_image_items(self.ordered_paths[start:end], thumb_px, selected_frozenset)
 
             self.gallery_unlimited_loaded = end
             has_more = end < total
-            return {"state": self._gallery_state(), "items": image_items, "hasMore": has_more}
+            return {"state": self._gallery_state(), "items": batch_items, "hasMore": has_more}
 
     def gallery_open_folder_tile(self, path: str) -> dict:
         return self.gallery_load_folder(path)
@@ -514,18 +688,34 @@ class GalleryBridgeMixin:
         return {"path": str(p), "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "hq"), "thumbQuality": "hq"}
 
     def gallery_file_stat(self, path: str) -> dict:
-        """Metadatos básicos para el menú contextual (tamaño, fecha de modificación local)."""
-        p = Path(path).expanduser().resolve()
-        if not p.is_file():
-            raise ValueError("Archivo no encontrado.")
+        """Metadatos básicos para propiedades del menú contextual."""
+        import mimetypes
+
+        from ..core.fs_path import resolve_file_path
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            raise ValueError("Archivo no encontrado.") from exc
         try:
             st = p.stat()
         except OSError as exc:
             raise ValueError(f"No se pudo leer el archivo: {exc}") from exc
+        ext = p.suffix.lower()
+        if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            media_type = "video"
+        elif ext in MediaOrganizer.IMAGE_EXTENSIONS:
+            media_type = "image"
+        else:
+            media_type = "other"
+        mime, _ = mimetypes.guess_type(p.name)
         mtime = datetime.datetime.fromtimestamp(st.st_mtime)
         return {
             "path": str(p),
             "name": p.name,
             "sizeBytes": int(st.st_size),
             "mtimeIso": mtime.strftime("%Y-%m-%d %H:%M:%S"),
+            "extension": ext.lstrip(".") or p.suffix,
+            "mediaType": media_type,
+            "mimeType": mime or "",
         }

@@ -6,54 +6,143 @@
   import LoadOverlay from "./components/LoadOverlay.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
   import { t } from "./lib/i18n";
-  import { galleryGridCellPx } from "./lib/thumbScale";
+  import { normalizePathForApi, buildMediaFileUrl } from "./lib/pathUtils";
+  import { copyTextToClipboard } from "./lib/clipboardText";
+  import { mergePreviewApiResult } from "./lib/previewUtils";
+  import {
+    computeMiniMapImageLayout,
+    computeMiniMapRectStyle,
+    computeMiniMapSize,
+    computeViewportNorm,
+    miniMapHasOverflow,
+    miniMapPointToNorm,
+    panFromMiniMapNorm,
+  } from "./lib/zoomMiniMap";
+  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
+  import { canTranscodeVideo, tryAutoplayVideo } from "./lib/videoPlayback";
+  import { scheduleNextZoomVideoWarm, cancelZoomVideoWarm } from "./lib/videoCarouselWarm";
+  import {
+    formatVideoDiagnosticReport,
+    isQtPlayerCreationError,
+    mediaErrorLabel,
+    probeVideoHttpUrl,
+    type VideoBackendDiagnostics,
+  } from "./lib/videoDiagnostics";
+  import { galleryGridCellPx, thumbQualityRefreshNeeded } from "./lib/thumbScale";
+  import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
+  import DestPreviewModal from "./components/DestPreviewModal.svelte";
+  import DestMoveCtxTree from "./components/DestMoveCtxTree.svelte";
+  import DestMoveFlyoutPortals from "./components/DestMoveFlyoutPortals.svelte";
+  import {
+    cancelMoveMenuClose,
+    moveDestPanelOpen,
+    moveRootHovered,
+    onMoveRootPointerLeave,
+    resetMoveFlyoutState,
+  } from "./lib/destMoveFlyoutState";
+  import PagerBar from "./components/PagerBar.svelte";
+  import PreviewZoomPanel from "./components/PreviewZoomPanel.svelte";
+  import PreviewVideoIdle from "./components/PreviewVideoIdle.svelte";
+  import PreviewVideoProfiles from "./components/PreviewVideoProfiles.svelte";
+  import {
+    applyGalleryMutationResponse,
+    getGalleryItems,
+    getGalleryState,
+    mergeGalleryItemsFromApi,
+    patchGallerySelection,
+    setGalleryPayload,
+    setGalleryState,
+    setGalleryItems,
+    syncSelectedCountFromItems,
+    updateGalleryItems,
+    type GalleryMutationResponse,
+    type GalleryState,
+  } from "./lib/galleryRuntime";
+  import {
+    bumpGalleryThumbHydrationToken,
+    disposeGalleryThumbs,
+    galleryThumbHydrating,
+    refreshGalleryThumbsForScale,
+  } from "./lib/galleryThumbs";
+  import { cancelZoomCarouselHydration, hydrateZoomCarouselThumbs } from "./lib/zoomCarouselThumbs";
+  import {
+    formatGallerySortMode,
+    isTimelineDateSortKey,
+    parseGallerySortMode,
+    primaryGallerySortKey,
+  } from "./lib/gallerySort";
+  import type { ActiveProcess } from "./components/PagerBar.svelte";
+  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems, hasGalleryThumbHq } from "./lib/galleryThumbHqCache";
+  import {
+    bumpGalleryNavigationGeneration,
+    getGalleryNavigationGeneration,
+    isGalleryNavigationCurrent,
+  } from "./lib/gallerySession";
+  import { commitChromePagerState } from "./lib/chromeRemember";
+  import { isGalleryMediaKind, isGallerySelectableKind, mergeItemsKeepingBestThumb } from "./lib/galleryUtils";
   import {
     applyUiThemeToDocument,
     normalizeUiTheme,
     readCachedUiTheme,
     type UiThemeId,
   } from "./lib/uiTheme";
+  import type { TreeNode } from "./lib/itemTree";
+  import {
+    cloneTree,
+    destToolbarItems as buildDestToolbarItems,
+    findParentFolderId,
+    isDestNode,
+    isFolderNode,
+    flattenMarkerPaths,
+    folderLabelAt,
+    getChildrenAt,
+    markerToolbarItems as buildMarkerToolbarItems,
+    normalizeTreeNodes,
+    parentIdOrEmpty,
+  } from "./lib/itemTree";
 
   const BLANK_DRAG_IMG =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
   let folder = "";
-  let galleryState: any = { page: 1, totalPages: 1, total: 0, selectedCount: 0 };
-  let items: GalleryItem[] = [];
-  /** Carpetas destino (mismo patrón reactivo que `items`: `let` + asignación tras el API). */
-  let destRows: Array<{ label: string; path: string }> = [];
+  let galleryWorkspace: GalleryWorkspace | null = null;
+  /** Árbol de carpetas destino y carpeta activa en la barra inferior. */
+  let destTree: TreeNode[] = [];
+  let destToolbarFolderId: string | null = null;
+  let markerTree: TreeNode[] = [];
+  let markerToolbarFolderId: string | null = null;
+  let destTreeSettingsDraft: TreeNode[] = [];
+  let markerTreeSettingsDraft: TreeNode[] = [];
+  $: destToolbarVisibleItems = buildDestToolbarItems(destTree, destToolbarFolderId);
+  $: destToolbarFolderLabel = folderLabelAt(destTree, destToolbarFolderId);
+  $: destToolbarCanGoBack = Boolean(destToolbarFolderId);
+  function destTreeHasMoveTargets(nodes: TreeNode[]): boolean {
+    for (const n of nodes) {
+      if (isDestNode(n)) return true;
+      if (isFolderNode(n) && destTreeHasMoveTargets(n.children)) return true;
+    }
+    return false;
+  }
+
+  $: destTreeHasTargets = destTreeHasMoveTargets(destTree);
+  $: markerToolbarVisibleItems = buildMarkerToolbarItems(markerTree, markerToolbarFolderId);
+  $: markerToolbarCanGoBack = Boolean(markerToolbarFolderId);
   let selectedPreview: {
     path: string;
     name: string;
     dataUrl: string | null;
+    placeholderUrl?: string | null;
     mediaType?: "image" | "video" | "svg";
     fileUrl?: string | null;
   } | null = null;
   let status = t("status.ready");
   let thumbScale = 1;
+  /** Escala ya aplicada en servidor/caché HQ (detecta saltos de tamaño en px). */
+  let appliedThumbScale = 1;
   let previewOpen = false;
-  let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
-  let previewSelectedPaths: string[] = [];
-  let previewSelectionMode = false;
-  let previewLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let previewLongPressPath: string | null = null;
-  let previewLongPressTriggered = false;
-  let previewRangeSelecting = false;
-  let previewRangeAnchorPath: string | null = null;
-  let previewRangeMode: "select" | "deselect" = "select";
-  let previewRangeBaseSelectedPaths: string[] = [];
-  let previewSuppressClick = false;
-  let previewDragActive = false;
+  let previewDestPath = "";
+  let destPreviewModal: DestPreviewModal | null = null;
   let galleryRangeSelecting = false;
-  let galleryRangeAnchorPath: string | null = null;
-  let galleryRangeMode: "select" | "deselect" = "select";
-  let galleryRangeBaseSelectedPaths: string[] = [];
-  let galleryRangeBaseSelectedSet: Set<string> | null = null;
-  let galleryRangeDraftSelectedPaths: string[] | null = null;
-  let galleryRangeDraftSelectedSet: Set<string> | null = null;
-  let galleryRangeCurrentPath: string | null = null;
-  let galleryRangePendingPath: string | null = null;
-  let galleryRangeRaf: number | null = null;
   let galleryRangeSuppressClick = false;
   let galleryCursorPath: string | null = null;
   let galleryKeyboardRangeAnchorPath: string | null = null;
@@ -62,6 +151,9 @@
   let previewZoomPath = "";
   let previewZoomName = "";
   let previewZoomDataUrl: string | null = null;
+  /** Miniatura estable para el minimapa (no cambia al alternar resolución nativa). */
+  let previewZoomMiniSrc: string | null = null;
+  let miniMapDrag = false;
   let previewZoomScale = 1;
   let previewZoomMode: "fit" | "fillWidth" = "fit";
   let previewFillWidthAlignPending = false;
@@ -69,17 +161,22 @@
   let previewPanY = 0;
   let previewPanDrag = false;
   let previewPanMoved = false;
+  let previewPanPointerDown = false;
+  let previewPanDownX = 0;
+  let previewPanDownY = 0;
   let previewPanStartX = 0;
   let previewPanStartY = 0;
+  const PAN_DRAG_THRESHOLD_PX = 5;
   let previewZoomCarouselVisible = true;
   let previewZoomDestMode = false;
   let previewZoomCanUndoMove = false;
   let zoomMoveQueue: Array<{ srcPath: string; destPath: string }> = [];
   let zoomMoveWorkerRunning = false;
-  let galleryMoveQueue: Array<{ srcPaths: string[]; destPath: string }> = [];
+  let galleryMoveQueue: GalleryMoveJob[] = [];
   let galleryMoveWorkerRunning = false;
-  let galleryDeleteQueue: Array<{ paths: string[] }> = [];
+  let galleryDeleteQueue: GalleryDeleteJob[] = [];
   let galleryDeleteWorkerRunning = false;
+  let galleryLoadingMore = false;
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   let zoomStageEl: HTMLDivElement | null = null;
@@ -88,16 +185,45 @@
   let zoomVideoEl: HTMLVideoElement | null = null;
   let previewZoomMediaType: "image" | "video" | "svg" = "image";
   let previewZoomFileUrl: string | null = null;
+  let previewVideoSrc = "";
+  let previewVideoError = "";
+  let previewVideoErrorDetails = "";
+  let previewVideoLastErrorDetail = "";
+  let previewVideoDiagLoading = false;
+  let previewVideoTriedUrls: string[] = [];
+  let previewVideoPlayback: MediaPlaybackInfo | null = null;
+  let previewZoomPlayback: MediaPlaybackInfo | null = null;
+  let previewVideoPreparing = false;
+  let previewVideoPrepareMsg = "";
+  /** true tras pulsar reproducir; evita precargar al seleccionar o saltar entre vídeos. */
+  let previewVideoEl: HTMLVideoElement | null = null;
+  let previewVideoArmed = false;
+  let previewVideoLaunching = false;
+  let previewVideoPlayLocked = false;
+  let previewVideoSession = 0;
+  let previewZoomVideoArmed = false;
+  let previewZoomVideoLaunching = false;
+  let previewZoomVideoPlayLocked = false;
+  let previewZoomVideoStatus = "";
+  let previewZoomVideoSession = 0;
+  let previewZoomVideoPreparing = false;
+  let previewZoomThumbUrl: string | null = null;
+  let videoTranscodeJobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }> = [];
+  let videoPreparePollTimer: number | null = null;
+  let previewVideoMode: VideoPlaybackMode = "auto";
+  let previewVideoProfiles: Array<{ id: string; available: boolean; recommended?: boolean; strategy?: string }> = [];
+  let previewVideoPreparePath = "";
+  let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
+  let videoTranscodeMaxHeight = 1080;
+  let videoTranscodeHw: "auto" | "off" = "auto";
+  let videoTranscodePresetBackup: "turbo" | "fast" | "quality" = "fast";
+  let videoTranscodeMaxHeightBackup = 1080;
+  let videoTranscodeHwBackup: "auto" | "off" = "auto";
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
-  let galleryGridEl: HTMLDivElement | null = null;
   let galleryScrollEl: HTMLDivElement | null = null;
-  let galleryPlainEl: HTMLDivElement | null = null;
   let routePathEl: HTMLInputElement | null = null;
-  let galleryGridObservedEl: HTMLDivElement | null = null;
-  let galleryGridResizeObserver: ResizeObserver | null = null;
-  let galleryGridWidth = 0;
   const GALLERY_GRID_EDGE_PAD_PX = 8;
   let zoomNavItems: Array<{
     path: string;
@@ -114,15 +240,9 @@
   let zoomCropStartY = 0;
   let zoomCropCurX = 0;
   let zoomCropCurY = 0;
-  let deferredZoomMoveRefresh: { state: any; items: GalleryItem[] } | null = null;
-  let galleryThumbHydrationToken = 0;
-  let galleryLoadingMore = false;
-  let galleryHasMore = false;
-  let galleryAutoLoadRunId = 0;
+  let deferredZoomMoveRefresh: GalleryMutationResponse | null = null;
   let galleryScrollAtTop = true;
-  let previewThumbHydrationToken = 0;
   let previewVisible = true;
-  let previewDestPath = "";
   let destinationsMode = false;
   let folderBackStack: string[] = [];
   let folderForwardStack: string[] = [];
@@ -136,7 +256,7 @@
   let sectionDominantColor = true;
   /** Vista calendario: secciones por mes; marcas por día según zoom (solo cliente). */
   let timelineView = false;
-  let gallerySortMode: "name" | "mtime" = "name";
+  let gallerySortMode = "name,mtime,type";
   /** Resaltado al arrastrar sobre encabezado de sección (agrupar por carpeta). */
   let dragOverSectionPath: string | null = null;
   let settingsOpen = false;
@@ -187,13 +307,14 @@
     { id: "xgrande", labelKey: "settings.thumbPresetXL", value: 1.8 }
   ] as const;
   let settingsThumbPresetIdx = 1;
+  let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
+  let galleryThumbQualityPresetBackup: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
   let pageJumpDraft = 1;
   let previewRatio = 0.4;
   /** Fracción de altura para el panel inferior de destinos (solo pestaña Destinos). */
   let destPanelRatio = 0.26;
   let destSplitDrag = false;
   /** Modal “ver carpeta destino”: ~80 % del viewport (sin sliders). */
-  const DEST_MODAL_FRAC = 0.8;
   let orgPath = "";
   let orgRunning = false;
   let orgDetail = t("status.orgDetailIdle");
@@ -225,23 +346,96 @@
   /** Listeners globales durante HTML5 DnD (Qt WebEngine: document + capture). */
   let dragWinMove: ((ev: DragEvent) => void) | null = null;
   let dragWinEnd: (() => void) | null = null;
+  /** Throttle: true mientras hay un rAF pendiente del dragWinMove. */
+  let dragRafPending = false;
 
   let splitDrag = false;
   /** Contador para overlay de carga (carpetas, API, etc.). */
   let loadCount = 0;
-  $: uiLoading = loadCount > 0;
-  $: galleryHasMore = galleryHasMoreNow();
-
-  function trackLoad<T>(promise: Promise<T>): Promise<T> {
+  let uiLoading = false;
+  let uiLoadingMessage = "";
+  let loadingTimeout: ReturnType<typeof setTimeout> | null = null;
+  function trackLoad<T>(promise: Promise<T>, message = ""): Promise<T> {
     loadCount++;
+    if (loadCount === 1) {
+      uiLoadingMessage = message;
+      if (loadingTimeout) clearTimeout(loadingTimeout);
+      // Solo activa el spinner si la operación tarda más de 180ms (evita parpadeos en clics rápidos)
+      loadingTimeout = setTimeout(() => {
+        if (loadCount > 0) {
+          uiLoading = true;
+        }
+      }, 180);
+    }
     return promise.finally(() => {
       loadCount--;
+      if (loadCount <= 0) {
+        loadCount = 0;
+        uiLoadingMessage = "";
+        if (loadingTimeout) {
+          clearTimeout(loadingTimeout);
+          loadingTimeout = null;
+        }
+        uiLoading = false;
+      }
     });
   }
 
-  function galleryHasMoreNow(): boolean {
-    if (thumbsPerPage !== 0) return false;
-    return Number(galleryState?.endIndex ?? 0) < Number(galleryState?.total ?? 0);
+  $: activeProcesses = (() => {
+    const list: ActiveProcess[] = [];
+    if (loadCount > 0) {
+      list.push({
+        id: "load",
+        label: uiLoadingMessage ? `${t("pager.processLoading")}: ${uiLoadingMessage}` : t("pager.processLoading"),
+      });
+    }
+    if ($galleryThumbHydrating) {
+      list.push({ id: "thumbs-hq", label: t("pager.processThumbsHq") });
+    }
+    if (galleryLoadingMore) {
+      list.push({ id: "load-more", label: t("pager.processLoadMore") });
+    }
+    if (galleryMoveWorkerRunning || galleryMoveQueue.length > 0) {
+      list.push({
+        id: "move",
+        label: t("pager.processMoveQueue").replace("{n}", String(galleryMoveQueue.length)),
+      });
+    }
+    if (galleryDeleteWorkerRunning || galleryDeleteQueue.length > 0) {
+      list.push({
+        id: "delete",
+        label: t("pager.processDeleteQueue").replace("{n}", String(galleryDeleteQueue.length)),
+      });
+    }
+    if (zoomMoveWorkerRunning || zoomMoveQueue.length > 0) {
+      list.push({
+        id: "zoom-move",
+        label: t("pager.processZoomMove").replace("{n}", String(zoomMoveQueue.length)),
+      });
+    }
+    if (orgRunning) {
+      list.push({
+        id: "organizer",
+        label: orgDetail ? `${t("pager.processOrganizer")}: ${orgDetail}` : t("pager.processOrganizer"),
+      });
+    }
+    for (const job of videoTranscodeJobs.filter(isActiveTranscodeJob)) {
+      const pct =
+        job.status === "running" && job.progress && job.progress !== "100" ? ` · ${job.progress}%` : "";
+      const queued = job.status === "queued" ? ` (${t("pager.processQueued")})` : "";
+      const base =
+        job.format === "remux" ? t("pager.processVideoRemux") : t("pager.processVideoTranscode");
+      list.push({
+        id: `transcode-${job.id}`,
+        label: `${base}${queued}: ${job.name}${pct}`,
+      });
+    }
+    return list;
+  })();
+
+  $: if (!previewZoomOpen) {
+    cancelZoomCarouselHydration();
+    cancelZoomVideoWarm();
   }
 
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
@@ -279,22 +473,73 @@
     });
   }
 
-  /** Destinos: la API puede devolverlos en la raíz, dentro de settings, o el payload puede ser el array. */
-  function normalizeDestinationsFromPayload(data: any): Array<{ label: string; path: string }> {
-    const raw = Array.isArray(data)
-      ? data
-      : (data?.destinations ?? data?.settings?.destinations);
-    if (!Array.isArray(raw)) return [];
-    const out: Array<{ label: string; path: string }> = [];
-    for (const x of raw) {
-      if (!x || typeof x !== "object") continue;
-      const o = x as { path?: string; label?: string; folder?: string; dir?: string };
-      const path = String(o.path ?? o.folder ?? o.dir ?? "").trim();
-      if (!path) continue;
-      const label = String(o.label ?? "").trim() || path;
-      out.push({ label, path });
+  /** Destinos: la API devuelve árbol + carpeta activa de la barra. */
+  function applyDestinationsPayload(data: any) {
+    const raw = data?.destinations ?? data?.settings?.destinations ?? data;
+    destTree = normalizeTreeNodes(raw, "dest");
+    const fid = String(data?.toolbarFolderId ?? "").trim();
+    destToolbarFolderId = fid || null;
+  }
+
+  function applyMarkersPayload(data: any) {
+    const raw = data?.markers ?? data?.settings?.marker_tree ?? data;
+    markerTree = normalizeTreeNodes(raw, "marker");
+    const fid = String(data?.toolbarFolderId ?? "").trim();
+    markerToolbarFolderId = fid || null;
+    pinnedFolders = flattenMarkerPaths(markerTree);
+    const labels: Record<string, string> = {};
+    for (const p of pinnedFolders) labels[p] = markerLabelFromTree(markerTree, p) ?? defaultMarkerNameForPath(p);
+    pinnedFolderLabels = labels;
+  }
+
+  function markerLabelFromTree(nodes: TreeNode[], path: string): string | null {
+    const target = String(path ?? "").trim();
+    for (const node of nodes) {
+      if (node.kind === "marker" && node.path === target) return node.label;
+      if (node.kind === "folder") {
+        const nested = markerLabelFromTree(node.children, target);
+        if (nested) return nested;
+      }
     }
-    return out;
+    return null;
+  }
+
+  async function persistDestToolbarFolder(folderId: string | null) {
+    destToolbarFolderId = folderId;
+    try {
+      await bridge.destinationsSetToolbarFolder(parentIdOrEmpty(folderId));
+    } catch {
+      /* conservar estado local si falla el bridge */
+    }
+  }
+
+  async function navigateDestToolbarFolder(folderId: string) {
+    await persistDestToolbarFolder(folderId);
+  }
+
+  async function destToolbarBack() {
+    if (!destToolbarFolderId) return;
+    const parent = findParentFolderId(destTree, destToolbarFolderId);
+    await persistDestToolbarFolder(parent);
+  }
+
+  async function persistMarkerToolbarFolder(folderId: string | null) {
+    markerToolbarFolderId = folderId;
+    try {
+      await bridge.markersSetToolbarFolder(parentIdOrEmpty(folderId));
+    } catch {
+      /* conservar estado local */
+    }
+  }
+
+  async function navigateMarkerToolbarFolder(folderId: string) {
+    await persistMarkerToolbarFolder(folderId);
+  }
+
+  async function markerToolbarBack() {
+    if (!markerToolbarFolderId) return;
+    const parent = findParentFolderId(markerTree, markerToolbarFolderId);
+    await persistMarkerToolbarFolder(parent);
   }
 
   function normalizeShortcutValue(raw: unknown, fallback: string): string {
@@ -323,133 +568,40 @@
     return opts.some((x) => token === x || token.toLowerCase() === x.toLowerCase());
   }
 
-  function isGalleryMediaKind(kind: GalleryItem["kind"]): boolean {
-    return kind === "image" || kind === "video";
-  }
-
-  function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: GalleryItem[]): GalleryItem[] {
-    const prevByPath = new Map(prevItems.map((x) => [x.path, x] as const));
-    return nextItems.map((it) => {
-      if (!isGalleryMediaKind(it.kind)) return it;
-      const prev = prevByPath.get(it.path);
-      if (!prev || !isGalleryMediaKind(prev.kind)) return it;
-      const prevQ = prev.thumbQuality ?? (prev.thumbDataUrl ? "hq" : undefined);
-      const nextQ = it.thumbQuality ?? (it.thumbDataUrl ? "hq" : undefined);
-      const prevScore = prevQ === "hq" ? 2 : prevQ === "lq" ? 1 : 0;
-      const nextScore = nextQ === "hq" ? 2 : nextQ === "lq" ? 1 : 0;
-      if (prevScore > nextScore && prev.thumbDataUrl) {
-        return { ...it, thumbDataUrl: prev.thumbDataUrl, thumbQuality: prev.thumbQuality ?? "hq" };
-      }
-      return it;
-    });
-  }
-
-  function prioritizePathsByViewport(paths: string[], selector: string, attrName: string): string[] {
-    const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
-    if (nodes.length === 0) return paths;
-    const nodeByPath = new Map<string, HTMLElement>();
-    for (const n of nodes) {
-      const p = n.dataset[attrName];
-      if (p) nodeByPath.set(p, n);
-    }
-    const visible: string[] = [];
-    const rest: string[] = [];
-    for (const p of paths) {
-      const el = nodeByPath.get(p);
-      if (!el) {
-        rest.push(p);
-        continue;
-      }
-      const r = el.getBoundingClientRect();
-      const isVisible = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
-      (isVisible ? visible : rest).push(p);
-    }
-    return [...visible, ...rest];
-  }
-
-  async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: number, token: number) {
-    const base = snapshot.filter((x) => x.kind === "image");
-    const orderedPaths = prioritizePathsByViewport(
-      base.map((x) => x.path),
-      ".tile[data-item-path]",
-      "itemPath"
-    );
-    const targets = orderedPaths
-      .map((p) => base.find((x) => x.path === p))
-      .filter((x): x is GalleryItem => Boolean(x));
-    let idx = 0;
-    const workers = Array.from({ length: 4 }, async () => {
-      while (idx < targets.length) {
-        const cur = idx++;
-        const it = targets[cur];
-        try {
-          const out = await bridge.galleryThumbHq(it.path, scale);
-          if (galleryThumbHydrationToken !== token) return;
-          if (!out?.thumbDataUrl) continue;
-          items = items.map((x) =>
-            x.kind === "image" && x.path === it.path
-              ? { ...x, thumbDataUrl: out.thumbDataUrl, thumbQuality: "hq" }
-              : x
-          );
-        } catch {
-          /* ignore: se queda LQ */
-        }
-      }
-    });
-    await Promise.all(workers);
-  }
-
-  async function hydratePreviewThumbsHq(
-    snapshot: Array<{ name: string; path: string; thumbDataUrl?: string | null }>,
-    scale: number,
-    token: number
-  ) {
-    const orderedPaths = prioritizePathsByViewport(
-      snapshot.map((x) => x.path),
-      ".pv-tile[data-preview-path]",
-      "previewPath"
-    );
-    const targets = orderedPaths
-      .map((p) => snapshot.find((x) => x.path === p))
-      .filter((x): x is { name: string; path: string; thumbDataUrl?: string | null } => Boolean(x));
-    let idx = 0;
-    const workers = Array.from({ length: 4 }, async () => {
-      while (idx < targets.length) {
-        const cur = idx++;
-        const it = targets[cur];
-        try {
-          const out = await bridge.destinationThumbHq(it.path, scale);
-          if (previewThumbHydrationToken !== token) return;
-          if (!out?.thumbDataUrl) continue;
-          previewItems = previewItems.map((x) =>
-            x.path === it.path ? { ...x, thumbDataUrl: out.thumbDataUrl, thumbQuality: "hq" } : x
-          );
-          if (
-            previewZoomOpen &&
-            previewZoomPath === it.path &&
-            previewZoomMediaType !== "video" &&
-            previewZoomMediaType !== "svg"
-          )
-            previewZoomDataUrl = out.thumbDataUrl;
-        } catch {
-          /* ignore: se queda LQ */
-        }
-      }
-    });
-    await Promise.all(workers);
-  }
-
   /** Prioriza destinations_get (payload pequeño); get_initial_state a veces falla el parse en Qt. */
   async function syncDestinationsFromApi() {
     try {
       const d = await bridge.destinationsGet();
-      destRows = normalizeDestinationsFromPayload(d);
+      applyDestinationsPayload(d);
     } catch {
       try {
         const data = await bridge.getInitialState();
-        destRows = normalizeDestinationsFromPayload(data);
+        applyDestinationsPayload({
+          destinations: data?.destinations,
+          toolbarFolderId: data?.destToolbarFolderId ?? data?.settings?.web_dest_toolbar_folder_id,
+        });
       } catch {
-        destRows = [];
+        destTree = [];
+        destToolbarFolderId = null;
+      }
+    }
+  }
+
+  async function syncMarkersFromApi() {
+    try {
+      const m = await bridge.markersGet();
+      applyMarkersPayload(m);
+    } catch {
+      try {
+        const data = await bridge.getInitialState();
+        applyMarkersPayload({
+          markers: data?.markers ?? data?.settings?.marker_tree,
+          toolbarFolderId: data?.markerToolbarFolderId ?? data?.settings?.web_marker_toolbar_folder_id,
+          pinnedFolders: data?.pinnedFolders ?? data?.settings?.gallery_pinned_folders,
+        });
+      } catch {
+        markerTree = [];
+        markerToolbarFolderId = null;
       }
     }
   }
@@ -461,6 +613,7 @@
   const loadInitial = async () => {
     const data = await trackLoad(bridge.getInitialState());
     thumbScale = Number(data.settings?.gallery_thumb_scale ?? 1);
+    appliedThumbScale = thumbScale;
     thumbGapPx = Math.max(0, Math.min(20, Number(data.settings?.web_thumb_gap_px ?? 12)));
     showThumbLabels = Boolean(data.settings?.web_show_thumb_labels ?? true);
     {
@@ -482,15 +635,15 @@
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
-    const last = (data.settings?.gallery_last_folder ?? "").trim();
-    folder = (data.gallery?.folder ?? last) || "";
+    const last = normalizePathForApi(String(data.settings?.gallery_last_folder ?? ""));
+    folder = normalizePathForApi(String(data.gallery?.folder ?? last) || "");
     orgPath = folder || orgPath;
-    galleryState = data.gallery ?? galleryState;
+    if (data.gallery) setGalleryState(data.gallery);
     recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
-      ? (data.settings.gallery_recent_folders as string[])
+      ? (data.settings.gallery_recent_folders as string[]).map((p) => normalizePathForApi(String(p))).filter(Boolean)
       : [];
     pinnedFolders = Array.isArray(data.settings?.gallery_pinned_folders)
-      ? (data.settings.gallery_pinned_folders as string[])
+      ? (data.settings.gallery_pinned_folders as string[]).map((p) => normalizePathForApi(String(p))).filter(Boolean)
       : [];
     pinnedFolderLabels = typeof data.settings?.web_pinned_folder_labels === "object" && data.settings?.web_pinned_folder_labels
       ? (data.settings.web_pinned_folder_labels as Record<string, string>)
@@ -503,11 +656,27 @@
     groupByFolder = Boolean(data.settings?.gallery_group_by_folder ?? false);
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
+    gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
     {
-      const sm = String(data.settings?.gallery_sort_mode ?? "name").toLowerCase();
-      gallerySortMode = sm === "mtime" ? "mtime" : "name";
+      const vp = String(data.settings?.video_transcode_preset ?? "fast").toLowerCase();
+      videoTranscodePreset =
+        vp === "quality" ? "quality" : vp === "turbo" ? "turbo" : "fast";
+    }
+    {
+      const h = Number(data.settings?.video_transcode_max_height ?? 1080);
+      videoTranscodeMaxHeight = Number.isFinite(h) ? (h <= 0 ? 0 : Math.max(480, Math.min(2160, Math.round(h)))) : 1080;
+    }
+    {
+      const hw = String(data.settings?.video_transcode_hw ?? "auto").toLowerCase();
+      videoTranscodeHw = hw === "off" ? "off" : "auto";
+    }
+    {
+      const tq = String(data.settings?.gallery_thumb_quality_preset ?? "balanced").toLowerCase();
+      galleryThumbQualityPreset =
+        tq === "sharp" ? "sharp" : tq === "hidpi" ? "hidpi" : tq === "performance" ? "performance" : "balanced";
     }
     await syncDestinationsFromApi();
+    await syncMarkersFromApi();
   };
 
   $: applyUiThemeToDocument(uiTheme);
@@ -517,13 +686,13 @@
       await trackLoad(
         bridge.settingsPatch({
           gallery_include_subfolders: includeSubfolders,
-          gallery_sort_mode: gallerySortMode === "mtime" ? "mtime" : "name",
+          gallery_sort_mode: gallerySortMode,
           gallery_group_by_folder: groupByFolder,
           gallery_timeline_view: timelineView,
           gallery_section_dominant_color: sectionDominantColor,
         })
       );
-      await reload();
+      await reload({ silent: false });
       status = t("status.viewUpdated");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.viewApplyError");
@@ -554,43 +723,229 @@
     timelineView = checked;
     if (checked) {
       groupByFolder = false;
-      gallerySortMode = "mtime";
+      const parts = parseGallerySortMode(gallerySortMode);
+      const datePart = parts.find((p) => isTimelineDateSortKey(p.key));
+      if (datePart) {
+        const rest = parts.filter((p) => p.key !== datePart.key);
+        gallerySortMode = formatGallerySortMode([datePart, ...rest]);
+      } else {
+        gallerySortMode = formatGallerySortMode([{ key: "mtime", dir: "desc" }, ...parts]);
+      }
     }
     await persistViewAndReload();
   }
 
-  async function onGallerySortChange(mode: "name" | "mtime") {
+  async function onGallerySortApply(mode: string) {
     gallerySortMode = mode;
-    if (mode === "name" && timelineView) {
+    const primary = primaryGallerySortKey(mode);
+    if (!isTimelineDateSortKey(primary) && timelineView) {
       timelineView = false;
     }
+    viewMenuOpen = false;
     await persistViewAndReload();
+  }
+
+  /** Cancela trabajo en curso de la carpeta anterior (miniaturas HQ, colas, scroll infinito). */
+  function beginGalleryNavigation(): number {
+    const navGen = bumpGalleryNavigationGeneration();
+    bumpGalleryThumbHydrationToken(true);
+    galleryMoveQueue = [];
+    galleryDeleteQueue = [];
+    galleryWorkspace?.cancelBackgroundWork();
+    return navGen;
+  }
+
+  /** Recarga o cambio de página en la misma carpeta: conserva caché HQ del cliente. */
+  function beginGalleryRefresh(invalidateThumbCache = false): number {
+    const navGen = bumpGalleryNavigationGeneration();
+    bumpGalleryThumbHydrationToken(invalidateThumbCache);
+    galleryMoveQueue = [];
+    galleryDeleteQueue = [];
+    galleryWorkspace?.cancelBackgroundWork();
+    return navGen;
+  }
+
+  /** Tras cargar ítems: hidrata miniaturas HQ en GalleryWorkspace (aislado de la rejilla). */
+  async function afterGalleryDataLoaded() {
+    try {
+      await tick();
+      await galleryWorkspace?.afterGalleryPayloadLoaded(getGalleryItems(), thumbScale);
+    } catch {
+      /* La rejilla sigue mostrando LQ si falla la hidratación */
+    }
+  }
+
+  type GalleryScrollAnchor = {
+    scrollTop: number;
+    path: string | null;
+    viewportOffsetPx: number;
+  };
+
+  type GalleryMutationSnapshot = {
+    srcPaths: string[];
+    scrollAnchor: GalleryScrollAnchor;
+    prevItems: GalleryItem[];
+    prevState: GalleryState;
+    navGen: number;
+  };
+
+  type GalleryMoveJob = GalleryMutationSnapshot & {
+    destPath: string;
+  };
+
+  type GalleryDeleteJob = GalleryMutationSnapshot;
+
+  function findGalleryTileByPath(path: string): HTMLElement | null {
+    if (!galleryScrollEl || !path) return null;
+    for (const tile of galleryScrollEl.querySelectorAll<HTMLElement>("[data-item-path]")) {
+      if (tile.dataset.itemPath === path) return tile;
+    }
+    return null;
+  }
+
+  function captureGalleryScrollAnchor(): GalleryScrollAnchor {
+    const el = galleryScrollEl;
+    if (!el) return { scrollTop: 0, path: null, viewportOffsetPx: 0 };
+    const bounds = el.getBoundingClientRect();
+    const scrollTop = el.scrollTop;
+    for (const tile of el.querySelectorAll<HTMLElement>("[data-item-path]")) {
+      const r = tile.getBoundingClientRect();
+      if (r.bottom <= bounds.top + 4) continue;
+      if (r.top >= bounds.bottom - 4) continue;
+      const path = String(tile.dataset.itemPath ?? "").trim();
+      if (!path) continue;
+      return { scrollTop, path, viewportOffsetPx: r.top - bounds.top };
+    }
+    return { scrollTop, path: null, viewportOffsetPx: 0 };
+  }
+
+  async function restoreGalleryScrollAnchor(anchor: GalleryScrollAnchor) {
+    const apply = () => {
+      const el = galleryScrollEl;
+      if (!el) return;
+      if (anchor.path) {
+        const tile = findGalleryTileByPath(anchor.path);
+        if (tile) {
+          const bounds = el.getBoundingClientRect();
+          const r = tile.getBoundingClientRect();
+          const delta = r.top - bounds.top - anchor.viewportOffsetPx;
+          if (Math.abs(delta) > 0.5) {
+            el.scrollTop = Math.max(0, el.scrollTop + delta);
+          }
+          return;
+        }
+      }
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTop = Math.min(anchor.scrollTop, maxScroll);
+    };
+    await tick();
+    apply();
+    requestAnimationFrame(apply);
+  }
+
+  /** Tras mover/eliminar: merge o delta sin recarga total de miniaturas ni salto de scroll. */
+  async function applyGalleryItemsDelta(out: GalleryMutationResponse) {
+    const anchor = captureGalleryScrollAnchor();
+    if (Array.isArray(out.items)) {
+      mergeGalleryItemsFromApi(out.items, out.state);
+    } else {
+      applyGalleryMutationResponse(out);
+    }
+    try {
+      await tick();
+      await galleryWorkspace?.afterGalleryMoveDelta(getGalleryItems(), thumbScale);
+    } catch {
+      /* merge ya aplicado */
+    }
+    await restoreGalleryScrollAnchor(anchor);
+  }
+
+  async function reconcileGalleryMoveSuccess(out: GalleryMutationResponse) {
+    applyGalleryMutationResponse(out);
+    await tick();
+    void galleryWorkspace?.afterGalleryMoveDelta(getGalleryItems(), thumbScale);
+  }
+
+  function createGalleryMoveJobSnapshot(srcPaths: string[]): GalleryMutationSnapshot {
+    return {
+      srcPaths,
+      scrollAnchor: captureGalleryScrollAnchor(),
+      prevItems: getGalleryItems(),
+      prevState: { ...getGalleryState() },
+      navGen: getGalleryNavigationGeneration(),
+    };
+  }
+
+  function syncGalleryUiAfterRemoval(removedPaths: Set<string>) {
+    const nav = getGalleryNavigablePaths();
+    if (galleryCursorPath && removedPaths.has(galleryCursorPath)) {
+      galleryCursorPath = nav[0] ?? null;
+    }
+    if (destinationsMode) {
+      const last = [...getGalleryItems()].reverse().find((x) => isGalleryMediaKind(x.kind));
+      setSelectedPreviewFromPath(last?.path ?? null);
+    }
+  }
+
+  async function applyOptimisticGalleryRemove(snapshot: GalleryMutationSnapshot) {
+    const pathSet = new Set(snapshot.srcPaths);
+    const removedMedia = snapshot.prevItems.filter(
+      (x) => isGalleryMediaKind(x.kind) && pathSet.has(x.path)
+    ).length;
+    removeGalleryThumbHq(pathSet);
+    updateGalleryItems((items) => items.filter((x) => !pathSet.has(x.path)));
+    const s = snapshot.prevState;
+    setGalleryState({
+      ...s,
+      selectedCount: 0,
+      total: Math.max(0, Number(s.total ?? 0) - removedMedia),
+      endIndex: Math.max(0, Number(s.endIndex ?? 0) - removedMedia),
+      totalElements: Math.max(0, Number(s.totalElements ?? s.total ?? 0) - removedMedia),
+    });
+    syncGalleryUiAfterRemoval(pathSet);
+    await tick();
+    await restoreGalleryScrollAnchor(snapshot.scrollAnchor);
+  }
+
+  async function rollbackOptimisticGalleryMutation(job: GalleryMutationSnapshot) {
+    seedGalleryThumbHqFromItems(job.prevItems);
+    setGalleryItems(stripHqFromGalleryItems(job.prevItems));
+    setGalleryState(job.prevState);
+    syncGalleryUiAfterRemoval(new Set(job.srcPaths));
+    await restoreGalleryScrollAnchor(job.scrollAnchor);
+  }
+
+  async function rollbackOptimisticGalleryMove(job: GalleryMoveJob) {
+    await rollbackOptimisticGalleryMutation(job);
   }
 
   async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
     closeGalleryItemCtxMenu();
-    const target = path.trim();
+    const target = normalizePathForApi(path);
     if (!target) return;
-    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    const current = String(getGalleryState()?.folder ?? folder ?? "").trim();
     if (opts?.pushHistory !== false && current && current !== target) {
       folderBackStack = [...folderBackStack, current];
       folderForwardStack = [];
     }
-    const out = await trackLoad(bridge.galleryLoadFolder(target));
-    galleryState = out.state;
-    items = out.items;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-    if (thumbsPerPage === 0) {
-      await tick();
-      void maybeAutoLoadMoreForViewport();
-      void autoLoadUnlimitedBatches();
+    const navGen = beginGalleryNavigation();
+    try {
+      const out = await trackLoad(bridge.galleryLoadFolder(target), t("load.openingFolder"));
+      if (!isGalleryNavigationCurrent(navGen)) return;
+      setGalleryPayload(out.state, out.items);
+      await afterGalleryDataLoaded();
+      if (!isGalleryNavigationCurrent(navGen)) return;
+      if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
+      pageJumpDraft = out.state.page;
+      folder = out.state?.folder ?? target;
+      orgPath = folder || orgPath;
+      routePickerOpen = false;
+      commitChromePagerState();
+      status = t("status.folderLoaded").replace("{path}", folder);
+    } catch (e: unknown) {
+      if (!isGalleryNavigationCurrent(navGen)) return;
+      status = e instanceof Error ? e.message : t("status.viewApplyError");
     }
-    if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
-    pageJumpDraft = out.state.page;
-    folder = out.state?.folder ?? target;
-    orgPath = folder || orgPath;
-    status = t("status.folderLoaded").replace("{path}", folder);
   }
 
   const loadFolder = async (closePicker = true) => {
@@ -613,7 +968,7 @@
 
   async function goBackFolder() {
     if (folderBackStack.length === 0) return;
-    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    const current = String(getGalleryState()?.folder ?? folder ?? "").trim();
     const target = folderBackStack[folderBackStack.length - 1];
     folderBackStack = folderBackStack.slice(0, -1);
     if (current && current !== target) folderForwardStack = [...folderForwardStack, current];
@@ -622,7 +977,7 @@
 
   async function goForwardFolder() {
     if (folderForwardStack.length === 0) return;
-    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    const current = String(getGalleryState()?.folder ?? folder ?? "").trim();
     const target = folderForwardStack[folderForwardStack.length - 1];
     folderForwardStack = folderForwardStack.slice(0, -1);
     if (current && current !== target) folderBackStack = [...folderBackStack, current];
@@ -630,7 +985,7 @@
   }
 
   async function goUpFolder() {
-    const current = String(galleryState?.folder ?? folder ?? "").trim();
+    const current = String(getGalleryState()?.folder ?? folder ?? "").trim();
     if (!current) return;
     const parent = getParentFolder(current);
     if (!parent || parent === current) return;
@@ -640,7 +995,7 @@
   const pinFolder = async (path: string) => {
     try {
       const out = await bridge.galleryPinFolder(path);
-      pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders;
+      applyMarkersPayload(out);
       status = t("status.routePinned");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.routePinError");
@@ -650,13 +1005,7 @@
   const unpinFolder = async (path: string) => {
     try {
       const out = await bridge.galleryUnpinFolder(path);
-      pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders.filter((x) => x !== path);
-      if (pinnedFolderLabels[path]) {
-        const next = { ...pinnedFolderLabels };
-        delete next[path];
-        pinnedFolderLabels = next;
-        await bridge.settingsPatch({ web_pinned_folder_labels: next });
-      }
+      applyMarkersPayload(out);
       status = t("status.routeUnpinned");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.routeUnpinError");
@@ -688,90 +1037,39 @@
     }
   };
 
-  /** Recarga ítems de la galería. `silent`: no muestra overlay (p. ej. tras mover el slider de miniaturas). */
-  const reload = async (opts?: { silent?: boolean }) => {
+  /** Recarga ítems de la galería. Por defecto sin overlay global (la rejilla ya da feedback). */
+  const reload = async (opts?: {
+    silent?: boolean;
+    loadingMessage?: string;
+    invalidateThumbCache?: boolean;
+  }) => {
+    const brokenThumbs = getGalleryItems().some(
+      (x) =>
+        (x.kind === "image" || x.kind === "video") &&
+        !x.thumbDataUrl &&
+        !hasGalleryThumbHq(x.path)
+    );
+    const navGen = beginGalleryRefresh(Boolean(opts?.invalidateThumbCache || brokenThumbs));
     const p = bridge.galleryReload();
-    const out = opts?.silent ? await p : await trackLoad(p);
-    galleryState = out.state;
-    items = out.items;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-    if (thumbsPerPage === 0) {
-      await tick();
-      void maybeAutoLoadMoreForViewport();
-      void autoLoadUnlimitedBatches();
-    }
+    const silent = opts?.silent !== false;
+    const out = silent ? await p : await trackLoad(p, opts?.loadingMessage ?? t("load.loading"));
+    if (!isGalleryNavigationCurrent(navGen)) return;
+    setGalleryPayload(out.state, out.items ?? []);
+    await afterGalleryDataLoaded();
   };
 
   const goPage = async (page: number) => {
+    const navGen = beginGalleryRefresh();
     const out = await trackLoad(bridge.galleryGoPage(page));
-    galleryState = out.state;
-    items = out.items;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+    if (!isGalleryNavigationCurrent(navGen)) return;
+    setGalleryPayload(out.state, out.items);
+    await afterGalleryDataLoaded();
     pageJumpDraft = out.state.page;
+    commitChromePagerState();
   };
 
-  async function onGalleryScroll(e: Event) {
-    const el = e.currentTarget as HTMLElement | null;
-    if (!el) return;
-    galleryScrollAtTop = el.scrollTop <= 2;
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
-    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
-    if (!nearBottom) return;
-    await loadMoreGalleryBatch();
-  }
-
-  async function loadMoreGalleryBatch() {
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return false;
-    galleryLoadingMore = true;
-    try {
-      const beforeEnd = Number(galleryState?.endIndex ?? 0);
-      const out = await bridge.galleryLoadMore();
-      if (out?.state) galleryState = out.state;
-      const extra = Array.isArray(out?.items) ? out.items : [];
-      if (extra.length > 0) {
-        items = [...items, ...extra];
-        // No incrementar token: evita cancelar hidración HQ en curso de tandas previas.
-        void hydrateGalleryThumbsHq(extra, thumbScale, galleryThumbHydrationToken);
-      }
-      const afterEnd = Number(galleryState?.endIndex ?? 0);
-      return afterEnd > beforeEnd || extra.length > 0;
-    } finally {
-      galleryLoadingMore = false;
-    }
-  }
-
-  async function maybeAutoLoadMoreForViewport() {
-    if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
-    const el = galleryScrollEl ?? galleryPlainEl;
-    if (!el) return;
-    // Si aún no hay suficiente contenido para scrollear, precarga otra tanda.
-    if (el.scrollHeight <= el.clientHeight + 40) {
-      await loadMoreGalleryBatch();
-    }
-  }
-
-  async function autoLoadUnlimitedBatches() {
-    const runId = ++galleryAutoLoadRunId;
-    let guard = 0;
-    while (runId === galleryAutoLoadRunId && thumbsPerPage === 0 && galleryHasMoreNow() && guard < 200) {
-      guard++;
-      const progressed = await loadMoreGalleryBatch();
-      await tick();
-      if (!progressed) break;
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-  }
-
-  $: if (thumbsPerPage === 0 && galleryHasMoreNow() && !galleryLoadingMore && items.length > 0 && (galleryScrollEl || galleryPlainEl)) {
-    setTimeout(() => {
-      void maybeAutoLoadMoreForViewport();
-    }, 0);
-  }
-
   const jumpToPageDraft = async () => {
-    const n = Math.min(galleryState.totalPages, Math.max(1, Math.round(Number(pageJumpDraft)) || 1));
+    const n = Math.min(getGalleryState().totalPages, Math.max(1, Math.round(Number(pageJumpDraft)) || 1));
     pageJumpDraft = n;
     await goPage(n);
   };
@@ -797,6 +1095,12 @@
       }
     }
     settingsThumbPresetIdx = bestIdx;
+    destTreeSettingsDraft = cloneTree(destTree);
+    markerTreeSettingsDraft = cloneTree(markerTree);
+    videoTranscodePresetBackup = videoTranscodePreset;
+    videoTranscodeMaxHeightBackup = videoTranscodeMaxHeight;
+    videoTranscodeHwBackup = videoTranscodeHw;
+    galleryThumbQualityPresetBackup = galleryThumbQualityPreset;
     settingsOpen = true;
   };
 
@@ -810,15 +1114,39 @@
     thumbImageRadiusPx = thumbImageRadiusPxBackup;
     thumbTileRadiusPx = thumbTileRadiusPxBackup;
     keyboardShortcuts = { ...keyboardShortcutsBackup };
+    destTreeSettingsDraft = cloneTree(destTree);
+    markerTreeSettingsDraft = cloneTree(markerTree);
+    videoTranscodePreset = videoTranscodePresetBackup;
+    videoTranscodeMaxHeight = videoTranscodeMaxHeightBackup;
+    videoTranscodeHw = videoTranscodeHwBackup;
+    galleryThumbQualityPreset = galleryThumbQualityPresetBackup;
     settingsOpen = false;
   };
+
+  async function pickSettingsDestFolder(): Promise<string | null> {
+    try {
+      const out = await bridge.dialogPickFolder("");
+      if (out.cancelled || !out.path) return null;
+      return out.path;
+    } catch {
+      return null;
+    }
+  }
+
+  async function pickSettingsMarkerFolder(): Promise<string | null> {
+    return pickSettingsDestFolder();
+  }
 
   const saveSettingsModal = async () => {
     const parsedPerPage = Number(thumbsPerPage);
     const perPageRaw = Number.isFinite(parsedPerPage) ? Math.round(parsedPerPage) : 48;
     const n = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     thumbsPerPage = n;
+    const prevScale = appliedThumbScale;
+    const prevThumbQuality = galleryThumbQualityPresetBackup;
     const ts = Math.max(0.01, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
+    const thumbConfigChanged =
+      thumbQualityRefreshNeeded(prevScale, ts) || galleryThumbQualityPreset !== prevThumbQuality;
     thumbScale = ts;
     keyboardShortcuts = {
       toggleMode: normalizeShortcutValue(keyboardShortcuts.toggleMode, defaultKeyboardShortcuts.toggleMode),
@@ -830,6 +1158,7 @@
     await bridge.settingsPatch({
       gallery_thumbs_per_page: n, // 0 = sin límite
       gallery_thumb_scale: Number(ts.toFixed(3)),
+      gallery_thumb_quality_preset: galleryThumbQualityPreset,
       web_ui_theme: uiTheme,
       web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
       web_show_thumb_labels: Boolean(showThumbLabels),
@@ -838,8 +1167,22 @@
       web_thumb_image_radius_px: Math.round(thumbImageRadiusPx),
       web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx),
       web_shortcuts: { ...keyboardShortcuts },
+      video_transcode_preset: videoTranscodePreset,
+      video_transcode_max_height: Math.max(0, Math.min(2160, Math.round(Number(videoTranscodeMaxHeight) || 1080))),
+      video_transcode_hw: videoTranscodeHw,
     });
-    await reload();
+    if (selectedPreview?.mediaType === "video" && selectedPreview.path) {
+      previewVideoMode = "auto";
+      void loadPreviewVideoProfiles(selectedPreview.path);
+      resetPreviewVideoPlaybackUi({ keepPath: true });
+      requestPreviewVideoPlay();
+    }
+    await trackLoad(bridge.destinationsSaveTree(destTreeSettingsDraft));
+    await trackLoad(bridge.markersSaveTree(markerTreeSettingsDraft));
+    await syncDestinationsFromApi();
+    await syncMarkersFromApi();
+    await reload({ invalidateThumbCache: thumbConfigChanged });
+    appliedThumbScale = ts;
     settingsOpen = false;
   };
 
@@ -884,20 +1227,36 @@
   }
 
   async function deleteSelectedGalleryItems() {
-    const selectedPaths = items
-      .filter((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))
-      .map((x) => x.path);
-    if (selectedPaths.length === 0) return;
-    const selectedSet = new Set(selectedPaths);
-    items = items.filter((x) => !(isGalleryMediaKind(x.kind) && selectedSet.has(x.path)));
-    galleryState = {
-      ...galleryState,
-      total: Math.max(0, Number(galleryState?.total ?? 0) - selectedPaths.length),
-      selectedCount: 0,
-      endIndex: Math.max(0, Number(galleryState?.endIndex ?? 0) - selectedPaths.length),
-    };
-    enqueueDeletePaths(selectedPaths);
-    status = t("status.deleteQueued").replace("{n}", String(selectedPaths.length));
+    const selected = getGalleryItems().filter(
+      (x) => isGallerySelectableKind(x.kind) && Boolean(x.selected)
+    );
+    if (selected.length === 0) return;
+    const paths = selected.map((x) => x.path);
+    const hasFolders = selected.some((x) => x.kind === "folder");
+
+    if (hasFolders) {
+      try {
+        const out = await trackLoad(bridge.galleryDeletePaths(paths));
+        setGalleryPayload(out.state, out.items ?? []);
+        await afterGalleryDataLoaded();
+        resetGalleryInteractionLocks();
+        const deleted = Number(out.deleteResult?.deleted ?? 0);
+        const errors = Number(out.deleteResult?.errors ?? 0);
+        status = t("status.deleteBatchLine")
+          .replace("{deleted}", String(deleted))
+          .replace("{errPart}", errors ? t("status.deleteErrorsPart").replace("{errors}", String(errors)) : "")
+          .replace("{queue}", "0");
+      } catch (e: unknown) {
+        status = e instanceof Error ? e.message : t("status.deleteQueueError");
+      }
+      return;
+    }
+
+    const snapshot = createGalleryMoveJobSnapshot(paths);
+    await applyOptimisticGalleryRemove(snapshot);
+    galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
+    status = t("status.deleteQueued").replace("{n}", String(paths.length));
+    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
   }
 
   async function deleteCurrentZoomImage() {
@@ -905,7 +1264,8 @@
     const curPath = previewZoomPath;
     const curIdx = zoomNavItems.findIndex((x) => x.path === curPath);
     const remainingNav = zoomNavItems.filter((x) => x.path !== curPath);
-    items = items.filter((x) => !(isGalleryMediaKind(x.kind) && x.path === curPath));
+    const snapshot = createGalleryMoveJobSnapshot([curPath]);
+    await applyOptimisticGalleryRemove(snapshot);
     if (remainingNav.length > 0) {
       const nextIdx = curIdx >= 0 ? Math.min(curIdx, remainingNav.length - 1) : 0;
       const nextItem = remainingNav[nextIdx];
@@ -914,97 +1274,431 @@
     } else {
       previewZoomOpen = false;
     }
-    enqueueDeletePaths([curPath]);
+    galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
     status = t("status.deleteImageQueued");
+    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
   }
 
-  const clickItem = async (it: GalleryItem) => {
-    if (suppressNextGalleryClick) {
-      suppressNextGalleryClick = false;
-      return;
+  function rememberPreviewVideoUrl(url: string) {
+    const u = String(url ?? "").trim();
+    if (!u || previewVideoTriedUrls.includes(u)) return;
+    previewVideoTriedUrls = [...previewVideoTriedUrls, u];
+  }
+
+  function previewVideoUrlKind(url: string): "direct" | "transcode" | "webm" | "unknown" {
+    if (isDataPlaybackUrl(url)) return "webm";
+    const key = mediaUrlKey(url);
+    if (key.startsWith("/om-webm/") || key.includes("format=webm")) return "webm";
+    if (key.startsWith("/om-transcode/") || key.includes("transcode=1")) return "transcode";
+    const playback = previewVideoPlayback;
+    if (!playback) return "unknown";
+    if (url && sameMediaUrl(url, playback.transcodeUrl)) {
+      return playback.playbackFormat === "webm" ? "webm" : "transcode";
     }
-    galleryKeyboardNavHintActive = false;
-    if (galleryActionBusy) return;
-    galleryActionBusy = true;
+    if (url && sameMediaUrl(url, playback.fileUrl)) return "direct";
+    return "unknown";
+  }
+
+  function previewVideoErrorSummary(code: number, detail = ""): string {
+    if (isQtPlayerCreationError(detail)) return t("preview.videoDiagSummaryQtPlayer");
+    if (code === 4) return t("preview.videoDiagSummaryCodec");
+    if (code === 2) return t("preview.videoDiagSummaryNetwork");
+    if (code === 3) return t("preview.videoDiagSummaryDecode");
+    return t("preview.videoDiagSummaryGeneric");
+  }
+
+  async function collectPreviewVideoDiagnostics(el: HTMLVideoElement | null, code: number) {
+    const path = String(selectedPreview?.path ?? "").trim();
+    const videoUrl = String(previewVideoSrc || selectedPreview?.fileUrl || "").trim();
+    if (!path || !videoUrl) return;
+
+    previewVideoDiagLoading = true;
+    previewVideoErrorDetails = t("preview.videoDiagLoading");
     try {
-      if (it.kind === "section") {
-        return;
-      }
-      if (it.kind === "day_break") {
-        return;
-      }
-      if (it.kind === "folder" || it.kind === "folder_up") {
-        await navigateToFolder(it.path, { pushHistory: true });
-        return;
-      }
-      if (destinationsMode) {
-        const out = await bridge.galleryToggleSelect(it.path);
-        galleryState = out.state;
-        items = mergeItemsKeepingBestThumb(items, out.items);
-        const row = out.items?.find((x: GalleryItem) => x.path === it.path);
-        selectedPreview = {
-          path: it.path,
-          name: it.name,
-          dataUrl: row?.thumbDataUrl ?? null
-        };
-        const pathRef = it.path;
-        requestAnimationFrame(() => {
-          bridge
-            .galleryPreview(pathRef, 1200, 900)
-            .then((pr) => {
-              selectedPreview = pr;
-            })
-            .catch(() => undefined);
-        });
-        galleryCursorPath = it.path;
-      } else {
-        if (!previewVisible && isGalleryMediaKind(it.kind)) {
-          openZoomFromGallery(it);
-          return;
-        }
-        selectedPreview = {
-          path: it.path,
-          name: it.name,
-          dataUrl: it.thumbDataUrl ?? null
-        };
-        const pathRef = it.path;
-        requestAnimationFrame(() => {
-          bridge
-            .galleryPreview(pathRef, 1200, 900)
-            .then((pr) => {
-              selectedPreview = pr;
-            })
-            .catch(() => undefined);
-        });
-        galleryCursorPath = it.path;
-      }
+      const [httpProbe, backend] = await Promise.all([
+        probeVideoHttpUrl(videoUrl),
+        bridge
+          .galleryVideoDiagnostics(path, true)
+          .catch((err: unknown) => ({ apiError: err instanceof Error ? err.message : String(err) }) as VideoBackendDiagnostics),
+      ]);
+      previewVideoErrorDetails = formatVideoDiagnosticReport({
+        mediaErrorCode: code,
+        mediaErrorMessage: String(el?.error?.message ?? "").trim(),
+        videoUrl,
+        urlKind: previewVideoUrlKind(videoUrl),
+        networkState: el?.networkState ?? 0,
+        readyState: el?.readyState ?? 0,
+        httpProbe,
+        backend: backend as VideoBackendDiagnostics,
+        triedUrls: previewVideoTriedUrls,
+      });
+    } catch (err) {
+      previewVideoErrorDetails = `${t("preview.videoDiagApiError")}: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
-      galleryActionBusy = false;
+      previewVideoDiagLoading = false;
     }
-  };
+  }
+
+  async function tryBlobPreviewVideoUrl(): Promise<boolean> {
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (!path || typeof window === "undefined" || !window.pywebview?.api) return false;
+    const current = String(previewVideoSrc || selectedPreview?.fileUrl || "").trim();
+    if (isDataPlaybackUrl(current)) return false;
+    if (previewVideoTriedUrls.some((u) => isDataPlaybackUrl(u))) return false;
+    try {
+      const blob = await bridge.galleryVideoPlaybackBlob(path);
+      if (!blob?.ok || !blob.dataUrl) return false;
+      const dataUrl = String(blob.dataUrl);
+      previewVideoSrc = dataUrl;
+      rememberPreviewVideoUrl(dataUrl);
+      if (previewVideoPlayback) {
+        previewVideoPlayback = { ...previewVideoPlayback, transcodeUrl: dataUrl, playbackViaBlob: true };
+      }
+      selectedPreview = selectedPreview
+        ? { ...selectedPreview, fileUrl: dataUrl, transcodeUrl: dataUrl }
+        : selectedPreview;
+      previewVideoPreparing = false;
+      previewVideoError = "";
+      previewVideoErrorDetails = "";
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function tryAlternatePreviewVideoUrl(): boolean {
+    const playback = previewVideoPlayback;
+    if (!playback) return false;
+    const current = previewVideoSrc || selectedPreview?.fileUrl || "";
+    rememberPreviewVideoUrl(current);
+
+    // Con WebM obligatorio: no volver al MP4 directo (provoca bucle infinito en Qt).
+    if (playback.needsTranscode) {
+      if (
+        playback.transcodeUrl &&
+        !sameMediaUrl(current, playback.transcodeUrl) &&
+        !previewVideoTriedUrls.some((u) => sameMediaUrl(u, playback.transcodeUrl))
+      ) {
+        previewVideoSrc = playback.transcodeUrl;
+        rememberPreviewVideoUrl(playback.transcodeUrl);
+        previewVideoPreparing = true;
+        previewVideoError = "";
+        previewVideoErrorDetails = "";
+        return true;
+      }
+      return false;
+    }
+
+    for (const url of [playback.transcodeUrl, playback.fileUrl]) {
+      if (!url) continue;
+      if (sameMediaUrl(current, url)) continue;
+      if (previewVideoTriedUrls.some((u) => sameMediaUrl(u, url))) continue;
+      previewVideoSrc = url;
+      rememberPreviewVideoUrl(url);
+      previewVideoPreparing = sameMediaUrl(url, playback.transcodeUrl);
+      previewVideoError = "";
+      previewVideoErrorDetails = "";
+      return true;
+    }
+    return false;
+  }
+
+  function resetPreviewVideoPlaybackUi(opts?: { keepPath?: boolean }) {
+    previewVideoPlayLocked = false;
+    previewVideoLaunching = false;
+    previewVideoArmed = false;
+    previewVideoPreparing = false;
+    previewVideoSrc = "";
+    if (!opts?.keepPath) previewVideoPreparePath = "";
+    stopVideoPreparePoll();
+  }
 
   function setSelectedPreviewFromPath(path: string | null | undefined) {
     const p = String(path ?? "").trim();
     if (!p) return;
-    const row = items.find((x) => isGalleryMediaKind(x.kind) && x.path === p) as GalleryItem | undefined;
+    const row = getGalleryItems().find((x) => isGalleryMediaKind(x.kind) && x.path === p) as GalleryItem | undefined;
     if (!row) return;
+    const isSameVideo =
+      p === selectedPreview?.path &&
+      selectedPreview?.mediaType === "video" &&
+      row.kind === "video";
+    if (isSameVideo && (previewVideoPlayLocked || previewVideoLaunching || previewVideoPreparing)) {
+      return;
+    }
+    const isVideo = row.kind === "video";
+    const isSvg = row.path.toLowerCase().endsWith(".svg");
+    const fallbackUrl = isVideo ? null : buildMediaFileUrl(row.path);
+    const thumbPlaceholder = row.thumbDataUrl ?? null;
+    previewVideoSession += 1;
+    resetPreviewVideoPlaybackUi();
     selectedPreview = {
       path: row.path,
       name: row.name,
-      dataUrl: row.thumbDataUrl ?? null,
+      dataUrl: isVideo ? null : thumbPlaceholder,
+      placeholderUrl: thumbPlaceholder,
+      mediaType: isVideo ? "video" : isSvg ? "svg" : "image",
+      fileUrl: isVideo ? null : fallbackUrl,
     };
-    requestAnimationFrame(() => {
-      bridge
-        .galleryPreview(row.path, 1200, 900)
-        .then((pr) => {
-          selectedPreview = pr;
+    previewVideoError = "";
+    previewVideoErrorDetails = "";
+    previewVideoLastErrorDetail = "";
+    previewVideoTriedUrls = [];
+    previewVideoSrc = isVideo ? "" : fallbackUrl ?? "";
+    previewVideoPlayback = null;
+    previewVideoDiagLoading = false;
+    if (isVideo) {
+      previewVideoMode = "auto";
+      previewVideoProfiles = [];
+      void loadPreviewVideoProfiles(row.path);
+    }
+    if (isSvg) {
+      void resolveMediaPlaybackInfo(row.path)
+        .then((info) => {
+          if (!selectedPreview || selectedPreview.path !== row.path) return;
+          previewVideoPlayback = info;
+          const url = pickInitialPlaybackUrl(info);
+          if (!url) return;
+          if (!sameMediaUrl(previewVideoSrc, url)) previewVideoSrc = url;
+          rememberPreviewVideoUrl(url);
+          selectedPreview = {
+            ...selectedPreview,
+            fileUrl: url,
+            mediaType: "svg",
+          };
         })
-        .catch(() => undefined);
-    });
+        .catch(() => {
+          if (!selectedPreview || selectedPreview.path !== row.path || !fallbackUrl) return;
+          previewVideoSrc = fallbackUrl;
+          selectedPreview = { ...selectedPreview, fileUrl: fallbackUrl };
+        });
+    }
+    if (!isVideo) {
+      requestAnimationFrame(() => {
+        bridge
+          .galleryPreview(row.path, 1200, 900)
+          .then((pr) => {
+            selectedPreview = mergePreviewApiResult(selectedPreview ?? {}, pr, row.path, row.kind);
+          })
+          .catch(() => undefined);
+      });
+    }
+    if (isVideo && !destinationsMode) {
+      requestPreviewVideoPlay();
+    }
+  }
+
+  function transcodeJobStatusLabel(job: (typeof videoTranscodeJobs)[number]): string {
+    const pct =
+      job.status === "running" && job.progress && job.progress !== "100" ? ` · ${job.progress}%` : "";
+    const queued = job.status === "queued" ? ` (${t("pager.processQueued")})` : "";
+    const base =
+      job.format === "remux" ? t("pager.processVideoRemux") : t("pager.processVideoTranscode");
+    return `${base}${queued}${pct}`;
+  }
+
+  function stopVideoPreparePoll() {
+    if (videoPreparePollTimer !== null) {
+      window.clearInterval(videoPreparePollTimer);
+      videoPreparePollTimer = null;
+    }
+  }
+
+  function startVideoPreparePoll() {
+    stopVideoPreparePoll();
+    void pollVideoTranscodeJobs();
+    videoPreparePollTimer = window.setInterval(() => {
+      void pollVideoTranscodeJobs();
+    }, 450);
+  }
+
+  async function loadPreviewVideoProfiles(path: string) {
+    try {
+      const out = await bridge.galleryVideoProfiles(normalizePathForApi(path));
+      if (selectedPreview?.path !== path) return;
+      previewVideoProfiles = out?.profiles ?? [];
+    } catch {
+      previewVideoProfiles = [];
+    }
+  }
+
+  async function setPreviewVideoMode(mode: string) {
+    const next = (mode || "auto") as VideoPlaybackMode;
+    if (next === previewVideoMode) return;
+    previewVideoMode = next;
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (!path || selectedPreview?.mediaType !== "video") return;
+    resetPreviewVideoPlaybackUi({ keepPath: true });
+    requestPreviewVideoPlay();
+  }
+
+  function requestPreviewVideoPlay() {
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (!path || selectedPreview?.mediaType !== "video") return;
+    if (previewVideoPlayLocked && previewVideoPreparePath === path) return;
+    if (previewVideoArmed && previewVideoSrc && previewVideoPreparePath === path && !previewVideoError) return;
+
+    previewVideoPlayLocked = true;
+    previewVideoPreparePath = path;
+    previewVideoLaunching = true;
+    previewVideoArmed = true;
+    previewVideoPreparing = true;
+    previewVideoPrepareMsg = t("preview.videoStarting");
+    previewVideoError = "";
+    previewVideoErrorDetails = "";
+    previewVideoSrc = "";
+
+    void runPreviewVideoPlayback(path);
+  }
+
+  async function runPreviewVideoPlayback(pathAtStart: string) {
+    try {
+      const info = await resolveMediaPlaybackInfo(pathAtStart, {
+        warm: true,
+        tryBlob: false,
+        playbackMode: previewVideoMode,
+      });
+      if (selectedPreview?.path !== pathAtStart) {
+        previewVideoPlayLocked = false;
+        return;
+      }
+
+      previewVideoPrepareMsg = playbackPrepareMessage(info);
+      previewVideoPlayback = info;
+
+      if (!canTranscodeVideo(info)) {
+        resetPreviewVideoPlaybackUi({ keepPath: true });
+        previewVideoError = t("preview.videoFfmpegMissing");
+        void collectPreviewVideoDiagnostics(null, 4);
+        return;
+      }
+
+      const url = pickInitialPlaybackUrl(info);
+      if (!url) {
+        resetPreviewVideoPlaybackUi({ keepPath: true });
+        previewVideoError = t("preview.videoPlaybackError");
+        return;
+      }
+
+      previewVideoLaunching = false;
+      previewVideoSrc = url;
+      rememberPreviewVideoUrl(url);
+      previewVideoPreparing = Boolean(info.needsTranscode && !info.transcodeCached);
+      selectedPreview = { ...selectedPreview, fileUrl: url };
+
+      void pollVideoTranscodeJobs();
+      if (previewVideoPreparing) startVideoPreparePoll();
+      else {
+        stopVideoPreparePoll();
+        previewVideoPlayLocked = false;
+      }
+      void tick().then(() => tryAutoplayVideo(previewVideoEl));
+    } catch {
+      if (selectedPreview?.path !== pathAtStart) return;
+      resetPreviewVideoPlaybackUi({ keepPath: true });
+      previewVideoError = t("preview.videoPlaybackError");
+    }
+  }
+
+  function isActiveTranscodeJob(job: (typeof videoTranscodeJobs)[number]): boolean {
+    const st = String(job.status ?? "running").toLowerCase();
+    return st === "queued" || st === "running";
+  }
+
+  async function pollVideoTranscodeJobs() {
+    try {
+      const out = await bridge.galleryTranscodeActive();
+      const jobs = (out?.jobs ?? []).filter(isActiveTranscodeJob);
+      videoTranscodeJobs = jobs;
+      if (jobs.length === 0) stopVideoPreparePoll();
+    } catch {
+      videoTranscodeJobs = [];
+      stopVideoPreparePoll();
+    }
+  }
+
+  function buildPreviewVideoErrorCopyText(): string {
+    const lines: string[] = [];
+    if (previewVideoError) lines.push(previewVideoError);
+    if (previewVideoLastErrorDetail) lines.push(previewVideoLastErrorDetail);
+    if (previewVideoErrorDetails) {
+      if (lines.length) lines.push("");
+      lines.push(previewVideoErrorDetails);
+    }
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (path) {
+      if (lines.length) lines.push("");
+      lines.push(`${t("preview.videoDiagFileSection")}\n${path}`);
+    }
+    return lines.join("\n").trim();
+  }
+
+  async function copyPreviewVideoError() {
+    const text = buildPreviewVideoErrorCopyText();
+    if (!text) return;
+    const ok = await copyTextToClipboard(text);
+    status = ok ? t("preview.videoCopyErrorOk") : t("preview.videoCopyErrorFail");
+  }
+
+  async function onPreviewVideoError(e: Event) {
+    const el = e.currentTarget as HTMLVideoElement | null;
+    const code = el?.error?.code ?? 0;
+    previewVideoLastErrorDetail = String(el?.error?.message ?? "").trim();
+    rememberPreviewVideoUrl(previewVideoSrc || selectedPreview?.fileUrl || "");
+    if ((code === 4 || code === 3) && tryAlternatePreviewVideoUrl()) return;
+    if ((code === 4 || code === 3 || code === 2) && (await tryBlobPreviewVideoUrl())) return;
+    previewVideoPreparing = false;
+    previewVideoPlayLocked = false;
+    previewVideoError = previewVideoErrorSummary(code, String(el?.error?.message ?? ""));
+    previewVideoErrorDetails = "";
+    status = `${previewVideoError} · ${mediaErrorLabel(code)}`;
+    void collectPreviewVideoDiagnostics(el, code);
+  }
+
+  function onPreviewVideoCanPlay() {
+    previewVideoPreparing = false;
+    previewVideoPlayLocked = false;
+    previewVideoLaunching = false;
+    previewVideoError = "";
+    previewVideoErrorDetails = "";
+    previewVideoLastErrorDetail = "";
+    previewVideoDiagLoading = false;
+    stopVideoPreparePoll();
+    tryAutoplayVideo(previewVideoEl);
+  }
+
+  function onPreviewVideoLoadStart() {
+    const playback = previewVideoPlayback;
+    const current = previewVideoSrc || selectedPreview?.fileUrl || "";
+    if (playback?.needsTranscode && playback.transcodeUrl && sameMediaUrl(current, playback.transcodeUrl)) {
+      previewVideoPreparing = !playback.playbackViaBlob && !isDataPlaybackUrl(current);
+    }
+  }
+
+  async function openGalleryVideoExternal(path?: string) {
+    const p = String(path ?? selectedPreview?.path ?? "").trim();
+    if (!p) return;
+    try {
+      const res = await bridge.galleryOpenExternal(p);
+      if (res?.ok) {
+        status = t("preview.videoOpenExternalOk");
+        previewVideoError = "";
+      } else {
+        status = String(res?.error ?? t("preview.videoOpenExternalError"));
+      }
+    } catch {
+      status = t("preview.videoOpenExternalError");
+    }
+  }
+
+  async function openGalleryExternalFromCtx() {
+    if (!galleryItemCtxMenu) return;
+    const p = galleryItemCtxMenu.path;
+    closeGalleryItemCtxMenu();
+    await openGalleryVideoExternal(p);
   }
 
   function getGalleryNavigablePaths(): string[] {
-    return items.filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path);
+    return getGalleryItems().filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path);
   }
 
   function getOrInitGalleryCursorPath(): string | null {
@@ -1020,7 +1714,7 @@
       .map((el) => {
         const path = String(el.dataset?.itemPath ?? "");
         if (!path) return null;
-        const it = items.find((x) => x.path === path);
+        const it = getGalleryItems().find((x) => x.path === path);
         if (!it || !isGalleryMediaKind(it.kind)) return null;
         const r = el.getBoundingClientRect();
         return { path, cx: r.left + r.width / 2, top: Math.round(r.top) };
@@ -1090,11 +1784,22 @@
     });
   }
 
-  async function toggleGalleryCursorSelection(path: string) {
-    const prevItems = items;
-    const out = await bridge.galleryToggleSelect(path);
-    galleryState = out.state;
-    items = mergeItemsKeepingBestThumb(prevItems, out.items);
+  function toggleGalleryCursorSelection(path: string) {
+    const it = getGalleryItems().find((x) => x.path === path);
+    if (!it) return;
+
+    // Actualización optimista local de forma instantánea
+    const nextSelected = !it.selected;
+    updateGalleryItems((items) => items.map((x) =>
+      x.path === path ? { ...x, selected: nextSelected } : x
+    ));
+
+    const prevCount = Number(getGalleryState().selectedCount || 0);
+    setGalleryState({
+      ...getGalleryState(),
+      selectedCount: Math.max(0, prevCount + (nextSelected ? 1 : -1)),
+    });
+
     setSelectedPreviewFromPath(path);
   }
 
@@ -1107,38 +1812,28 @@
     const hi = Math.max(a, b);
     const target = new Set<string>();
     for (let i = lo; i <= hi; i++) target.add(imagePaths[i]);
-    const current = new Set(items.filter((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected)).map((x) => x.path));
-    const addPaths = [...target].filter((p) => !current.has(p));
-    if (addPaths.length === 0) return;
-    const prevItems = items;
-    const out = await bridge.galleryApplySelectionDelta(addPaths, []);
-    galleryState = out.state;
-    items = mergeItemsKeepingBestThumb(prevItems, out.items);
-  }
-
-  const selectPage = async () => {
-    const prevItems = items;
-    const out = await bridge.gallerySelectPage();
-    galleryState = out.state;
-    items = mergeItemsKeepingBestThumb(prevItems, out.items);
-    if (destinationsMode) {
-      const last = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
-      setSelectedPreviewFromPath(last?.path);
-    }
+    
+    patchGallerySelection((items) =>
+      items.map((it) => {
+        if (!isGalleryMediaKind(it.kind)) return it;
+        const isTarget = target.has(it.path);
+        return { ...it, selected: isTarget ? true : it.selected };
+      })
+    );
   };
+
   const clearSelection = async () => {
-    const prevItems = items;
-    const out = await bridge.galleryClearSelection();
-    galleryState = out.state;
-    items = mergeItemsKeepingBestThumb(prevItems, out.items);
+    patchGallerySelection((items) =>
+      items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: false } : x))
+    );
+    setGalleryState({ ...getGalleryState(), selectedCount: 0 });
   };
   const invertSelection = async () => {
-    const prevItems = items;
-    const out = await bridge.galleryInvertSelection();
-    galleryState = out.state;
-    items = mergeItemsKeepingBestThumb(prevItems, out.items);
+    patchGallerySelection((items) =>
+      items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: !x.selected } : x))
+    );
     if (destinationsMode) {
-      const last = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
+      const last = [...getGalleryItems()].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
       setSelectedPreviewFromPath(last?.path);
     }
   };
@@ -1152,15 +1847,21 @@
         galleryMoveQueue = rest;
         try {
           const out = await bridge.destinationMovePaths(job.srcPaths, job.destPath);
-          galleryState = out.state;
-          items = mergeItemsKeepingBestThumb(items, out.items);
-          galleryThumbHydrationToken++;
-          void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
+          const moved = Number(out.moveResult?.moved ?? 0);
+          const errors = Number(out.moveResult?.errors ?? 0);
+          if (errors > 0 || moved < job.srcPaths.length) {
+            await applyGalleryItemsDelta(out);
+          } else {
+            await reconcileGalleryMoveSuccess(out);
+          }
           status = t("status.moveBatchLine")
             .replace("{moved}", String(out.moveResult?.moved ?? 0))
             .replace("{errors}", String(out.moveResult?.errors ?? 0))
             .replace("{queue}", String(galleryMoveQueue.length));
         } catch (e: unknown) {
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
+          await rollbackOptimisticGalleryMove(job);
           status = e instanceof Error ? e.message : t("status.moveQueueError");
         }
       }
@@ -1170,7 +1871,7 @@
   }
 
   function getSelectedGalleryPaths(): string[] {
-    return items.filter((x) => isGalleryMediaKind(x.kind) && x.selected).map((x) => x.path);
+    return getGalleryItems().filter((x) => isGalleryMediaKind(x.kind) && x.selected).map((x) => x.path);
   }
 
   function askConfirmMoveSelected(destPath: string) {
@@ -1195,16 +1896,11 @@
       status = t("status.noImagesToMove");
       return;
     }
-    const selectedSet = new Set(selectedPaths);
-    items = items.map((it) =>
-      isGalleryMediaKind(it.kind) && selectedSet.has(it.path) ? { ...it, selected: false } : it
-    );
-    galleryState = {
-      ...galleryState,
-      selectedCount: Math.max(0, Number(galleryState?.selectedCount ?? 0) - selectedPaths.length),
-    };
-    galleryMoveQueue = [...galleryMoveQueue, { srcPaths: selectedPaths, destPath: path }];
-    status = t("status.imagesEnqueued")
+    const snapshot = createGalleryMoveJobSnapshot(selectedPaths);
+    await applyOptimisticGalleryRemove(snapshot);
+    const job: GalleryMoveJob = { ...snapshot, destPath: path };
+    galleryMoveQueue = [...galleryMoveQueue, job];
+    status = t("status.imagesMoving")
       .replace("{n}", String(selectedPaths.length))
       .replace("{queue}", String(galleryMoveQueue.length));
     if (!galleryMoveWorkerRunning) {
@@ -1252,29 +1948,8 @@
     window.addEventListener("pointercancel", up);
   }
 
-  /** Números de página estilo resultados (mínimo 5 visibles + extremos). */
-  function googlePageItems(page: number, totalPages: number): Array<number | "gap"> {
-    if (totalPages <= 1) return totalPages === 1 ? [1] : [];
-    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
-    if (page <= 4) return [1, 2, 3, 4, 5, "gap", totalPages];
-    if (page >= totalPages - 3) return [1, "gap", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
-    return [1, "gap", page - 2, page - 1, page, page + 1, page + 2, "gap", totalPages];
-  }
-
-  function formatBytes(size: number): string {
-    const n = Math.max(0, Number(size) || 0);
-    if (n < 1024) return `${n} B`;
-    const units = ["KB", "MB", "GB", "TB"];
-    let v = n / 1024;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-      v /= 1024;
-      i++;
-    }
-    return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
-  }
-
-  $: pageLinks = googlePageItems(Number(galleryState.page) || 1, Number(galleryState.totalPages) || 1);
+  $: gridCellTargetPx = galleryGridCellPx(thumbScale);
+  $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
 
   function updateSplitFromClientX(clientX: number) {
     const el = document.querySelector(".content");
@@ -1315,9 +1990,16 @@
   }
 
   async function applyThumbScaleNow() {
+    const prevScale = appliedThumbScale;
+    const nextScale = thumbScale;
     try {
-      await bridge.settingsPatch({ gallery_thumb_scale: Number(thumbScale.toFixed(3)) });
-      await reload({ silent: true });
+      await bridge.settingsPatch({ gallery_thumb_scale: Number(nextScale.toFixed(3)) });
+      if (thumbQualityRefreshNeeded(prevScale, nextScale)) {
+        await reload({ silent: true, invalidateThumbCache: true });
+        appliedThumbScale = nextScale;
+        return;
+      }
+      appliedThumbScale = nextScale;
     } catch {
       status = t("status.thumbScaleError");
     }
@@ -1386,44 +2068,33 @@
       return;
     }
     const label = pinMarkerName.trim() || defaultMarkerNameForPath(path);
-    await pinFolder(path);
-    const next = { ...pinnedFolderLabels, [path]: label };
-    pinnedFolderLabels = next;
-    await bridge.settingsPatch({ web_pinned_folder_labels: next });
+    await trackLoad(bridge.markersAdd(path, label, parentIdOrEmpty(markerToolbarFolderId)));
+    await syncMarkersFromApi();
     pinMarkerOpen = false;
     status = t("pinMarker.saved");
   }
 
   async function toggleDestinationsModePreserveScroll() {
     const fromDest = destinationsMode;
-    const currentScrollTop = fromDest
-      ? Number(galleryScrollEl?.scrollTop ?? 0)
-      : Number(galleryPlainEl?.scrollTop ?? 0);
+    const currentScrollTop = Number(galleryScrollEl?.scrollTop ?? 0);
     destinationsMode = !fromDest;
     if (fromDest) {
       await clearSelection();
     }
     await tick();
     const apply = () => {
-      if (!fromDest) {
-        if (galleryScrollEl) {
-          galleryScrollEl.scrollTop = currentScrollTop;
-          galleryScrollAtTop = galleryScrollEl.scrollTop <= 2;
-        }
-      } else {
-        if (galleryPlainEl) galleryPlainEl.scrollTop = currentScrollTop;
+      if (galleryScrollEl) {
+        galleryScrollEl.scrollTop = currentScrollTop;
+        galleryScrollAtTop = galleryScrollEl.scrollTop <= 2; // solo para restaurar scroll al cambiar modo
       }
     };
     apply();
     requestAnimationFrame(apply);
   }
 
-  const openDestPreview = async (path: string) => {
+  const openDestPreview = (path: string) => {
     previewDestPath = path;
-    previewSelectedPaths = [];
-    previewSelectionMode = false;
     previewOpen = true;
-    await refreshDestPreview();
   };
 
   $: {
@@ -1432,68 +2103,8 @@
     keepRoutePathEndVisible();
   }
 
-  const refreshDestPreview = async () => {
-    const w = Math.max(320, Math.round(window.innerWidth * DEST_MODAL_FRAC));
-    const out = await bridge.destinationPreview(previewDestPath, thumbScale, w);
-    previewItems = out.items;
-    previewThumbHydrationToken++;
-    void hydratePreviewThumbsHq(previewItems, thumbScale, previewThumbHydrationToken);
-    const valid = new Set(out.items.map((x: { path: string }) => x.path));
-    previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
-  };
-
-  function togglePreviewPick(path: string) {
-    const has = previewSelectedPaths.includes(path);
-    previewSelectedPaths = has
-      ? previewSelectedPaths.filter((p) => p !== path)
-      : [...previewSelectedPaths, path];
-  }
-
-  function applyPreviewRangeSelection(fromPath: string, toPath: string, mode: "select" | "deselect") {
-    const a = previewItems.findIndex((x) => x.path === fromPath);
-    const b = previewItems.findIndex((x) => x.path === toPath);
-    if (a < 0 || b < 0) return;
-    const lo = Math.min(a, b);
-    const hi = Math.max(a, b);
-    const draft = new Set(previewRangeBaseSelectedPaths);
-    for (let i = lo; i <= hi; i++) {
-      const p = previewItems[i]?.path;
-      if (!p) continue;
-      if (mode === "select") draft.add(p);
-      else draft.delete(p);
-    }
-    previewSelectedPaths = [...draft];
-  }
-
-  function selectAllPreviewItems() {
-    previewSelectedPaths = previewItems.map((x) => x.path);
-  }
-
-  function clearPreviewSelection() {
-    previewSelectedPaths = [];
-  }
-
-  function invertPreviewSelection() {
-    const cur = new Set(previewSelectedPaths);
-    previewSelectedPaths = previewItems
-      .map((x) => x.path)
-      .filter((p) => !cur.has(p));
-  }
-
-  function enterPreviewSelectionMode(path?: string) {
-    previewSelectionMode = true;
-    if (path && !previewSelectedPaths.includes(path)) {
-      previewSelectedPaths = [...previewSelectedPaths, path];
-    }
-  }
-
-  function exitPreviewSelectionMode() {
-    previewSelectionMode = false;
-    previewSelectedPaths = [];
-  }
-
-  async function movePreviewSelectionToCurrentRoute() {
-    if (previewSelectedPaths.length === 0) {
+  async function movePreviewPathsToCurrentRoute(paths: string[]) {
+    if (paths.length === 0) {
       status = t("status.selectModalFirst");
       return;
     }
@@ -1501,39 +2112,50 @@
       status = t("status.loadFolderForDrop");
       return;
     }
+    destPreviewModal?.removePaths(paths);
+    destPreviewModal?.clearSelectedPaths();
     try {
-      const out = await trackLoad(bridge.destinationMoveFromPreview(previewSelectedPaths));
-      galleryState = out.state ?? galleryState;
-      items = out.items ?? items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      const out = await trackLoad(bridge.destinationMoveFromPreview(paths));
+      setGalleryState(out.state ?? getGalleryState());
+      mergeGalleryItemsFromApi(out.items ?? getGalleryItems(), out.state);
+      void afterGalleryDataLoaded();
       const moved = Number(out.moveResult?.moved ?? 0);
       const errors = Number(out.moveResult?.errors ?? 0);
       status =
         t("status.previewMoved").replace("{moved}", String(moved)) +
         (errors ? t("status.previewMovedErrors").replace("{errors}", String(errors)) : "");
-      previewSelectedPaths = [];
-      await refreshDestPreview();
+      if (errors > 0 || moved < paths.length) destPreviewModal?.reloadPreview();
     } catch (e: unknown) {
+      destPreviewModal?.reloadPreview();
       status = e instanceof Error ? e.message : t("status.previewMoveError");
     }
   }
 
+  async function deleteDestPreviewPaths(paths: string[]) {
+    if (paths.length === 0) return;
+    destPreviewModal?.removePaths(paths);
+    destPreviewModal?.clearSelectedPaths();
+    const snapshot = createGalleryMoveJobSnapshot(paths);
+    await applyOptimisticGalleryRemove(snapshot);
+    galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
+    status = t("status.deleteQueued").replace("{n}", String(paths.length));
+    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
+  }
+
   async function deletePreviewSelectedItems() {
-    if (previewSelectedPaths.length === 0) return;
-    const deleting = [...previewSelectedPaths];
-    const delSet = new Set(deleting);
-    previewItems = previewItems.filter((x) => !delSet.has(x.path));
-    previewSelectedPaths = [];
-    enqueueDeletePaths(deleting);
-    status = t("status.deleteQueued").replace("{n}", String(deleting.length));
+    const paths = destPreviewModal?.getSelectedPaths() ?? [];
+    await deleteDestPreviewPaths(paths);
   }
 
   function enqueueDeletePaths(paths: string[]) {
     const normalized = (paths || []).map((x) => String(x).trim()).filter((x) => x.length > 0);
     if (normalized.length === 0) return;
-    galleryDeleteQueue = [...galleryDeleteQueue, { paths: normalized }];
-    if (!galleryDeleteWorkerRunning) void processDeleteQueue();
+    void (async () => {
+      const snapshot = createGalleryMoveJobSnapshot(normalized);
+      await applyOptimisticGalleryRemove(snapshot);
+      galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
+      if (!galleryDeleteWorkerRunning) void processDeleteQueue();
+    })();
   }
 
   async function processDeleteQueue() {
@@ -1544,25 +2166,24 @@
         const [job, ...rest] = galleryDeleteQueue;
         galleryDeleteQueue = rest;
         try {
-          const out = await bridge.galleryDeletePaths(job.paths);
-          galleryState = out.state ?? galleryState;
-          items = out.items ?? items;
-          galleryThumbHydrationToken++;
-          void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-          if (previewOpen) {
-            const valid = new Set(
-              (out.items ?? []).filter((x: GalleryItem) => isGalleryMediaKind(x.kind)).map((x: GalleryItem) => x.path)
-            );
-            previewItems = previewItems.filter((x) => valid.has(x.path));
-            previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
-          }
+          const out = await bridge.galleryDeletePaths(job.srcPaths);
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
           const deleted = Number(out.deleteResult?.deleted ?? 0);
           const errors = Number(out.deleteResult?.errors ?? 0);
+          if (errors > 0 || deleted < job.srcPaths.length) {
+            await applyGalleryItemsDelta(out);
+          } else {
+            await reconcileGalleryMoveSuccess(out);
+          }
+          resetGalleryInteractionLocks();
           status = t("status.deleteBatchLine")
             .replace("{deleted}", String(deleted))
             .replace("{errPart}", errors ? t("status.deleteErrorsPart").replace("{errors}", String(errors)) : "")
             .replace("{queue}", String(galleryDeleteQueue.length));
         } catch (e: unknown) {
+          if (!isGalleryNavigationCurrent(job.navGen)) continue;
+          await rollbackOptimisticGalleryMutation(job);
+          if (previewOpen) destPreviewModal?.reloadPreview();
           status = e instanceof Error ? e.message : t("status.deleteQueueError");
         }
       }
@@ -1597,9 +2218,33 @@
     // Importante: no mostrar el thumbnail "cuadrado" (recortado) como si fuera la imagen completa.
     // La vista principal debe venir de `galleryPreview` (contain) para garantizar que en "Completa" se vea 100% sin recortes.
     previewZoomDataUrl = null;
+    previewZoomMiniSrc = it.thumbDataUrl ?? null;
     previewZoomMediaType =
       it.kind === "video" ? "video" : it.path.toLowerCase().endsWith(".svg") ? "svg" : "image";
-    previewZoomFileUrl = null;
+    previewZoomThumbUrl = it.thumbDataUrl ?? null;
+    previewZoomVideoArmed = false;
+    previewZoomVideoLaunching = false;
+    previewZoomVideoPlayLocked = false;
+    previewZoomVideoPreparing = false;
+    previewZoomVideoSession += 1;
+    const zoomFallbackUrl = buildMediaFileUrl(it.path);
+    previewZoomFileUrl = previewZoomMediaType === "svg" ? zoomFallbackUrl : null;
+    previewZoomPlayback = null;
+    if (previewZoomMediaType === "svg") {
+      void resolveMediaPlaybackInfo(it.path)
+        .then((info) => {
+          if (previewZoomOpen && previewZoomPath === it.path) {
+            previewZoomPlayback = info;
+            const url = pickInitialPlaybackUrl(info);
+            if (url) previewZoomFileUrl = url;
+          }
+        })
+        .catch(() => {
+          if (previewZoomOpen && previewZoomPath === it.path && zoomFallbackUrl) {
+            previewZoomFileUrl = zoomFallbackUrl;
+          }
+        });
+    }
     previewZoomScale = 1;
     previewPanX = 0;
     previewPanY = 0;
@@ -1608,261 +2253,178 @@
     previewZoomNaturalW = 1;
     previewZoomNaturalH = 1;
     previewZoomCarouselVisible = opts?.preserveCarousel ? previewZoomCarouselVisible : true;
-    zoomHudVisible = true;
+    zoomHudVisible = false;
     zoomEditMode = false;
     zoomCropMode = false;
     zoomCropDrag = false;
     previewZoomOpen = true;
-    bridge
-      .galleryPreview(it.path, 2200, 1600)
-      .then((pr) => {
-        if (previewZoomOpen && previewZoomPath === it.path) {
-          const mt = String(pr.mediaType ?? "image");
-          previewZoomMediaType = mt === "video" ? "video" : mt === "svg" ? "svg" : "image";
-          previewZoomFileUrl = pr.fileUrl ?? null;
-          previewZoomDataUrl = pr.dataUrl ?? null;
-        }
-      })
-      .catch(() => undefined);
-  }
-
-  function applyGalleryRefreshFromMove(state: any, nextItems: GalleryItem[]) {
-    galleryState = state;
-    items = nextItems;
-    galleryThumbHydrationToken++;
-    void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
-  }
-
-  function startPreviewLongPress(path: string) {
-    if (previewLongPressTimer) clearTimeout(previewLongPressTimer);
-    previewLongPressPath = path;
-    previewLongPressTriggered = false;
-    previewLongPressTimer = setTimeout(() => {
-      previewLongPressTriggered = true;
-      enterPreviewSelectionMode(path);
-    }, 380);
-  }
-
-  function cancelPreviewLongPress() {
-    if (previewLongPressTimer) clearTimeout(previewLongPressTimer);
-    previewLongPressTimer = null;
-    previewLongPressPath = null;
-  }
-
-  function endPreviewRangeSelection() {
-    if (!previewRangeSelecting) return;
-    previewRangeSelecting = false;
-    previewRangeAnchorPath = null;
-    previewRangeBaseSelectedPaths = [];
-    // Evita el click "fantasma" al soltar tras arrastre de selección.
-    previewSuppressClick = true;
-    setTimeout(() => {
-      previewSuppressClick = false;
-    }, 0);
-  }
-
-  function onPreviewTilePointerDown(
-    e: PointerEvent,
-    it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }
-  ) {
-    if (!previewSelectionMode) {
-      startPreviewLongPress(it.path);
-      return;
-    }
-    // Con Ctrl sostenido priorizamos arrastre, no rango de selección.
-    if (e.ctrlKey) return;
-    e.preventDefault();
-    cancelPreviewLongPress();
-    previewRangeSelecting = true;
-    previewRangeAnchorPath = it.path;
-    previewRangeBaseSelectedPaths = [...previewSelectedPaths];
-    previewRangeMode = previewSelectedPaths.includes(it.path) ? "deselect" : "select";
-    applyPreviewRangeSelection(it.path, it.path, previewRangeMode);
-  }
-
-  function onPreviewTilePointerEnter(path: string) {
-    if (!previewSelectionMode || !previewRangeSelecting || !previewRangeAnchorPath) return;
-    applyPreviewRangeSelection(previewRangeAnchorPath, path, previewRangeMode);
-  }
-
-  function onPreviewRangePointerMove(e: PointerEvent) {
-    if (!previewSelectionMode || !previewRangeSelecting || !previewRangeAnchorPath) return;
-    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-    const tile = el?.closest?.(".tile[data-preview-path]") as HTMLElement | null;
-    const path = tile?.dataset?.previewPath;
-    if (!path) return;
-    applyPreviewRangeSelection(previewRangeAnchorPath, path, previewRangeMode);
-  }
-
-  function onPreviewTileClick(e: MouseEvent, it: { path: string; name: string; thumbDataUrl?: string | null }) {
-    if (e.ctrlKey) return;
-    if (previewSuppressClick) return;
-    if (previewLongPressTriggered && previewLongPressPath === it.path) {
-      previewLongPressTriggered = false;
-      previewLongPressPath = null;
-      return;
-    }
-    if (previewSelectionMode) {
-      togglePreviewPick(it.path);
-      return;
-    }
-    openPreviewZoom(it, { navItems: previewItems });
-  }
-
-  function onPreviewTileDragStart(e: DragEvent, it: { path: string }) {
-    if (!previewSelectionMode) {
-      e.preventDefault();
-      return;
-    }
-    // Mantener el mismo patrón que en galería: arrastre solo con Ctrl sostenido.
-    if (!(e as DragEvent).ctrlKey) {
-      e.preventDefault();
-      status = t("status.ctrlDragHint");
-      return;
-    }
-    if (!previewSelectedPaths.includes(it.path)) {
-      previewSelectedPaths = [...previewSelectedPaths, it.path];
-    }
-    previewDragActive = true;
-    const dt = e.dataTransfer;
-    if (!dt) return;
-    dt.effectAllowed = "move";
-    dt.setData("application/x-om-preview-paths", JSON.stringify(previewSelectedPaths));
-    dt.setData("text/plain", previewSelectedPaths[0] ?? it.path);
-  }
-
-  function onPreviewTileDragEnd() {
-    previewDragActive = false;
-  }
-
-  function getVisibleGalleryMediaPaths(): string[] {
-    return items.filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path);
-  }
-
-  function isGalleryTileSelected(it: GalleryItem): boolean {
-    if (!destinationsMode || !isGalleryMediaKind(it.kind)) return false;
-    return Boolean(it.selected);
-  }
-
-  function applyGalleryRangeSelection(fromPath: string, toPath: string, mode: "select" | "deselect") {
-    const imagePaths = getVisibleGalleryMediaPaths();
-    const a = imagePaths.indexOf(fromPath);
-    const b = imagePaths.indexOf(toPath);
-    if (a < 0 || b < 0) return;
-    const lo = Math.min(a, b);
-    const hi = Math.max(a, b);
-    const draft = new Set(galleryRangeBaseSelectedSet ?? []);
-    for (let i = lo; i <= hi; i++) {
-      const p = imagePaths[i];
-      if (!p) continue;
-      if (mode === "select") draft.add(p);
-      else draft.delete(p);
-    }
-    const next = [...draft];
-    galleryRangeDraftSelectedPaths = next;
-    galleryRangeDraftSelectedSet = new Set(next);
-    galleryRangeCurrentPath = toPath;
-    // Reflejo en vivo: actualizar selección visible sin esperar el commit backend.
-    items = items.map((it) =>
-      isGalleryMediaKind(it.kind)
-        ? { ...it, selected: galleryRangeDraftSelectedSet?.has(it.path) ?? Boolean(it.selected) }
-        : it
-    );
-  }
-
-  function scheduleGalleryRangeSelection(path: string) {
-    if (!galleryRangeSelecting || !galleryRangeAnchorPath) return;
-    if (galleryRangeCurrentPath === path) return;
-    galleryRangePendingPath = path;
-    if (galleryRangeRaf !== null) return;
-    galleryRangeRaf = requestAnimationFrame(() => {
-      galleryRangeRaf = null;
-      const target = galleryRangePendingPath;
-      galleryRangePendingPath = null;
-      if (!target || !galleryRangeAnchorPath) return;
-      applyGalleryRangeSelection(galleryRangeAnchorPath, target, galleryRangeMode);
+    void hydrateZoomCarouselThumbs(zoomNavItems, thumbScale, it.path, (path, thumbDataUrl) => {
+      zoomNavItems = zoomNavItems.map((z) =>
+        z.path === path ? { ...z, thumbDataUrl, thumbQuality: "hq" as const } : z
+      );
     });
-  }
-
-  function onGalleryTilePointerDown(e: PointerEvent, it: GalleryItem) {
-    if (!destinationsMode || !isGalleryMediaKind(it.kind)) return;
-    // Por defecto: selección por rango. Con Ctrl: modo arrastre.
-    if (e.ctrlKey) return;
-    e.preventDefault();
-    const baseSelected = items
-      .filter((x) => isGalleryMediaKind(x.kind) && x.selected)
-      .map((x) => x.path);
-    galleryRangeBaseSelectedPaths = baseSelected;
-    galleryRangeBaseSelectedSet = new Set(baseSelected);
-    galleryRangeAnchorPath = it.path;
-    galleryRangeMode = baseSelected.includes(it.path) ? "deselect" : "select";
-    galleryRangeSelecting = true;
-    applyGalleryRangeSelection(it.path, it.path, galleryRangeMode);
-  }
-
-  function onGalleryRangePointerMove(e: PointerEvent) {
-    if (!galleryRangeSelecting || !galleryRangeAnchorPath) return;
-    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-    const tile = el?.closest?.(".tile[data-item-path]") as HTMLElement | null;
-    const path = tile?.dataset?.itemPath;
-    if (!path) return;
-    scheduleGalleryRangeSelection(path);
-  }
-
-  function onGalleryTilePointerEnter(path: string) {
-    if (!galleryRangeSelecting || !galleryRangeAnchorPath) return;
-    scheduleGalleryRangeSelection(path);
-  }
-
-  async function endGalleryRangeSelection() {
-    if (!galleryRangeSelecting) return;
-    const draft = new Set(galleryRangeDraftSelectedPaths ?? galleryRangeBaseSelectedPaths);
-    const base = new Set(galleryRangeBaseSelectedPaths);
-    const addPaths = [...draft].filter((p) => !base.has(p));
-    const removePaths = [...base].filter((p) => !draft.has(p));
-    galleryRangeSelecting = false;
-    galleryRangeAnchorPath = null;
-    galleryRangeBaseSelectedPaths = [];
-    galleryRangeBaseSelectedSet = null;
-    galleryRangeDraftSelectedPaths = null;
-    galleryRangeDraftSelectedSet = null;
-    galleryRangeCurrentPath = null;
-    galleryRangePendingPath = null;
-    if (galleryRangeRaf !== null) {
-      cancelAnimationFrame(galleryRangeRaf);
-      galleryRangeRaf = null;
+    if (previewZoomMediaType !== "video") {
+      bridge
+        .galleryPreview(it.path, 2200, 1600)
+        .then((pr) => {
+          if (previewZoomOpen && previewZoomPath === it.path) {
+            const merged = mergePreviewApiResult(
+              {
+                path: it.path,
+                name: it.name,
+                mediaType: previewZoomMediaType,
+                fileUrl: previewZoomFileUrl,
+                dataUrl: previewZoomDataUrl,
+              },
+              pr,
+              it.path,
+              it.kind
+            );
+            previewZoomMediaType = merged.mediaType ?? previewZoomMediaType;
+            const nextUrl = merged.fileUrl ?? previewZoomFileUrl;
+            if (nextUrl) {
+              if (!isDataPlaybackUrl(previewZoomFileUrl) || isDataPlaybackUrl(nextUrl)) {
+                previewZoomFileUrl = nextUrl;
+              }
+            }
+            previewZoomDataUrl = merged.dataUrl ?? previewZoomDataUrl;
+            if (merged.dataUrl) previewZoomMiniSrc = merged.dataUrl;
+          }
+        })
+        .catch(() => undefined);
     }
-    galleryRangeSuppressClick = true;
-    setTimeout(() => {
-      galleryRangeSuppressClick = false;
-    }, 0);
-    if (addPaths.length === 0 && removePaths.length === 0) return;
+    scheduleNextZoomVideoWarm(zoomNavItems, it.path);
+    if (previewZoomMediaType === "video" && !destinationsMode && !previewZoomDestMode) {
+      requestZoomVideoPlay();
+    }
+  }
+
+  function requestZoomVideoPlay() {
+    const path = String(previewZoomPath ?? "").trim();
+    if (!path || previewZoomMediaType !== "video" || !previewZoomOpen) return;
+    if (previewZoomVideoPlayLocked && previewZoomPath === path) return;
+    if (previewZoomVideoArmed && previewZoomFileUrl) return;
+
+    previewZoomVideoPlayLocked = true;
+    previewZoomVideoLaunching = true;
+    previewZoomVideoArmed = true;
+    previewZoomVideoPreparing = true;
+    previewZoomVideoStatus = t("preview.videoStarting");
+    previewZoomFileUrl = null;
+
+    void runZoomVideoPlayback(path);
+  }
+
+  async function runZoomVideoPlayback(pathAtStart: string) {
     try {
-      const prevItems = items;
-      const out = await bridge.galleryApplySelectionDelta(addPaths, removePaths);
-      galleryState = out.state;
-      items = mergeItemsKeepingBestThumb(prevItems, out.items);
-      if (destinationsMode) {
-        const preferred = [...addPaths].reverse().find((p) =>
-          items.some((x) => isGalleryMediaKind(x.kind) && x.path === p && Boolean(x.selected))
-        );
-        const fallback = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))?.path;
-        setSelectedPreviewFromPath(preferred ?? fallback);
+      const info = await resolveMediaPlaybackInfo(pathAtStart, { warm: true, tryBlob: false });
+      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+
+      if (!canTranscodeVideo(info)) {
+        previewZoomVideoPlayLocked = false;
+        previewZoomVideoLaunching = false;
+        previewZoomVideoArmed = false;
+        previewZoomVideoPreparing = false;
+        status = t("preview.videoFfmpegMissing");
+        return;
       }
+
+      const url = pickInitialPlaybackUrl(info);
+      if (!url) {
+        previewZoomVideoPlayLocked = false;
+        previewZoomVideoLaunching = false;
+        previewZoomVideoArmed = false;
+        previewZoomVideoPreparing = false;
+        return;
+      }
+
+      previewZoomVideoLaunching = false;
+      previewZoomPlayback = info;
+      previewZoomFileUrl = url;
+      previewZoomVideoStatus = playbackPrepareMessage(info);
+      previewZoomVideoPreparing = Boolean(info.needsTranscode && !info.transcodeCached);
+      void pollVideoTranscodeJobs();
+      if (previewZoomVideoPreparing) startVideoPreparePoll();
+      else previewZoomVideoPlayLocked = false;
+      void tick().then(() => tryAutoplayVideo(zoomVideoEl));
     } catch {
-      const prevItems = items;
-      const out = await bridge.galleryRefreshItems();
-      galleryState = out.state;
-      items = mergeItemsKeepingBestThumb(prevItems, out.items);
+      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+      previewZoomVideoPlayLocked = false;
+      previewZoomVideoLaunching = false;
+      previewZoomVideoArmed = false;
+      previewZoomFileUrl = null;
+      previewZoomVideoPreparing = false;
     }
   }
 
+  function onZoomVideoCanPlay() {
+    previewZoomVideoPreparing = false;
+    previewZoomVideoPlayLocked = false;
+    stopVideoPreparePoll();
+    tryAutoplayVideo(zoomVideoEl);
+  }
+
+  function applyGalleryRefreshFromMove(out: GalleryMutationResponse) {
+    void applyGalleryItemsDelta(out);
+  }
+
+  function getZoomStageSize(): { w: number; h: number } | null {
+    if (!zoomStageEl) return null;
+    const sr = zoomStageEl.getBoundingClientRect();
+    return { w: Math.max(1, sr.width), h: Math.max(1, sr.height) };
+  }
+
+  function getFillWidthPanLimitY(): number {
+    const stage = getZoomStageSize();
+    const nw = Math.max(1, previewZoomNaturalW);
+    const nh = Math.max(1, previewZoomNaturalH);
+    if (!stage) return 0;
+    const layoutH = stage.w * (nh / nw);
+    const scaledH = layoutH * previewZoomScale;
+    return Math.max(0, scaledH - stage.h);
+  }
+
+  function getFitPanLimits(): { x: number; y: number } {
+    const stage = getZoomStageSize();
+    if (!stage) return { x: 0, y: 0 };
+    const nw = Math.max(1, previewZoomNaturalW);
+    const nh = Math.max(1, previewZoomNaturalH);
+    let layoutW = stage.w;
+    let layoutH = (stage.w * nh) / nw;
+    if (layoutH > stage.h) {
+      layoutH = stage.h;
+      layoutW = (stage.h * nw) / nh;
+    }
+    const scaledW = layoutW * previewZoomScale;
+    const scaledH = layoutH * previewZoomScale;
+    return {
+      x: Math.max(0, (scaledW - stage.w) / 2),
+      y: Math.max(0, (scaledH - stage.h) / 2),
+    };
+  }
+
+  function buildZoomImgTransform(): string {
+    if (previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100) {
+      return "translate(-50%, -50%)";
+    }
+    if (previewZoomMode === "fillWidth") {
+      return `translate(-50%, 0%) translate(0px, ${previewPanY}px) scale(${previewZoomScale})`;
+    }
+    return `translate(-50%, -50%) translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
+  }
+
+  /** Aplica transform directo al DOM durante pan (evita re-render de Svelte por frame). */
+  function syncZoomMediaTransform() {
+    const tf = buildZoomImgTransform();
+    if (zoomImgEl) zoomImgEl.style.transform = tf;
+    if (zoomVideoEl && previewZoomMediaType === "video") zoomVideoEl.style.transform = tf;
+  }
 
   function zoomStep(delta: number) {
     if (previewZoomMediaType === "video") return;
-    // Permite alejar más allá de 100% para que, si el stage efectivo es menor
-    // (por carrusel/cabecera), siempre puedas ver la imagen completa.
     previewZoomScale = Math.min(4, Math.max(0.5, Number((previewZoomScale + delta).toFixed(2))));
+    clampPanToStage();
+    syncZoomMediaTransform();
     touchZoomHud();
   }
 
@@ -1871,24 +2433,18 @@
   }
 
   function getPanLimits() {
-    const media = previewZoomMediaType === "video" ? zoomVideoEl : zoomImgEl;
-    if (!zoomStageEl || !media) return { x: 0, y: 0 };
-    const sr = zoomStageEl.getBoundingClientRect();
-    const ir = media.getBoundingClientRect();
-    const stageW = Math.max(1, sr.width);
-    const stageH = Math.max(1, sr.height);
-    const overflowX = (ir.width - stageW) / 2;
-    const overflowY = (ir.height - stageH) / 2;
     if (previewZoomMode === "fillWidth") {
-      return { x: 0, y: Math.max(0, ir.height - stageH) };
+      return { x: 0, y: getFillWidthPanLimitY() };
     }
-    return { x: Math.max(0, overflowX), y: Math.max(0, overflowY) };
+    return getFitPanLimits();
   }
 
   function clampPanToStage() {
     const limits = getPanLimits();
     const nextX = previewZoomMode === "fillWidth" ? 0 : clamp(previewPanX, -limits.x, limits.x);
-    const nextY = previewZoomMode === "fillWidth" ? clamp(previewPanY, -limits.y, 0) : clamp(previewPanY, -limits.y, limits.y);
+    // fillWidth: 0 = borde superior; negativo = desplazar hacia arriba para ver la parte inferior.
+    const nextY =
+      previewZoomMode === "fillWidth" ? clamp(previewPanY, -limits.y, 0) : clamp(previewPanY, -limits.y, limits.y);
     if (nextX !== previewPanX) previewPanX = nextX;
     if (nextY !== previewPanY) previewPanY = nextY;
   }
@@ -1898,6 +2454,19 @@
     previewPanX = 0;
     previewPanY = 0;
     previewFillWidthAlignPending = false;
+    syncZoomMediaTransform();
+  }
+
+  function togglePreviewZoomMode() {
+    const next: "fit" | "fillWidth" = previewZoomMode === "fit" ? "fillWidth" : "fit";
+    previewZoomMode = next;
+    previewPanX = 0;
+    previewPanY = 0;
+    previewZoomScale = 1;
+    previewFillWidthAlignPending = next === "fillWidth";
+    clampPanToStage();
+    syncZoomMediaTransform();
+    touchZoomHud();
   }
 
   // Snap a "100%" usando el mismo redondeo que muestra la UI.
@@ -1909,19 +2478,19 @@
   }
 
   // Siempre mantenemos pan dentro de los límites reales del DOM (overflow vs stage).
-  $: if (previewZoomOpen && zoomStageEl && (zoomImgEl || zoomVideoEl)) {
+  $: if (previewZoomOpen && !previewPanDrag && zoomStageEl && (zoomImgEl || zoomVideoEl)) {
     clampPanToStage();
     if (previewFillWidthAlignPending) {
       alignFillWidthToTop();
     }
   }
 
-  $: zoomImgTransform =
-    previewZoomMode === "fit" && Math.round(previewZoomScale * 100) === 100
-      ? "translate(0px, 0px)"
-      : previewZoomMode === "fillWidth"
-        ? `translate(0px, ${previewPanY}px) scale(${previewZoomScale})`
-      : `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoomScale})`;
+  $: zoomImgTransform = buildZoomImgTransform();
+
+  // Aplica transform al DOM cuando cambia escala/pan (excepto durante drag activo).
+  $: if (previewZoomOpen && !previewPanDrag && (zoomImgEl || zoomVideoEl)) {
+    syncZoomMediaTransform();
+  }
 
   function zoomWithWheel(e: WheelEvent) {
     if (previewZoomMediaType === "video") {
@@ -1992,10 +2561,9 @@
     if (!previewZoomPath) return;
     try {
       const out = await trackLoad(bridge.galleryImageRotate(previewZoomPath, deg));
-      galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      setGalleryState(out.state);
+      setGalleryItems(out.items);
+      void afterGalleryDataLoaded();
       syncZoomNavThumbsFromItems(out.items);
       const pr = await trackLoad(bridge.galleryPreview(previewZoomPath, 2200, 1600));
       if (previewZoomOpen && previewZoomPath === pr.path) previewZoomDataUrl = pr.dataUrl ?? null;
@@ -2019,10 +2587,9 @@
       const out = await trackLoad(
         bridge.galleryImageCropNormalized(previewZoomPath, norm.l, norm.t, norm.w, norm.h)
       );
-      galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      setGalleryState(out.state);
+      setGalleryItems(out.items);
+      void afterGalleryDataLoaded();
       syncZoomNavThumbsFromItems(out.items);
       zoomCropMode = false;
       const pr = await trackLoad(bridge.galleryPreview(previewZoomPath, 2200, 1600));
@@ -2072,24 +2639,33 @@
   function beginPan(e: PointerEvent) {
     if (previewZoomMediaType === "video") return;
     if (zoomCropMode) return;
+    const el = e.target as HTMLElement;
+    if (el.closest("button, a, video, .zoom-dest-chips, .zoom-mini")) return;
     // Si la imagen no desborda el stage, no hay nada que “panear”.
     const limits = getPanLimits();
     if (limits.x <= 0.5 && limits.y <= 0.5) return;
-    previewPanDrag = true;
+    previewPanPointerDown = true;
+    previewPanDrag = false;
     previewPanMoved = false;
+    previewPanDownX = e.clientX;
+    previewPanDownY = e.clientY;
     if (previewZoomMode === "fillWidth") {
-      previewPanX = 0;
       previewPanStartY = e.clientY - previewPanY;
     } else {
       previewPanStartX = e.clientX - previewPanX;
       previewPanStartY = e.clientY - previewPanY;
     }
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    touchZoomHud();
   }
 
   function movePan(e: PointerEvent) {
-    if (!previewPanDrag) return;
+    if (!previewPanPointerDown) return;
+    if (!previewPanDrag) {
+      const dx = e.clientX - previewPanDownX;
+      const dy = e.clientY - previewPanDownY;
+      if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD_PX) return;
+      previewPanDrag = true;
+      zoomStageEl?.setPointerCapture?.(e.pointerId);
+    }
     if (previewZoomMode === "fillWidth") {
       const ny = e.clientY - previewPanStartY;
       if (Math.abs(ny - previewPanY) > 2) previewPanMoved = true;
@@ -2103,48 +2679,43 @@
       previewPanY = ny;
     }
     clampPanToStage();
-    touchZoomHud();
+    syncZoomMediaTransform();
   }
 
   function endPan(e: PointerEvent) {
+    const wasDragging = previewPanDrag;
+    previewPanPointerDown = false;
     previewPanDrag = false;
-    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    if (wasDragging) {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    }
+    syncZoomMediaTransform();
+    touchZoomHud();
   }
 
   function toggleZoomCarousel() {
     previewZoomCarouselVisible = !previewZoomCarouselVisible;
   }
 
-  function onZoomStageClick(e: MouseEvent) {
+  function onZoomImageClick(e: MouseEvent) {
+    e.stopPropagation();
+    if (zoomCropMode) return;
     if (previewPanMoved) {
       previewPanMoved = false;
       return;
     }
-    // Con |self en el componente, este handler solo se dispara en el fondo.
-    previewZoomOpen = false;
+    toggleZoomCarousel();
   }
 
-  function onZoomImageClick(e: MouseEvent) {
+  function onZoomStageClick(e: MouseEvent) {
+    if (zoomCropMode) return;
     if (previewPanMoved) {
       previewPanMoved = false;
       return;
     }
-    if (zoomCropMode) return;
-
-    // Si hay zoom (manual o fillWidth), reseteamos a vista encajada.
-    if (previewZoomScale > 1.05 || previewZoomMode === "fillWidth") {
-      previewZoomScale = 1;
-      previewZoomMode = "fit";
-      previewPanX = 0;
-      previewPanY = 0;
-      return;
-    }
-
-    // Si no hay zoom, alternamos la visibilidad de toda la interfaz.
-    previewPanX = 0;
-    previewPanY = 0;
-    zoomHudVisible = !zoomHudVisible;
-    previewZoomCarouselVisible = zoomHudVisible;
+    // Solo el fondo negro del stage (no la imagen): cerrar visor.
+    if (e.target !== e.currentTarget) return;
+    previewZoomOpen = false;
   }
 
   async function moveCurrentZoomToDestination(destPath: string) {
@@ -2204,9 +2775,14 @@
           const out = await bridge.galleryMovePath(job.srcPath, job.destPath);
           if (previewZoomOpen) {
             // Evita refrescar la grilla detrás del fullscreen en cada movimiento.
-            deferredZoomMoveRefresh = { state: out.state, items: out.items };
+            deferredZoomMoveRefresh = {
+              state: out.state,
+              items: out.items,
+              removedPaths: out.removedPaths,
+              delta: out.delta,
+            };
           } else {
-            applyGalleryRefreshFromMove(out.state, out.items);
+            applyGalleryRefreshFromMove(out);
           }
           const moved = Number(out.moveResult?.moved ?? 0);
           const errors = Number(out.moveResult?.errors ?? 0);
@@ -2226,10 +2802,9 @@
   async function undoLastZoomMove() {
     try {
       const out = await trackLoad(bridge.galleryUndoLastMove());
-      galleryState = out.state;
-      items = out.items;
-      galleryThumbHydrationToken++;
-      void hydrateGalleryThumbsHq(items, thumbScale, galleryThumbHydrationToken);
+      setGalleryState(out.state);
+      setGalleryItems(out.items);
+      void afterGalleryDataLoaded();
       const moved = Number(out.moveResult?.moved ?? 0);
       previewZoomCanUndoMove = false;
       status = moved > 0 ? t("status.undoMoved") : t("status.undoNone");
@@ -2242,20 +2817,78 @@
     if (!zoomImgEl) return;
     previewZoomNaturalW = Math.max(1, zoomImgEl.naturalWidth || 1);
     previewZoomNaturalH = Math.max(1, zoomImgEl.naturalHeight || 1);
+    if (previewZoomMode === "fillWidth") {
+      previewPanX = 0;
+      previewPanY = 0;
+      previewFillWidthAlignPending = false;
+    }
     clampPanToStage();
-    alignFillWidthToTop();
+    syncZoomMediaTransform();
+    if (previewZoomMode === "fillWidth" && zoomStageEl) {
+      const sr = zoomStageEl.getBoundingClientRect();
+      if (
+        miniMapHasOverflow(
+          previewZoomMode,
+          previewZoomScale,
+          sr.width,
+          sr.height,
+          previewZoomNaturalW,
+          previewZoomNaturalH
+        )
+      ) {
+        touchZoomHud();
+      }
+    }
   }
 
   function onZoomVideoMeta() {
     if (!zoomVideoEl) return;
     previewZoomNaturalW = Math.max(1, zoomVideoEl.videoWidth || 1);
     previewZoomNaturalH = Math.max(1, zoomVideoEl.videoHeight || 1);
+    if (previewZoomMode === "fillWidth") {
+      previewPanX = 0;
+      previewPanY = 0;
+      previewFillWidthAlignPending = false;
+    }
     clampPanToStage();
-    alignFillWidthToTop();
+    syncZoomMediaTransform();
+  }
+
+  async function onZoomVideoError(e: Event) {
+    const el = e.currentTarget as HTMLVideoElement | null;
+    const code = el?.error?.code ?? 0;
+    const playback = previewZoomPlayback;
+    if (!playback) return;
+    const current = previewZoomFileUrl || "";
+    if ((code === 4 || code === 3) && playback.transcodeUrl && !sameMediaUrl(current, playback.transcodeUrl)) {
+      previewZoomFileUrl = playback.transcodeUrl;
+      status = t("preview.videoTranscoding");
+      return;
+    }
+    if ((code === 4 || code === 3 || code === 2) && !isDataPlaybackUrl(current)) {
+      const path = String(previewZoomPath ?? "").trim();
+      if (path && window.pywebview?.api) {
+        try {
+          const blob = await bridge.galleryVideoPlaybackBlob(path);
+          if (blob?.ok && blob.dataUrl) {
+            previewZoomFileUrl = String(blob.dataUrl);
+            previewZoomPlayback = { ...playback, transcodeUrl: previewZoomFileUrl, playbackViaBlob: true };
+            status = "";
+            return;
+          }
+        } catch {
+          /* continuar con fallback MP4 */
+        }
+      }
+    }
+    if ((code === 4 || code === 3) && playback.fileUrl && !sameMediaUrl(current, playback.fileUrl)) {
+      previewZoomFileUrl = playback.fileUrl;
+      status = t("preview.videoCodecError");
+    }
   }
 
   function openZoomFromGallery(it: GalleryItem) {
-    const nav = items
+    const nav = getGalleryItems()
       .filter((x) => isGalleryMediaKind(x.kind))
       .map((x) => ({
         path: x.path,
@@ -2270,42 +2903,130 @@
   function touchZoomHud() {
     zoomHudVisible = true;
     if (zoomHudTimer) clearTimeout(zoomHudTimer);
-    // Ya no ocultamos automáticamente por tiempo, el usuario decide cuándo ocultar/mostrar con un clic.
+    zoomHudTimer = setTimeout(() => {
+      if (!previewPanPointerDown && !previewPanDrag && !miniMapDrag) {
+        zoomHudVisible = false;
+      }
+    }, 2600);
   }
 
-  $: zoomMiniRect = (() => {
-    // dependencias reactivas explícitas
-    const _deps = [previewZoomScale, previewPanX, previewPanY, previewZoomMode, previewZoomPath];
-    void _deps;
-    if (!zoomStageEl || !zoomImgEl || !zoomMiniEl) return "display:none;";
+  function navigateFromMiniMap(e: PointerEvent) {
+    if (previewZoomMediaType !== "image" || !zoomStageEl || !zoomMiniEl) return;
+    e.preventDefault();
+    e.stopPropagation();
     const sr = zoomStageEl.getBoundingClientRect();
-    const cr = zoomMiniEl.getBoundingClientRect();
-    const cw = Math.max(1, cr.width);
-    const ch = Math.max(1, cr.height);
-    const nW = Math.max(1, previewZoomNaturalW);
-    const nH = Math.max(1, previewZoomNaturalH);
+    const mr = zoomMiniEl.getBoundingClientRect();
+    const { width, height } = computeMiniMapSize(
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      sr.width,
+      sr.height
+    );
+    const layout = computeMiniMapImageLayout(width, height, previewZoomNaturalW, previewZoomNaturalH);
+    const norm = miniMapPointToNorm(layout, e.clientX - mr.left, e.clientY - mr.top);
+    if (!norm) return;
+    const next = panFromMiniMapNorm(
+      previewZoomMode,
+      previewZoomScale,
+      previewPanX,
+      previewPanY,
+      sr.width,
+      sr.height,
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      norm.normX,
+      norm.normY
+    );
+    previewPanX = next.panX;
+    previewPanY = next.panY;
+    syncZoomMediaTransform();
+    touchZoomHud();
+  }
 
-    // La miniatura usa object-fit: contain dentro del contenedor.
-    const miniScale = Math.min(cw / nW, ch / nH);
-    const imgW = nW * miniScale;
-    const imgH = nH * miniScale;
-    const ox = (cw - imgW) / 2;
-    const oy = (ch - imgH) / 2;
+  function beginMiniMapPan(e: PointerEvent) {
+    if (previewZoomMediaType !== "image") return;
+    miniMapDrag = true;
+    navigateFromMiniMap(e);
+    zoomMiniEl?.setPointerCapture?.(e.pointerId);
+  }
 
-    // Fallback general (funciona bien cuando ya hay zoom o pan).
-    const ir = zoomImgEl.getBoundingClientRect();
-    const iw = Math.max(1, ir.width);
-    const ih = Math.max(1, ir.height);
-    const x0 = Math.max(0, Math.min(1, (sr.left - ir.left) / iw));
-    const y0 = Math.max(0, Math.min(1, (sr.top - ir.top) / ih));
-    const x1 = Math.max(0, Math.min(1, (sr.right - ir.left) / iw));
-    const y1 = Math.max(0, Math.min(1, (sr.bottom - ir.top) / ih));
+  function moveMiniMapPan(e: PointerEvent) {
+    if (!miniMapDrag) return;
+    navigateFromMiniMap(e);
+  }
 
-    const left = ox + x0 * imgW;
-    const top = oy + y0 * imgH;
-    const width = Math.max(3, (x1 - x0) * imgW);
-    const height = Math.max(3, (y1 - y0) * imgH);
-    return `left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
+  function endMiniMapPan(e: PointerEvent) {
+    if (!miniMapDrag) return;
+    miniMapDrag = false;
+    zoomMiniEl?.releasePointerCapture?.(e.pointerId);
+    touchZoomHud();
+  }
+
+  $: zoomMiniMapStyle = (() => {
+    const _deps = [previewZoomNaturalW, previewZoomNaturalH, previewZoomPath];
+    void _deps;
+    if (!zoomStageEl || previewZoomNaturalW <= 1) {
+      return "width:130px;height:88px;";
+    }
+    const sr = zoomStageEl.getBoundingClientRect();
+    const { width, height } = computeMiniMapSize(
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      sr.width,
+      sr.height
+    );
+    return `width:${width}px;height:${height}px;`;
+  })();
+
+  $: zoomMiniActive =
+    previewZoomMediaType === "image" &&
+    previewZoomNaturalW > 1 &&
+    Boolean(zoomStageEl) &&
+    (() => {
+      const sr = zoomStageEl!.getBoundingClientRect();
+      return miniMapHasOverflow(
+        previewZoomMode,
+        previewZoomScale,
+        sr.width,
+        sr.height,
+        previewZoomNaturalW,
+        previewZoomNaturalH
+      );
+    })() &&
+    (zoomHudVisible || previewPanDrag || previewPanPointerDown || miniMapDrag);
+
+  $: zoomMiniRect = (() => {
+    const _deps = [
+      previewZoomScale,
+      previewPanX,
+      previewPanY,
+      previewZoomMode,
+      previewZoomPath,
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      zoomMiniMapStyle,
+    ];
+    void _deps;
+    if (!zoomStageEl || previewZoomNaturalW <= 1) return "display:none;";
+    const sr = zoomStageEl.getBoundingClientRect();
+    const { width, height } = computeMiniMapSize(
+      previewZoomNaturalW,
+      previewZoomNaturalH,
+      sr.width,
+      sr.height
+    );
+    const layout = computeMiniMapImageLayout(width, height, previewZoomNaturalW, previewZoomNaturalH);
+    const viewport = computeViewportNorm(
+      previewZoomMode,
+      previewZoomScale,
+      previewPanX,
+      previewPanY,
+      sr.width,
+      sr.height,
+      previewZoomNaturalW,
+      previewZoomNaturalH
+    );
+    return computeMiniMapRectStyle(layout, viewport);
   })();
 
   const saveThumbScale = async () => {
@@ -2373,15 +3094,40 @@
   let destCtxMenu: { x: number; y: number; idx: number; source: "gallery" | "fullscreen" } | null = null;
   /** Menú contextual (clic derecho) en marcador anclado del modal de rutas. */
   let pinnedCtxMenu: { x: number; y: number; path: string } | null = null;
-  /** Menú contextual en miniaturas de la galería (imagen / vídeo). */
+  /** Menú contextual en miniaturas de la galería (imagen / vídeo / carpeta). */
   let galleryItemCtxMenu: {
     x: number;
     y: number;
     path: string;
     name: string;
+    kind: string;
     thumbDataUrl?: string | null;
+    submenuLeft: boolean;
   } | null = null;
-  let galleryFileInfoModal: { path: string; name: string; sizeBytes: number; mtimeIso: string } | null = null;
+  /** Menú contextual en vista previa de carpeta destino. */
+  let destPreviewCtxMenu: {
+    x: number;
+    y: number;
+    paths: string[];
+    primaryPath: string;
+    primaryName: string;
+    thumbDataUrl?: string | null;
+    submenuLeft: boolean;
+  } | null = null;
+  let renameModalOpen = false;
+  let renameModalPath = "";
+  let renameModalKind: "file" | "folder" = "file";
+  let renameModalDraft = "";
+  let renameModalTitle = "";
+  let galleryFileInfoModal: {
+    path: string;
+    name: string;
+    sizeBytes: number;
+    mtimeIso: string;
+    mediaType: string;
+    extension: string;
+    mimeType: string;
+  } | null = null;
   let draggedDestIdx: number | null = null;
   let previewZoomSkipMoveConfirm = false;
 
@@ -2406,8 +3152,17 @@
   }
 
   function endDragSessionAfterGesture() {
-    suppressNextGalleryClick = true;
     endDragSession();
+    suppressNextGalleryClick = true;
+    queueMicrotask(() => {
+      suppressNextGalleryClick = false;
+    });
+  }
+
+  function resetGalleryInteractionLocks() {
+    suppressNextGalleryClick = false;
+    endDragSession();
+    galleryWorkspace?.resetGalleryInteractionState?.();
   }
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
@@ -2427,7 +3182,7 @@
       im.src = BLANK_DRAG_IMG;
       dt.setDragImage(im, 0, 0);
     }
-    ghostCount = Math.max(1, Number(galleryState.selectedCount) || 1);
+    ghostCount = Math.max(1, Number(getGalleryState().selectedCount) || 1);
     ghostThumb = it.thumbDataUrl ?? null;
     ghostCaption = ghostCount > 1 ? `${ghostCount} seleccionadas` : it.name;
     ghostVisible = true;
@@ -2438,13 +3193,24 @@
     dragWinMove = (ev: DragEvent) => {
       ev.preventDefault();
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+      // Coordenadas del ghost: actualizar siempre (CSS transform, no re-render Svelte).
       ghostX = ev.clientX;
       ghostY = ev.clientY;
-      const el = document.elementFromPoint(ev.clientX, ev.clientY);
-      const card = el?.closest?.("[data-dest-path]") as HTMLElement | null;
-      dragOverDestPath = card?.dataset?.destPath ?? null;
-      const sec = el?.closest?.("[data-section-folder]") as HTMLElement | null;
-      dragOverSectionPath = sec?.dataset?.sectionFolder ?? null;
+      // Throttle: las actualizaciones reactivas de Svelte (dragOverDestPath /
+      // dragOverSectionPath) se limitan a 1 por frame para evitar re-renders
+      // continuos que provocan parpadeo en el Toolbar y la barra de chips.
+      if (dragRafPending) return;
+      dragRafPending = true;
+      const cx = ev.clientX;
+      const cy = ev.clientY;
+      requestAnimationFrame(() => {
+        dragRafPending = false;
+        const el = document.elementFromPoint(cx, cy);
+        const card = el?.closest?.("[data-dest-path]") as HTMLElement | null;
+        dragOverDestPath = card?.dataset?.destPath ?? null;
+        const sec = el?.closest?.("[data-section-folder]") as HTMLElement | null;
+        dragOverSectionPath = sec?.dataset?.sectionFolder ?? null;
+      });
     };
     dragWinEnd = () => {
       endDragSessionAfterGesture();
@@ -2463,14 +3229,13 @@
     askConfirmMoveSelected(fp);
   }
 
-  function onDestDrop(e: DragEvent, destPath: string) {
+  function onDestDrop(e: DragEvent, destPath: string, destIdx: number) {
     e.preventDefault();
     e.stopPropagation();
     const fromRaw = e.dataTransfer?.getData("application/x-om-dest-idx") ?? "";
     const fromIdx = Number.parseInt(fromRaw, 10);
-    const toIdx = destRows.findIndex((x) => x.path === destPath);
-    if (Number.isFinite(fromIdx) && fromIdx >= 0 && toIdx >= 0) {
-      void reorderDestinations(fromIdx, toIdx);
+    if (Number.isFinite(fromIdx) && fromIdx >= 0 && fromIdx !== destIdx) {
+      void reorderDestinations(fromIdx, destIdx);
       return;
     }
     ignoreDestCardClickUntil = Date.now() + 450;
@@ -2495,10 +3260,12 @@
 
   async function reorderDestinations(fromIdx: number, toIdx: number) {
     if (fromIdx === toIdx) return;
-    if (fromIdx < 0 || toIdx < 0 || fromIdx >= destRows.length || toIdx >= destRows.length) return;
+    const parentId = parentIdOrEmpty(destToolbarFolderId);
+    const siblingCount = getChildrenAt(destTree, destToolbarFolderId).length;
+    if (fromIdx < 0 || toIdx < 0 || fromIdx >= siblingCount || toIdx >= siblingCount) return;
     try {
-      const out = await trackLoad(bridge.destinationsReorder(fromIdx, toIdx));
-      destRows = normalizeDestinationsFromPayload(out);
+      const out = await trackLoad(bridge.destinationsReorder(parentId, fromIdx, toIdx));
+      applyDestinationsPayload(out);
       status = t("status.destReorderOk");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.destReorderError");
@@ -2507,11 +3274,10 @@
     }
   }
 
-  /** Clic en la tarjeta (sin botón): vista previa de carpeta; el drop sigue moviendo archivos. */
+  /** Clic en chip de destino: mover selección o abrir vista previa de carpeta. */
   function onDestCardClick(e: MouseEvent, path: string) {
     if (e.button !== 0) return;
     if (Date.now() < ignoreDestCardClickUntil) return;
-    if ((e.target as HTMLElement).closest("button")) return;
     const selectedCount = getSelectedGalleryPaths().length;
     if (selectedCount > 0) {
       askConfirmMoveSelected(path);
@@ -2530,6 +3296,21 @@
 
   function closeGalleryItemCtxMenu() {
     galleryItemCtxMenu = null;
+    resetMoveFlyoutState();
+  }
+
+  function closeDestPreviewCtxMenu() {
+    destPreviewCtxMenu = null;
+    resetMoveFlyoutState();
+  }
+
+  function onMoveDestRootEnter() {
+    cancelMoveMenuClose();
+    moveRootHovered.set(true);
+  }
+
+  function onMoveDestRootLeave(e: PointerEvent) {
+    onMoveRootPointerLeave(e);
   }
 
   function formatFileSizeBytes(n: number): string {
@@ -2540,56 +3321,266 @@
     return `${(x / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
+  function formatGalleryMediaTypeLabel(mediaType: string, extension: string): string {
+    const base =
+      mediaType === "video"
+        ? t("contextGallery.mediaTypeVideo")
+        : mediaType === "image"
+          ? t("contextGallery.mediaTypeImage")
+          : t("contextGallery.mediaTypeOther");
+    const ext = String(extension ?? "").trim().replace(/^\./, "");
+    return ext ? `${base} (.${ext})` : base;
+  }
+
   function onGalleryItemContextMenu(e: MouseEvent, it: GalleryItem) {
-    if (!isGalleryMediaKind(it.kind)) return;
+    if (it.kind !== "image" && it.kind !== "video" && it.kind !== "folder") return;
     e.preventDefault();
     e.stopPropagation();
     const pad = 8;
-    const mw = 240;
-    const mh = Math.min(420, 56 + Math.max(0, destRows.length) * 34 + 120);
+    const menuW = 220;
+    const submenuW = 200;
+    const menuH = it.kind === "folder" ? 120 : 320;
     let x = e.clientX;
     let y = e.clientY;
-    x = Math.min(x, window.innerWidth - mw - pad);
-    y = Math.min(y, window.innerHeight - mh - pad);
+    x = Math.min(x, window.innerWidth - menuW - pad);
+    y = Math.min(y, window.innerHeight - menuH - pad);
     x = Math.max(pad, x);
     y = Math.max(pad, y);
+    const submenuLeft = it.kind !== "folder" && x + menuW + submenuW > window.innerWidth - pad;
     closeDestCtxMenu();
     closePinnedCtxMenu();
+    closeDestPreviewCtxMenu();
     galleryItemCtxMenu = {
       x,
       y,
       path: it.path,
       name: it.name,
+      kind: it.kind,
       thumbDataUrl: it.thumbDataUrl ?? null,
+      submenuLeft,
     };
+  }
+
+  function onDestPreviewItemContextMenu(
+    e: CustomEvent<{ item: { path: string; name: string; thumbDataUrl?: string | null }; clientX: number; clientY: number }>
+  ) {
+    const { item, clientX, clientY } = e.detail;
+    const selected = destPreviewModal?.getSelectedPaths() ?? [];
+    const paths =
+      selected.length > 0 && selected.includes(item.path) ? [...selected] : [item.path];
+    const pad = 8;
+    const menuW = 220;
+    const submenuW = 200;
+    const menuH = 360;
+    let x = clientX;
+    let y = clientY;
+    x = Math.min(x, window.innerWidth - menuW - pad);
+    y = Math.min(y, window.innerHeight - menuH - pad);
+    x = Math.max(pad, x);
+    y = Math.max(pad, y);
+    const submenuLeft = x + menuW + submenuW > window.innerWidth - pad;
+    closeGalleryItemCtxMenu();
+    closeDestCtxMenu();
+    closePinnedCtxMenu();
+    destPreviewCtxMenu = {
+      x,
+      y,
+      paths,
+      primaryPath: item.path,
+      primaryName: item.name,
+      thumbDataUrl: item.thumbDataUrl ?? null,
+      submenuLeft,
+    };
+  }
+
+  async function copyDestPreviewCtxPath() {
+    if (!destPreviewCtxMenu) return;
+    const text = destPreviewCtxMenu.paths.join("\n");
+    const ok = await copyTextToClipboard(text);
+    status = ok ? t("contextGallery.copyPathOk") : t("contextGallery.copyError");
+    closeDestPreviewCtxMenu();
+  }
+
+  async function copyDestPreviewCtxFullImage() {
+    if (!destPreviewCtxMenu) return;
+    const path = destPreviewCtxMenu.primaryPath;
+    status = t("load.loading");
+    try {
+      const res = await bridge.galleryCopyToClipboard(path);
+      status = res.ok ? t("contextGallery.copyThumbOk") : res.error || t("contextGallery.copyError");
+    } catch {
+      status = t("contextGallery.copyError");
+    }
+    closeDestPreviewCtxMenu();
+  }
+
+  async function moveDestPreviewCtxToRoute() {
+    if (!destPreviewCtxMenu) return;
+    const paths = [...destPreviewCtxMenu.paths];
+    closeDestPreviewCtxMenu();
+    await movePreviewPathsToCurrentRoute(paths);
+  }
+
+  async function moveDestPreviewCtxToDest(destPath: string) {
+    if (!destPreviewCtxMenu) return;
+    const paths = [...destPreviewCtxMenu.paths];
+    closeDestPreviewCtxMenu();
+    destPreviewModal?.removePaths(paths);
+    destPreviewModal?.clearSelectedPaths();
+    try {
+      const out = await trackLoad(bridge.destinationMovePaths(paths, destPath));
+      const moved = Number(out.moveResult?.moved ?? 0);
+      const errors = Number(out.moveResult?.errors ?? 0);
+      status =
+        t("contextDestPreview.movedOk").replace("{moved}", String(moved)) +
+        (errors ? t("status.previewMovedErrors").replace("{errors}", String(errors)) : "");
+      if (errors > 0 || moved < paths.length) destPreviewModal?.reloadPreview();
+    } catch (e: unknown) {
+      destPreviewModal?.reloadPreview();
+      status = e instanceof Error ? e.message : t("contextGallery.moveFailed");
+    }
+  }
+
+  function openRenameFromDestPreviewCtx() {
+    if (!destPreviewCtxMenu || destPreviewCtxMenu.paths.length !== 1) return;
+    renameModalPath = destPreviewCtxMenu.primaryPath;
+    renameModalKind = "file";
+    renameModalDraft = destPreviewCtxMenu.primaryName;
+    renameModalTitle = t("contextGallery.renameFileTitle");
+    closeDestPreviewCtxMenu();
+    renameModalOpen = true;
+  }
+
+  async function openDestPreviewFileInfoFromCtx() {
+    if (!destPreviewCtxMenu || destPreviewCtxMenu.paths.length !== 1) return;
+    const path = destPreviewCtxMenu.primaryPath;
+    closeDestPreviewCtxMenu();
+    try {
+      const st = await trackLoad(bridge.galleryFileStat(path));
+      galleryFileInfoModal = {
+        path: String(st.path ?? path),
+        name: String(st.name ?? ""),
+        sizeBytes: Number(st.sizeBytes ?? 0),
+        mtimeIso: String(st.mtimeIso ?? ""),
+        mediaType: String(st.mediaType ?? "other"),
+        extension: String(st.extension ?? ""),
+        mimeType: String(st.mimeType ?? ""),
+      };
+    } catch {
+      status = t("contextGallery.propertiesError");
+    }
+  }
+
+  function askDeleteDestPreviewFromCtx() {
+    if (!destPreviewCtxMenu) return;
+    const paths = [...destPreviewCtxMenu.paths];
+    const primaryName = destPreviewCtxMenu.primaryName;
+    const count = paths.length;
+    closeDestPreviewCtxMenu();
+    openConfirmDelete(
+      count > 1 ? t("confirm.deleteSelectionTitle") : t("contextGallery.deleteTitle"),
+      count > 1
+        ? t("confirm.deleteSelectionDetail").replace("{count}", String(count))
+        : t("confirm.deleteFileDetail").replace("{name}", primaryName),
+      async () => {
+        await deleteDestPreviewPaths(paths);
+      },
+      { confirmLabel: t("contextGallery.confirmDeleteBtn") }
+    );
+  }
+
+  function openRenameFromCtx() {
+    if (!galleryItemCtxMenu) return;
+    renameModalPath = galleryItemCtxMenu.path;
+    renameModalKind = galleryItemCtxMenu.kind === "folder" ? "folder" : "file";
+    renameModalDraft = galleryItemCtxMenu.name;
+    renameModalTitle =
+      renameModalKind === "folder" ? t("contextGallery.renameFolderTitle") : t("contextGallery.renameFileTitle");
+    closeGalleryItemCtxMenu();
+    renameModalOpen = true;
+  }
+
+  function closeRenameModal() {
+    renameModalOpen = false;
+    renameModalPath = "";
+    renameModalDraft = "";
+  }
+
+  async function saveRenameModal() {
+    const path = renameModalPath.trim();
+    const newName = renameModalDraft.trim();
+    if (!path || !newName) return;
+    try {
+      const out = await trackLoad(bridge.galleryRenamePath(path, newName));
+      setGalleryPayload(out.state, out.items);
+      await afterGalleryDataLoaded();
+      const newPath = String(out.renameResult?.newPath ?? "").trim();
+      const finalName = String(out.renameResult?.newName ?? newName).trim();
+      if (previewZoomOpen && previewZoomPath === path && newPath) {
+        previewZoomPath = newPath;
+        previewZoomName = finalName;
+      }
+      if (newPath) {
+        zoomNavItems = zoomNavItems.map((z) =>
+          z.path === path ? { ...z, path: newPath, name: finalName } : z
+        );
+      }
+      status = t("contextGallery.renameOk");
+      if (previewOpen && newPath) {
+        destPreviewModal?.updateItemPath(path, newPath, finalName);
+      }
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("contextGallery.renameError");
+    } finally {
+      closeRenameModal();
+    }
+  }
+
+  function askDeleteFolderFromCtx() {
+    if (!galleryItemCtxMenu || galleryItemCtxMenu.kind !== "folder") return;
+    const p = galleryItemCtxMenu.path;
+    const label = galleryItemCtxMenu.name;
+    closeGalleryItemCtxMenu();
+    openConfirmDelete(
+      t("contextFolder.deleteTitle"),
+      t("contextFolder.deleteDetail").replace("{name}", label),
+      async () => {
+        try {
+          const out = await trackLoad(bridge.galleryDeleteFolder(p));
+          setGalleryPayload(out.state, out.items ?? []);
+          await afterGalleryDataLoaded();
+          resetGalleryInteractionLocks();
+          status = t("status.deleteBatchLine")
+            .replace("{deleted}", "1")
+            .replace("{errPart}", "")
+            .replace("{queue}", "0");
+        } catch (e: unknown) {
+          status = e instanceof Error ? e.message : t("contextGallery.renameError");
+        }
+      },
+      { confirmLabel: t("contextGallery.confirmDeleteBtn") }
+    );
   }
 
   async function copyGalleryCtxPath() {
     if (!galleryItemCtxMenu) return;
     const p = galleryItemCtxMenu.path;
-    try {
-      await navigator.clipboard.writeText(p);
-      status = t("contextGallery.copyPathOk");
-    } catch {
-      status = t("contextGallery.copyError");
-    }
+    const ok = await copyTextToClipboard(p);
+    status = ok ? t("contextGallery.copyPathOk") : t("contextGallery.copyError");
     closeGalleryItemCtxMenu();
   }
 
-  async function copyGalleryCtxThumb() {
+  async function copyGalleryCtxFullImage() {
     if (!galleryItemCtxMenu) return;
-    const u = galleryItemCtxMenu.thumbDataUrl;
-    if (!u || !String(u).startsWith("data:")) {
-      status = t("contextGallery.copyThumbUnavailable");
-      closeGalleryItemCtxMenu();
-      return;
-    }
+    const path = galleryItemCtxMenu.path;
+    status = t("load.loading");
     try {
-      const res = await fetch(u);
-      const blob = await res.blob();
-      const type = blob.type && blob.type !== "" ? blob.type : "image/png";
-      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-      status = t("contextGallery.copyThumbOk");
+      const res = await bridge.galleryCopyToClipboard(path);
+      if (res.ok) {
+        status = t("contextGallery.copyThumbOk");
+      } else {
+        status = res.error || t("contextGallery.copyError");
+      }
     } catch {
       status = t("contextGallery.copyError");
     }
@@ -2615,12 +3606,22 @@
     if (!galleryItemCtxMenu) return;
     const src = galleryItemCtxMenu.path;
     closeGalleryItemCtxMenu();
+    const snapshot = createGalleryMoveJobSnapshot([src]);
+    await applyOptimisticGalleryRemove(snapshot);
+    const job: GalleryMoveJob = { ...snapshot, destPath };
     try {
       const out = await trackLoad(bridge.galleryMovePath(src, destPath));
-      applyGalleryRefreshFromMove(out.state, out.items);
+      if (!isGalleryNavigationCurrent(job.navGen)) return;
       const moved = Number(out.moveResult?.moved ?? 0);
-      status = moved > 0 ? t("contextGallery.movedOk") : t("contextGallery.moveFailed");
+      if (moved > 0) {
+        await reconcileGalleryMoveSuccess(out);
+        status = t("contextGallery.movedOk");
+      } else {
+        await rollbackOptimisticGalleryMove(job);
+        status = t("contextGallery.moveFailed");
+      }
     } catch (e: unknown) {
+      await rollbackOptimisticGalleryMove(job);
       status = e instanceof Error ? e.message : t("contextGallery.moveFailed");
     }
   }
@@ -2636,9 +3637,12 @@
         name: String(st.name ?? ""),
         sizeBytes: Number(st.sizeBytes ?? 0),
         mtimeIso: String(st.mtimeIso ?? ""),
+        mediaType: String(st.mediaType ?? "other"),
+        extension: String(st.extension ?? ""),
+        mimeType: String(st.mimeType ?? ""),
       };
     } catch {
-      status = t("contextGallery.metadataError");
+      status = t("contextGallery.propertiesError");
     }
   }
 
@@ -2734,11 +3738,13 @@
     }
     try {
       if (destFormMode === "add") {
-        await trackLoad(bridge.destinationsAdd(label, path));
+        await trackLoad(bridge.destinationsAdd(label, path, parentIdOrEmpty(destToolbarFolderId)));
         await syncDestinationsFromApi();
         status = t("status.destAdded");
       } else if (destFormIdx !== null) {
-        await trackLoad(bridge.destinationsEdit(destFormIdx, label, path));
+        await trackLoad(
+          bridge.destinationsEdit(parentIdOrEmpty(destToolbarFolderId), destFormIdx, label, path)
+        );
         await syncDestinationsFromApi();
         status = t("status.destUpdated");
       }
@@ -2748,26 +3754,28 @@
     }
   }
 
+  function destNodeAtToolbarIdx(idx: number) {
+    return getChildrenAt(destTree, destToolbarFolderId)[idx] ?? null;
+  }
+
   function openEditFromCtx() {
     if (destCtxMenu === null) return;
-    const i = destCtxMenu.idx;
-    const d = destRows[i];
+    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
     closeDestCtxMenu();
-    if (!d) return;
+    if (!node || !isDestNode(node)) return;
     destFormMode = "edit";
-    destFormIdx = i;
-    destFormLabel = d.label;
-    destFormPath = d.path;
+    destFormIdx = destCtxMenu.idx;
+    destFormLabel = node.label;
+    destFormPath = node.path;
     destFormOpen = true;
   }
 
   function openPreviewFromCtx() {
     if (destCtxMenu === null) return;
-    const i = destCtxMenu.idx;
-    const d = destRows[i];
+    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
     closeDestCtxMenu();
-    if (!d) return;
-    openDestPreview(d.path);
+    if (!node || !isDestNode(node)) return;
+    openDestPreview(node.path);
   }
 
   async function removeDestFromCtx() {
@@ -2775,77 +3783,12 @@
     const i = destCtxMenu.idx;
     closeDestCtxMenu();
     try {
-      await trackLoad(bridge.destinationsRemove(i));
+      await trackLoad(bridge.destinationsRemove(parentIdOrEmpty(destToolbarFolderId), i));
       await syncDestinationsFromApi();
       status = t("status.destRemoved");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.destDeleteError");
     }
-  }
-
-  // Tamaño objetivo directo: la grilla flexible (minmax + 1fr) absorbe cambios finos
-  // de ancho y evita hueco fijo en el borde derecho.
-  $: gridCellTargetPx = galleryGridCellPx(thumbScale);
-  $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
-  /** Umbral de tamaño de celda para mostrar separadores por día (solo vista línea de tiempo). */
-  const TIMELINE_DAY_MIN_PX = 130;
-
-  function expandTimelineDayBreaks(raw: GalleryItem[], timeline: boolean, cellPx: number): GalleryItem[] {
-    if (!timeline || cellPx < TIMELINE_DAY_MIN_PX) return raw;
-    const out: GalleryItem[] = [];
-    let lastDay: string | null = null;
-    for (const it of raw) {
-      if (it.kind === "section") {
-        lastDay = null;
-        out.push(it);
-        continue;
-      }
-      if (!isGalleryMediaKind(it.kind)) {
-        out.push(it);
-        continue;
-      }
-      const iso = it.mtimeIso?.trim();
-      if (iso && iso.length >= 10) {
-        const day = iso.slice(0, 10);
-        if (lastDay !== null && day !== lastDay) {
-          const dayNum = iso.slice(8, 10);
-          out.push({
-            kind: "day_break",
-            name: dayNum,
-            path: `daybreak:${day}`,
-            thumbDataUrl: null,
-          });
-        }
-        lastDay = day;
-      }
-      out.push(it);
-    }
-    return out;
-  }
-
-  $: galleryGridItems = expandTimelineDayBreaks(items, timelineView, gridCellPx);
-
-  /** Contenedor con scroll: modo Edición (`galleryScrollEl`) o modo base (`galleryPlainEl`). */
-  $: galleryScrollContainer = galleryScrollEl ?? galleryPlainEl;
-
-  $: if (galleryScrollContainer && galleryScrollContainer !== galleryGridObservedEl) {
-    galleryGridResizeObserver?.disconnect();
-    galleryGridObservedEl = galleryScrollContainer;
-    galleryGridResizeObserver = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      // Usar ancho de borde evita saltos por cambios de scroll interno.
-      const borderInline =
-        Array.isArray((entry as any).borderBoxSize) && (entry as any).borderBoxSize.length > 0
-          ? Number((entry as any).borderBoxSize[0]?.inlineSize ?? 0)
-          : 0;
-      const fallback = Math.max(
-        0,
-        Math.round(galleryScrollContainer?.getBoundingClientRect().width ?? entry.contentRect.width)
-      );
-      galleryGridWidth = Math.max(0, Math.round(borderInline || fallback));
-    });
-    galleryGridResizeObserver.observe(galleryScrollContainer);
   }
 
   $: if (!destinationsMode && !previewZoomDestMode) {
@@ -2858,7 +3801,7 @@
   }
 
   $: if (!previewZoomOpen && deferredZoomMoveRefresh) {
-    applyGalleryRefreshFromMove(deferredZoomMoveRefresh.state, deferredZoomMoveRefresh.items);
+    void applyGalleryItemsDelta(deferredZoomMoveRefresh);
     deferredZoomMoveRefresh = null;
   }
 
@@ -2890,22 +3833,23 @@
     await loadInitial();
     if (folder) {
       try {
-        await loadFolder(false);
+        await loadFolder(true);
       } catch {
         status = t("status.restoreFolderError");
       }
     }
     pollTimer = window.setInterval(() => {
       pollOrganizer().catch(() => undefined);
+      pollVideoTranscodeJobs().catch(() => undefined);
     }, 1100);
   });
 
   onDestroy(() => {
     endDragSession();
-    galleryGridResizeObserver?.disconnect();
-    galleryGridResizeObserver = null;
+    cancelPendingGalleryThumbFlush();
     if (thumbScaleDebounce) clearTimeout(thumbScaleDebounce);
     if (zoomHudTimer) clearTimeout(zoomHudTimer);
+    stopVideoPreparePoll();
     if (pollTimer !== null) {
       window.clearInterval(pollTimer);
       pollTimer = null;
@@ -2914,22 +3858,9 @@
   import Toolbar from './components/Toolbar.svelte';
   import SidebarMarkers from './components/SidebarMarkers.svelte';
   import FullscreenPlayer from './components/FullscreenPlayer.svelte';
-  import GalleryGrid from './components/GalleryGrid.svelte';
 </script>
 
 <svelte:window
-  on:pointermove={(e) => {
-    onPreviewRangePointerMove(e);
-    onGalleryRangePointerMove(e);
-  }}
-  on:pointerup={() => {
-    endPreviewRangeSelection();
-    void endGalleryRangeSelection();
-  }}
-  on:pointercancel={() => {
-    endPreviewRangeSelection();
-    void endGalleryRangeSelection();
-  }}
   on:keydown={(e) => {
     if (confirmDeleteOpen) {
       if (e.key === "Enter") {
@@ -2966,6 +3897,15 @@
       }
       return;
     }
+    if (destPreviewCtxMenu) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDestPreviewCtxMenu();
+        return;
+      }
+      return;
+    }
     if (galleryFileInfoModal) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -2997,9 +3937,8 @@
         previewZoomDestMode = !previewZoomDestMode;
         status = previewZoomDestMode ? t("status.editionOnFs") : t("status.editionOffFs");
       } else if (previewOpen) {
-        previewSelectionMode = !previewSelectionMode;
-        if (!previewSelectionMode) previewSelectedPaths = [];
-        status = previewSelectionMode ? t("status.selectionOnPreview") : t("status.selectionOffPreview");
+        destPreviewModal?.clearSelectedPaths();
+        status = t("status.selectionCleared");
       } else {
         const nextMode = !destinationsMode;
         void toggleDestinationsModePreserveScroll();
@@ -3070,9 +4009,11 @@
       return;
     }
     if (!isTypingEl && shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.deleteAction)) {
-      const hasPreviewSelectionForDelete = previewOpen && previewSelectedPaths.length > 0;
+      const previewSelCount = previewOpen ? (destPreviewModal?.getSelectedPaths()?.length ?? 0) : 0;
+      const hasPreviewSelectionForDelete = previewOpen && previewSelCount > 0;
       const hasGallerySelectionForDelete =
-        Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
+        Number(getGalleryState()?.selectedCount ?? 0) > 0 ||
+        getGalleryItems().some((x) => isGallerySelectableKind(x.kind) && Boolean(x.selected));
       if (previewZoomOpen && previewZoomPath) {
         e.preventDefault();
         openConfirmDelete(t("confirm.deleteImageTitle"), t("confirm.deleteImageDetail"), deleteCurrentZoomImage);
@@ -3082,7 +4023,7 @@
         e.preventDefault();
         openConfirmDelete(
           t("confirm.deleteSelectionTitle"),
-          t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelectedPaths.length)),
+          t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelCount)),
           deletePreviewSelectedItems
         );
         return;
@@ -3091,22 +4032,22 @@
         e.preventDefault();
         openConfirmDelete(
           t("confirm.deleteSelectionTitle"),
-          t("confirm.deleteSelectionDetail").replace("{count}", String(galleryState.selectedCount)),
+          t("confirm.deleteSelectionDetail").replace("{count}", String(getGalleryState().selectedCount)),
           deleteSelectedGalleryItems
         );
         return;
       }
     }
     if (!shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.escape)) return;
-    const hasPreviewSelection = previewSelectedPaths.length > 0 || previewRangeSelecting;
+    const previewSelCount = previewOpen ? (destPreviewModal?.getSelectedPaths()?.length ?? 0) : 0;
+    const hasPreviewSelection = previewOpen && previewSelCount > 0;
     const hasGallerySelection =
-      Number(galleryState?.selectedCount ?? 0) > 0 || items.some((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
+      Number(getGalleryState()?.selectedCount ?? 0) > 0 ||
+        getGalleryItems().some((x) => isGallerySelectableKind(x.kind) && Boolean(x.selected));
     if (hasPreviewSelection || hasGallerySelection) {
       e.preventDefault();
       if (hasPreviewSelection) {
-        endPreviewRangeSelection();
-        previewSelectedPaths = [];
-        previewSelectionMode = false;
+        destPreviewModal?.clearSelectedPaths();
       }
       if (hasGallerySelection) {
         void clearSelection();
@@ -3116,6 +4057,8 @@
     }
     if (pinnedCtxMenu) closePinnedCtxMenu();
     else if (galleryItemCtxMenu) closeGalleryItemCtxMenu();
+    else if (destPreviewCtxMenu) closeDestPreviewCtxMenu();
+    else if (renameModalOpen) closeRenameModal();
     else if (galleryFileInfoModal) galleryFileInfoModal = null;
     else if (destCtxMenu) closeDestCtxMenu();
     else if (destFormOpen) closeDestForm();
@@ -3130,6 +4073,7 @@
       zoomCropMode = false;
     } else if (previewZoomOpen) previewZoomOpen = false;
     else if (previewOpen) previewOpen = false;
+    else if (routePickerOpen) routePickerOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
   }}
 />
@@ -3144,6 +4088,7 @@
   style={`--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
 >
   
+  <div class="app-chrome app-chrome--header">
   <Toolbar
     bind:destinationsMode
     bind:viewMenuOpen
@@ -3165,7 +4110,7 @@
     {onGroupByFolderChange}
     {onSectionDominantColorChange}
     {onTimelineViewChange}
-    {onGallerySortChange}
+    {onGallerySortApply}
     {goBackFolder}
     {goForwardFolder}
     {goUpFolder}
@@ -3173,375 +4118,212 @@
     {openPinMarkerModal}
     {reload}
     {pickGalleryFolder}
+    {loadFolder}
     {openSettingsModal}
   />
+  </div>
 
   
 
   
 
-  {#if destinationsMode}
-    <div
-      class="destinos-work"
-      class:destinos-work--drag={destSplitDrag}
-      style="grid-template-rows:minmax(0,1fr)"
-    >
-      <div class="destinos-work__top">
-        <section
-          class="content"
-          style={previewVisible
-            ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
-            : "grid-template-columns:minmax(0,1fr)"}
-        >
-  <GalleryGrid
-    bind:galleryGridItems
-    bind:gridCellPx
-    bind:thumbGapPx
-    bind:dragOverSectionPath
-    bind:galleryKeyboardNavHintActive
-    bind:galleryCursorPath
-    bind:galleryRangeSelecting
-    bind:galleryRangeSuppressClick
-    bind:showThumbLabels
-    bind:galleryScrollAtTop
-    bind:galleryState
-    bind:destRows
-    bind:dragOverDestPath
-    bind:draggedDestIdx
-    bind:galleryScrollEl
-    bind:galleryGridEl
-    {onGalleryScroll}
-    {onSectionFolderDrop}
-    {navigateToFolder}
-    {isGalleryTileSelected}
-    {isGalleryMediaKind}
-    {onGalleryTilePointerDown}
-    {onGalleryTilePointerEnter}
-    {onTileDragStart}
-    {clickItem}
-    {openZoomFromGallery}
-    {onGalleryItemContextMenu}
-    {selectPage}
-    {clearSelection}
-    {invertSelection}
-    {openConfirmDelete}
-    {deleteSelectedGalleryItems}
-    {openAddDestForm}
-    {onDestCardClick}
-    {onDestContextMenu}
-    {onDestChipDragStart}
-    {onDestChipDragEnd}
-    {onDestDrop}
-      {destinationsMode}
-  />
-
-          {#if previewVisible}
-            <div
-              class="splitter"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Arrastrar para repartir galería y vista previa"
-              on:pointerdown={beginSplitDrag}
-            ></div>
-
-            <aside class="preview om-panel">
-              {#if selectedPreview?.mediaType === "video" && selectedPreview?.fileUrl}
-                <!-- svelte-ignore a11y_media_has_caption -->
-                <video
-                  class="preview__img preview__video"
-                  src={selectedPreview.fileUrl}
-                  controls
-                  playsinline
-                  preload="metadata"
-                ></video>
-              {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
-                <img
-                  class="preview__img preview__svg"
-                  src={selectedPreview.fileUrl}
-                  alt={selectedPreview.name}
-                />
-              {:else if selectedPreview?.dataUrl}
-                <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
-              {:else}
-                <div class="preview__empty">{t("preview.emptySelect")}</div>
-              {/if}
-              <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
-            </aside>
-          {/if}
-        </section>
-      </div>
-    </div>
-  {:else}
-    <section
-      class="content"
-      style={previewVisible
-        ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
-        : "grid-template-columns:minmax(0,1fr)"}
-    >
-  <GalleryGrid
-    bind:galleryGridItems
-    bind:gridCellPx
-    bind:thumbGapPx
-    bind:dragOverSectionPath
-    bind:galleryKeyboardNavHintActive
-    bind:galleryCursorPath
-    bind:galleryRangeSelecting
-    bind:galleryRangeSuppressClick
-    bind:showThumbLabels
-    bind:galleryScrollAtTop
-    bind:galleryState
-    bind:destRows
-    bind:dragOverDestPath
-    bind:draggedDestIdx
-    bind:galleryScrollEl
-    bind:galleryGridEl
-    {onGalleryScroll}
-    {onSectionFolderDrop}
-    {navigateToFolder}
-    {isGalleryTileSelected}
-    {isGalleryMediaKind}
-    {onGalleryTilePointerDown}
-    {onGalleryTilePointerEnter}
-    {onTileDragStart}
-    {clickItem}
-    {openZoomFromGallery}
-    {onGalleryItemContextMenu}
-    {selectPage}
-    {clearSelection}
-    {invertSelection}
-    {openConfirmDelete}
-    {deleteSelectedGalleryItems}
-    {openAddDestForm}
-    {onDestCardClick}
-    {onDestContextMenu}
-    {onDestChipDragStart}
-    {onDestChipDragEnd}
-    {onDestDrop}
-      {destinationsMode}
-  />
-
-      {#if previewVisible}
-        <div
-          class="splitter"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Arrastrar para repartir galería y vista previa"
-          on:pointerdown={beginSplitDrag}
-        ></div>
-
-        <aside class="preview om-panel">
-          {#if selectedPreview?.mediaType === "video" && selectedPreview?.fileUrl}
-            <!-- svelte-ignore a11y_media_has_caption -->
-            <video
-              class="preview__img preview__video"
-              src={selectedPreview.fileUrl}
-              controls
-              playsinline
-              preload="metadata"
-            ></video>
-          {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
-            <img
-              class="preview__img preview__svg"
-              src={selectedPreview.fileUrl}
-              alt={selectedPreview.name}
-            />
-          {:else if selectedPreview?.dataUrl}
-            <img class="preview__img" src={selectedPreview.dataUrl} alt={selectedPreview.name} />
-          {:else}
-            <div class="preview__empty">{t("preview.emptySelect")}</div>
-          {/if}
-          <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
-        </aside>
-      {/if}
-    </section>
-  {/if}
-
-  <footer class="pager om-panel pager--bar" aria-label={t("pager.footerAria")}>
-    {#if thumbsPerPage !== 0}
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.firstPage")} on:click={() => goPage(1)}>|«</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.prevPage")} on:click={() => goPage(Math.max(1, galleryState.page - 1))}>‹</button>
-      {#each pageLinks as item}
-        {#if item === "gap"}
-          <span class="pager__gap" aria-hidden="true">…</span>
-        {:else}
-          <button
-            type="button"
-            class="om-btn om-btn--ghost pager__num"
-            class:om-btn--primary={item === galleryState.page}
-            title={t("pager.goPageTitle").replace("{n}", String(item))}
-            on:click={() => goPage(item)}>{item}</button>
-        {/if}
-      {/each}
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.nextPage")} on:click={() => goPage(Math.min(galleryState.totalPages, galleryState.page + 1))}>›</button>
-      <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("pager.lastPage")} on:click={() => goPage(galleryState.totalPages)}>»|</button>
-      <span class="pager__google-line"
-        >{galleryState.total}
-        {t("pager.imagesWord")} · {t("pager.pageWord")}
-        {galleryState.page}
-        {t("pager.ofWord")}
-        {galleryState.totalPages}</span>
-      <label class="pager__jump">
-        <input
-          class="om-input pager__jump-input"
-          type="number"
-          min="1"
-          max={galleryState.totalPages}
-          bind:value={pageJumpDraft}
-          on:keydown={(e) => e.key === "Enter" && jumpToPageDraft()}
+  <div
+    class="destinos-work"
+    class:destinos-work--drag={destinationsMode && destSplitDrag}
+  >
+    <div class="destinos-work__top">
+      <section
+        class="content"
+        style={previewVisible
+          ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
+          : "grid-template-columns:minmax(0,1fr)"}
+      >
+        <GalleryWorkspace
+          bind:this={galleryWorkspace}
+          bind:galleryScrollEl
+          bind:galleryLoadingMore
+          bind:galleryRangeSelecting
+          bind:galleryRangeSuppressClick
+          bind:galleryCursorPath
+          bind:galleryKeyboardNavHintActive
+          bind:dragOverSectionPath
+          bind:dragOverDestPath
+          bind:draggedDestIdx
+          bind:thumbGapPx
+          bind:showThumbLabels
+          {destinationsMode}
+          {timelineView}
+          {thumbScale}
+          {thumbsPerPage}
+          {previewVisible}
+          {suppressNextGalleryClick}
+          {navigateToFolder}
+          {openZoomFromGallery}
+          {onGalleryItemContextMenu}
+          {onSectionFolderDrop}
+          {onTileDragStart}
+          {openConfirmDelete}
+          {deleteSelectedGalleryItems}
+          {openAddDestForm}
+          {onDestCardClick}
+          {onDestContextMenu}
+          {onDestChipDragStart}
+          {onDestChipDragEnd}
+          {onDestDrop}
+          destToolbarItems={destToolbarVisibleItems}
+          {destToolbarFolderLabel}
+          {destToolbarCanGoBack}
+          onDestToolbarBack={() => void destToolbarBack()}
+          onDestToolbarOpenFolder={(id) => void navigateDestToolbarFolder(id)}
+          on:preview={(e) => setSelectedPreviewFromPath(e.detail.path)}
         />
-        <span class="pager__jump-total">/ {galleryState.totalPages}</span>
-      </label>
-      <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>{t("pager.goJump")}</button>
-    {:else}
-      <span class="pager__google-line">
-        {t("pager.loadedPrefix")}
-        {Number(galleryState?.endIndex ?? 0)}/{Number(galleryState?.total ?? 0)}
-        {t("pager.imagesWord")} ·
-        {Number(galleryState?.totalElements ?? Number(galleryState?.total ?? 0) + Number(galleryState?.subfoldersCount ?? 0))}
-        {t("pager.elementsWord")} · {t("pager.totalWeight")}
-        {Number(galleryState?.totalBytes ?? -1) < 0 ? t("pager.calculating") : formatBytes(Number(galleryState?.totalBytes ?? 0))}
-      </span>
-    {/if}
-    <div class="grow"></div>
-    <span class="status-line">{status}</span>
-    <span class="webui-build-tag" title={t("pager.buildTagTitle")}>{__WEBUI_BUILD__.slice(0, 10)}</span>
-    <button
-      type="button"
-      class="om-btn om-btn--ghost om-btn--compact"
-      title={previewVisible ? t("pager.previewHide") : t("pager.previewShow")}
-      on:click={togglePreviewVisible}
-    >{previewVisible ? t("pager.previewOn") : t("pager.previewOff")}</button>
-    <span class="field-label pager__split-label" title={t("pager.splitHint")}
-      >{t("preview.panelRight")} ~{Math.round(previewRatio * 100)}%</span>
-    <label class="field-label pager__thumb-label" for="route-thumb-scale-footer"
-      >{t("pager.thumbsLabel")} {Math.round(thumbScale * 100)}%</label>
-    <input
-      id="route-thumb-scale-footer"
-      class="om-range pager__thumb-range"
-      type="range"
-      min="0.01"
-      max="2.25"
-      step="0.01"
-      bind:value={thumbScale}
-      on:input={scheduleThumbScaleReload}
-      on:change={flushThumbScaleOnRelease}
-    />
-  </footer>
-</main>
+
+        {#if previewVisible}
+          <div
+            class="splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Arrastrar para repartir galería y vista previa"
+            on:pointerdown={beginSplitDrag}
+          ></div>
+
+          <aside class="preview om-panel app-chrome app-chrome--preview">
+            {#if selectedPreview?.mediaType === "video"}
+              <PreviewVideoProfiles
+                profiles={previewVideoProfiles}
+                activeMode={previewVideoMode}
+                disabled={previewVideoPlayLocked && previewVideoLaunching}
+                on:change={(e) => void setPreviewVideoMode(e.detail)}
+              />
+              {#if previewVideoArmed || previewVideoLaunching || previewVideoPlayLocked}
+                <div class="preview__video-shell">
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  {#key mediaUrlKey(previewVideoSrc || selectedPreview?.fileUrl || "pending")}
+                    <video
+                      bind:this={previewVideoEl}
+                      class="preview__img preview__video"
+                      src={previewVideoSrc || selectedPreview?.fileUrl || undefined}
+                      poster={selectedPreview.placeholderUrl ?? undefined}
+                      controls={Boolean(previewVideoSrc || selectedPreview?.fileUrl)}
+                      playsinline
+                      preload="auto"
+                      on:loadstart={onPreviewVideoLoadStart}
+                      on:error={onPreviewVideoError}
+                      on:canplay={onPreviewVideoCanPlay}
+                    ></video>
+                  {/key}
+                  {#if previewVideoPreparing}
+                    <div class="preview__video-busy" aria-live="polite">
+                      <div class="preview__video-busy__spinner" aria-hidden="true"></div>
+                      <p>{previewVideoPrepareMsg || t("preview.videoStarting")}</p>
+                      {#each videoTranscodeJobs.filter((j) => isActiveTranscodeJob(j) && normalizePathForApi(j.path) === normalizePathForApi(selectedPreview?.path ?? "")) as job (job.id)}
+                        <p class="preview__video-busy__hint">{transcodeJobStatusLabel(job)}</p>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {:else}
+                {#key selectedPreview.path}
+                  <PreviewVideoIdle
+                    posterUrl={selectedPreview.placeholderUrl ?? null}
+                    name={selectedPreview.name}
+                    playLocked={previewVideoPlayLocked}
+                    preparing={previewVideoPreparing || previewVideoLaunching}
+                    statusMessage={previewVideoPrepareMsg}
+                    onPlay={requestPreviewVideoPlay}
+                  />
+                {/key}
+              {/if}
+              {#if previewVideoError}
+                <div class="preview__video-error">
+                  <p>{previewVideoError}</p>
+                  {#if previewVideoErrorDetails}
+                    <pre class="preview__video-diag" class:preview__video-diag--loading={previewVideoDiagLoading}>{previewVideoErrorDetails}</pre>
+                  {/if}
+                  <div class="preview__video-actions">
+                    {#if previewVideoError || previewVideoErrorDetails || previewVideoLastErrorDetail}
+                      <button
+                        type="button"
+                        class="om-btn preview__video-copy"
+                        on:click={() => void copyPreviewVideoError()}
+                      >
+                        {t("preview.videoCopyError")}
+                      </button>
+                    {/if}
+                    {#if selectedPreview?.path}
+                      <button
+                        type="button"
+                        class="om-btn preview__video-external"
+                        on:click={() => void openGalleryVideoExternal()}
+                      >
+                        {t("preview.videoOpenExternal")}
+                      </button>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+            {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
+              <img
+                class="preview__img preview__svg"
+                src={selectedPreview.fileUrl}
+                alt={selectedPreview.name}
+              />
+            {:else if selectedPreview?.dataUrl || selectedPreview?.fileUrl || selectedPreview?.placeholderUrl}
+              <PreviewZoomPanel
+                path={selectedPreview.path}
+                name={selectedPreview.name}
+                fileUrl={selectedPreview.fileUrl ?? null}
+                dataUrl={selectedPreview.dataUrl ?? null}
+                placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl ?? null}
+              />
+            {:else}
+              <div class="preview__empty">{t("preview.emptySelect")}</div>
+            {/if}
+            <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
+          </aside>
+        {/if}
+      </section>
+    </div>
+  </div>
+
+  <PagerBar
+    {thumbsPerPage}
+    bind:pageJumpDraft
+    {status}
+    {previewVisible}
+    {previewRatio}
+    bind:thumbScale
+    {activeProcesses}
+    {goPage}
+    {jumpToPageDraft}
+    {togglePreviewVisible}
+    {scheduleThumbScaleReload}
+    {flushThumbScaleOnRelease}
+  />
 
   {#if previewOpen}
-    <div
-      class="overlay"
-      role="button"
-      tabindex="-1"
-      aria-label={t("preview.closeDestAria")}
-      on:dragover|preventDefault
-      on:drop={(e) => {
-        const t = e.target as HTMLElement | null;
-        if (t?.closest(".modal--dest")) return;
-        const raw = e.dataTransfer?.getData("application/x-om-preview-paths") ?? "";
-        if (!raw) return;
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            previewSelectedPaths = parsed.map((x) => String(x)).filter((x) => x.trim().length > 0);
-          }
-        } catch {
-          // Mantener selección actual si no se pudo parsear.
-        }
-        previewDragActive = false;
-        void movePreviewSelectionToCurrentRoute();
-      }}
-      on:click={() => (previewOpen = false)}
-      on:keydown={(e) => {
-        if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          previewOpen = false;
-        }
-      }}
-    >
-      <div
-        class="modal modal--dest om-panel om-panel--lift"
-        role="dialog"
-        tabindex="-1"
-        aria-modal="true"
-        aria-labelledby="dest-preview-title"
-        on:click|stopPropagation
-        on:keydown={(e) => e.stopPropagation()}
-      >
-        <header class="modal__head">
-          <strong id="dest-preview-title">{previewDestPath}</strong>
-          <div class="modal__head-actions">
-            <div class="selection-float preview-selection-float" role="toolbar" aria-label={t("selection.previewToolbarAria")}>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--mini"
-                on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
-                title={previewSelectionMode ? t("selection.deactivateMode") : t("selection.activateMode")}
-              >{previewSelectionMode ? t("selection.deactivate") : t("selection.activate")}</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}
-                >{t("selection.selectAll")}</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}
-                >{t("selection.clearSelection")}</button>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--mini"
-                disabled={previewSelectedPaths.length === 0}
-                on:click={() =>
-                  openConfirmDelete(
-                    t("confirm.deleteSelectionTitle"),
-                    t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelectedPaths.length)),
-                    deletePreviewSelectedItems
-                  )}
-              >{t("selection.delete")}</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertPreviewSelection}
-                >{t("selection.invert")}</button>
-              <span class="selection-float__count" title={t("selection.selectedTitle")}>{previewSelectedPaths.length}</span>
-            </div>
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--close"
-              aria-label={t("common.closeModalAria")}
-              title={t("common.close")}
-              on:click={() => (previewOpen = false)}>✕</button
-            >
-          </div>
-        </header>
-        <div class="modal__scroll">
-          <section class="grid" style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
-            {#each previewItems as it}
-              <div
-                class="tile"
-                data-preview-path={it.path}
-                class:selected={previewSelectedPaths.includes(it.path)}
-                role="button"
-                tabindex="0"
-                draggable={previewSelectionMode}
-                on:pointerdown={(e) => onPreviewTilePointerDown(e, it)}
-                on:pointerenter={() => onPreviewTilePointerEnter(it.path)}
-                on:pointerup={cancelPreviewLongPress}
-                on:pointerleave={cancelPreviewLongPress}
-                on:pointercancel={cancelPreviewLongPress}
-                on:dragstart={(e) => onPreviewTileDragStart(e, it)}
-                on:dragend={onPreviewTileDragEnd}
-                on:click={(e) => onPreviewTileClick(e, it)}
-                on:keydown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onPreviewTileClick(e as unknown as MouseEvent, it);
-                  }
-                }}
-              >
-                {#if it.thumbDataUrl}
-                  <img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} draggable={false} />
-                {/if}
-                {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
-              </div>
-            {/each}
-          </section>
-        </div>
-      </div>
-    </div>
+    <DestPreviewModal
+      bind:this={destPreviewModal}
+      bind:open={previewOpen}
+      destPath={previewDestPath}
+      {thumbScale}
+      {thumbGapPx}
+      {showThumbLabels}
+      {gridCellPx}
+      on:close={() => (previewOpen = false)}
+      on:zoom={(e) => openPreviewZoom(e.detail.item, { navItems: e.detail.navItems })}
+      on:deleteSelected={() =>
+        openConfirmDelete(
+          t("confirm.deleteSelectionTitle"),
+          t("confirm.deleteSelectionDetail").replace(
+            "{count}",
+            String(destPreviewModal?.getSelectedPaths()?.length ?? 0)
+          ),
+          deletePreviewSelectedItems
+        )}
+      on:dropToRoute={(e) => void movePreviewPathsToCurrentRoute(e.detail.paths)}
+      on:contextmenu={onDestPreviewItemContextMenu}
+    />
   {/if}
 
   
@@ -3660,11 +4442,22 @@
       class="dest-ctx-menu gallery-item-ctx-menu om-panel om-panel--lift"
       role="menu"
       tabindex="-1"
-      aria-label={t("menus.galleryFileAria")}
+      aria-label={galleryItemCtxMenu.kind === "folder" ? t("menus.galleryFolderAria") : t("menus.galleryFileAria")}
       style={`left:${galleryItemCtxMenu.x}px;top:${galleryItemCtxMenu.y}px`}
       on:click|stopPropagation
       on:keydown|stopPropagation
     >
+      {#if galleryItemCtxMenu.kind === "folder"}
+        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openRenameFromCtx}
+          >{t("contextFolder.rename")}</button
+        >
+        <button
+          type="button"
+          class="dest-ctx-menu__item dest-ctx-menu__item--danger"
+          role="menuitem"
+          on:click={askDeleteFolderFromCtx}>{t("contextFolder.delete")}</button
+        >
+      {:else}
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
         >{t("contextGallery.copyPath")}</button
       >
@@ -3673,26 +4466,59 @@
         class="dest-ctx-menu__item"
         role="menuitem"
         disabled={!galleryItemCtxMenu.thumbDataUrl || !String(galleryItemCtxMenu.thumbDataUrl).startsWith("data:")}
-        on:click={() => void copyGalleryCtxThumb()}
+        on:click={() => void copyGalleryCtxFullImage()}
         >{t("contextGallery.copyThumb")}</button
       >
-      <div class="gallery-item-ctx-menu__section" role="presentation">{t("contextGallery.moveSection")}</div>
-      {#if destRows.length === 0}
-        <div class="gallery-item-ctx-menu__hint">{t("contextGallery.noDestinations")}</div>
-      {:else}
-        {#each destRows as d, di (d.path + "\0gctx\0" + di)}
-          <button
-            type="button"
-            class="dest-ctx-menu__item dest-ctx-menu__item--sub"
-            role="menuitem"
-            title={d.path}
-            on:click={() => void moveGalleryItemFromCtxTo(d.path)}
-            >{d.label}</button
-          >
-        {/each}
+      <div
+        class="ctx-menu__submenu-wrap"
+        class:ctx-menu__submenu-wrap--left={galleryItemCtxMenu.submenuLeft}
+        class:ctx-menu__submenu-wrap--open={$moveDestPanelOpen}
+        on:pointerenter={onMoveDestRootEnter}
+        on:pointerleave={onMoveDestRootLeave}
+      >
+        <button
+          type="button"
+          class="dest-ctx-menu__item ctx-menu__submenu-trigger"
+          role="menuitem"
+          aria-haspopup="true"
+          aria-expanded="false"
+          disabled={!destTreeHasTargets}
+          title={!destTreeHasTargets ? t("contextGallery.noDestinations") : undefined}
+        >
+          <span>{t("contextGallery.moveTo")}</span>
+          <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">{galleryItemCtxMenu.submenuLeft ? "◂" : "▸"}</span>
+        </button>
+        <div
+          class="ctx-menu__submenu ctx-menu__submenu--dest-tree om-panel om-panel--lift"
+          role="menu"
+          aria-label={t("contextGallery.moveTo")}
+        >
+          {#if !destTreeHasTargets}
+            <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
+          {:else}
+            <div class="dest-move-tree__scroll">
+              <DestMoveCtxTree
+                nodes={destTree}
+                onPick={(p) => void moveGalleryItemFromCtxTo(p)}
+              />
+            </div>
+          {/if}
+        </div>
+      </div>
+      {#if galleryItemCtxMenu.kind === "video"}
+        <button
+          type="button"
+          class="dest-ctx-menu__item"
+          role="menuitem"
+          on:click={() => void openGalleryExternalFromCtx()}
+          >{t("contextGallery.openExternal")}</button
+        >
       {/if}
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openRenameFromCtx}
+        >{t("contextGallery.rename")}</button
+      >
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
-        >{t("contextGallery.metadata")}</button
+        >{t("contextGallery.properties")}</button
       >
       <button
         type="button"
@@ -3700,6 +4526,160 @@
         role="menuitem"
         on:click={askDeleteGalleryItemFromCtx}>{t("contextGallery.delete")}</button
       >
+      {/if}
+    </div>
+  {/if}
+
+  {#if destPreviewCtxMenu}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="ctx-menu-backdrop" role="presentation" on:click={closeDestPreviewCtxMenu}></div>
+    <!-- svelte-ignore a11y-interactive-supports-focus -->
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div
+      class="dest-ctx-menu gallery-item-ctx-menu om-panel om-panel--lift"
+      role="menu"
+      tabindex="-1"
+      aria-label={t("menus.destPreviewFileAria")}
+      style={`left:${destPreviewCtxMenu.x}px;top:${destPreviewCtxMenu.y}px`}
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+    >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyDestPreviewCtxPath()}
+        >{t("contextGallery.copyPath")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={destPreviewCtxMenu.paths.length !== 1 ||
+          !destPreviewCtxMenu.thumbDataUrl ||
+          !String(destPreviewCtxMenu.thumbDataUrl).startsWith("data:")}
+        on:click={() => void copyDestPreviewCtxFullImage()}
+        >{t("contextGallery.copyThumb")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={!folder.trim()}
+        title={!folder.trim() ? t("contextDestPreview.moveToRouteDisabled") : undefined}
+        on:click={() => void moveDestPreviewCtxToRoute()}
+        >{t("contextDestPreview.moveToRoute")}{destPreviewCtxMenu.paths.length > 1
+          ? ` (${destPreviewCtxMenu.paths.length})`
+          : ""}</button
+      >
+      <div
+        class="ctx-menu__submenu-wrap"
+        class:ctx-menu__submenu-wrap--left={destPreviewCtxMenu.submenuLeft}
+        class:ctx-menu__submenu-wrap--open={$moveDestPanelOpen}
+        on:pointerenter={onMoveDestRootEnter}
+        on:pointerleave={onMoveDestRootLeave}
+      >
+        <button
+          type="button"
+          class="dest-ctx-menu__item ctx-menu__submenu-trigger"
+          role="menuitem"
+          aria-haspopup="true"
+          aria-expanded="false"
+          disabled={!destTreeHasTargets}
+          title={!destTreeHasTargets ? t("contextGallery.noDestinations") : undefined}
+        >
+          <span>{t("contextGallery.moveTo")}{destPreviewCtxMenu.paths.length > 1
+            ? ` (${destPreviewCtxMenu.paths.length})`
+            : ""}</span>
+          <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">{destPreviewCtxMenu.submenuLeft ? "◂" : "▸"}</span>
+        </button>
+        <div
+          class="ctx-menu__submenu ctx-menu__submenu--dest-tree om-panel om-panel--lift"
+          role="menu"
+          aria-label={t("contextGallery.moveTo")}
+        >
+          {#if !destTreeHasTargets}
+            <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
+          {:else}
+            <div class="dest-move-tree__scroll">
+              <DestMoveCtxTree
+                nodes={destTree}
+                excludePath={previewDestPath}
+                onPick={(p) => void moveDestPreviewCtxToDest(p)}
+              />
+            </div>
+          {/if}
+        </div>
+      </div>
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={destPreviewCtxMenu.paths.length !== 1}
+        on:click={openRenameFromDestPreviewCtx}
+        >{t("contextGallery.rename")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={destPreviewCtxMenu.paths.length !== 1}
+        on:click={() => void openDestPreviewFileInfoFromCtx()}
+        >{t("contextGallery.properties")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item dest-ctx-menu__item--danger"
+        role="menuitem"
+        on:click={askDeleteDestPreviewFromCtx}
+        >{t("contextGallery.delete")}{destPreviewCtxMenu.paths.length > 1
+          ? ` (${destPreviewCtxMenu.paths.length})`
+          : ""}</button
+      >
+    </div>
+  {/if}
+
+  {#if galleryItemCtxMenu || destPreviewCtxMenu}
+    <DestMoveFlyoutPortals
+      excludePath={destPreviewCtxMenu ? previewDestPath : ""}
+      onPick={(p) =>
+        destPreviewCtxMenu ? void moveDestPreviewCtxToDest(p) : void moveGalleryItemFromCtxTo(p)}
+    />
+  {/if}
+
+  {#if renameModalOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim overlay--confirm" role="presentation" on:click|self={closeRenameModal}>
+      <div
+        class="modal modal--confirm om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rename-modal-title"
+        tabindex="-1"
+        on:click|stopPropagation
+      >
+        <header class="modal__head">
+          <strong id="rename-modal-title">{renameModalTitle}</strong>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            on:click={closeRenameModal}>✕</button
+          >
+        </header>
+        <label class="field-label" for="rename-modal-input">{t("contextGallery.renamePlaceholder")}</label>
+        <input
+          id="rename-modal-input"
+          class="om-input"
+          type="text"
+          bind:value={renameModalDraft}
+          on:keydown={(e) => {
+            if (e.key === "Enter") void saveRenameModal();
+            if (e.key === "Escape") closeRenameModal();
+          }}
+        />
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--ghost" on:click={closeRenameModal}>{t("common.cancel")}</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={() => void saveRenameModal()}>{t("common.save")}</button>
+        </div>
+      </div>
     </div>
   {/if}
 
@@ -3719,7 +4699,7 @@
         on:click|stopPropagation
       >
         <header class="modal__head">
-          <strong id="gallery-file-info-title">{t("contextGallery.metadataTitle")}</strong>
+          <strong id="gallery-file-info-title">{t("contextGallery.propertiesTitle")}</strong>
           <button
             type="button"
             class="om-btn om-btn--ghost om-btn--close"
@@ -3730,11 +4710,19 @@
         </header>
         <p class="settings-hint">{galleryFileInfoModal.name}</p>
         <p class="gallery-file-info__path">{galleryFileInfoModal.path}</p>
-        <p class="gallery-file-info__meta">
+        <div class="gallery-file-info__meta">
+          <span
+            >{t("contextGallery.typeLabel")}: {formatGalleryMediaTypeLabel(
+              galleryFileInfoModal.mediaType,
+              galleryFileInfoModal.extension
+            )}</span
+          >
+          {#if galleryFileInfoModal.mimeType}
+            <span>{t("contextGallery.mimeLabel")}: {galleryFileInfoModal.mimeType}</span>
+          {/if}
           <span>{t("contextGallery.sizeLabel")}: {formatFileSizeBytes(galleryFileInfoModal.sizeBytes)}</span>
-          ·
           <span>{t("contextGallery.modifiedLabel")}: {galleryFileInfoModal.mtimeIso}</span>
-        </p>
+        </div>
         <div class="settings-actions">
           <button type="button" class="om-btn om-btn--primary" on:click={() => (galleryFileInfoModal = null)}
             >{t("contextGallery.closeInfo")}</button
@@ -3801,8 +4789,12 @@
   {#if settingsOpen}
     <SettingsModal
       bind:thumbsPerPage
+      bind:videoTranscodePreset
+      bind:videoTranscodeMaxHeight
+      bind:videoTranscodeHw
       bind:settingsThumbPresetIdx
       bind:settingsThumbScaleDraft
+      bind:galleryThumbQualityPreset
       bind:thumbGapPx
       bind:thumbImageRadiusPx
       bind:thumbTileRadiusPx
@@ -3812,6 +4804,12 @@
       bind:thumbCardStyle
       bind:keyboardShortcuts
       defaultShortcuts={defaultKeyboardShortcuts}
+      destTree={destTreeSettingsDraft}
+      markerTree={markerTreeSettingsDraft}
+      onDestTreeChange={(next) => (destTreeSettingsDraft = next)}
+      onMarkerTreeChange={(next) => (markerTreeSettingsDraft = next)}
+      onPickDestFolder={pickSettingsDestFolder}
+      onPickMarkerFolder={pickSettingsMarkerFolder}
       themeNameLabel={themeNameLabel}
       onCancel={cancelSettingsModal}
       onSave={saveSettingsModal}
@@ -3832,7 +4830,7 @@
   {/if}
 
   {#if uiLoading}
-    <LoadOverlay />
+    <LoadOverlay message={uiLoadingMessage || t("load.loading")} />
   {/if}
 
   <!-- Modal/Overlay Layer -->
@@ -3844,7 +4842,8 @@
     bind:routePickerOpen
     bind:pinMarkerOpen
     bind:folder
-    bind:pinnedFolders
+    markerToolbarItems={markerToolbarVisibleItems}
+    {markerToolbarCanGoBack}
     bind:recentUnpinnedFolders
     bind:pinMarkerName
     bind:pinMarkerPath
@@ -3852,8 +4851,8 @@
     {loadFolder}
     {pickRecentFolder}
     {onPinnedContextMenu}
-    {markerLabelForPath}
-    {pathTailLabel}
+    onMarkerToolbarBack={() => void markerToolbarBack()}
+    onMarkerToolbarOpenFolder={(id) => void navigateMarkerToolbarFolder(id)}
     {openPinMarkerModal}
     {closePinMarkerModal}
     {savePinMarkerModal}
@@ -3873,14 +4872,24 @@
     bind:zoomImgTransform
     bind:zoomHudVisible
     bind:zoomMiniRect
+    {zoomMiniMapStyle}
+    {zoomMiniActive}
+    {previewZoomMiniSrc}
+    {beginMiniMapPan}
+    {moveMiniMapPan}
+    {endMiniMapPan}
     bind:zoomCropMarqueeStyle
-    bind:destRows
+    bind:destToolbarItems={destToolbarVisibleItems}
+    {destToolbarCanGoBack}
+    onDestToolbarBack={() => void destToolbarBack()}
+    onDestToolbarOpenFolder={(id) => void navigateDestToolbarFolder(id)}
     bind:draggedDestIdx
     bind:previewZoomCanUndoMove
     bind:zoomNavItems
     bind:previewZoomPath
     bind:previewPanX
     bind:previewPanY
+    previewPanDrag={previewPanDrag}
     bind:previewFillWidthAlignPending
     bind:zoomStageEl
     bind:zoomVideoEl
@@ -3890,6 +4899,7 @@
     {moveZoomBy}
     {clampPanToStage}
     {alignFillWidthToTop}
+    {togglePreviewZoomMode}
     {zoomStep}
     {applyZoomRotate}
     {applyZoomCrop}
@@ -3902,6 +4912,8 @@
     {onZoomStageClick}
     {onZoomImageClick}
     {onZoomVideoMeta}
+    {onZoomVideoError}
+    onZoomVideoCanPlay={onZoomVideoCanPlay}
     {onZoomImageLoad}
     {onCropPointerDown}
     {onCropPointerMove}
@@ -3914,5 +4926,13 @@
     {onDestChipDragEnd}
     {onDestDrop}
     {openPreviewZoom}
+    previewZoomVideoArmed={previewZoomVideoArmed}
+    previewZoomVideoLaunching={previewZoomVideoLaunching}
+    previewZoomVideoPlayLocked={previewZoomVideoPlayLocked}
+    previewZoomThumbUrl={previewZoomThumbUrl}
+    previewZoomVideoPreparing={previewZoomVideoPreparing}
+    previewZoomVideoStatus={previewZoomVideoStatus}
+    onZoomVideoPlay={requestZoomVideoPlay}
   />
+</main>
 

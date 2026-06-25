@@ -1,3 +1,5 @@
+import { normalizePathForApi } from "./pathUtils";
+
 export type GalleryItem = {
   kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break";
   name: string;
@@ -9,9 +11,14 @@ export type GalleryItem = {
   /** Tinte de fondo (#rrggbb) según color medio de la sección (agrupar por carpeta). */
   sectionTintHex?: string;
   thumbDataUrl?: string | null;
+  /** Placeholder LQ conservado durante el crossfade a HQ. */
+  thumbLqDataUrl?: string | null;
   thumbQuality?: "lq" | "hq";
   selected?: boolean;
+  /** Miniaturas del contenido interior (solo kind === "folder", hasta 4 elementos). */
+  folderPreviewUrls?: (string | null)[];
 };
+
 
 type WebApi = Record<string, (...args: any[]) => Promise<any>>;
 
@@ -29,6 +36,8 @@ const isDevBrowser = (): boolean =>
 const mockGalleryState = () => ({
   folder: "",
   total: 0,
+  totalImages: 0,
+  totalVideos: 0,
   totalElements: 0,
   totalBytes: 0,
   page: 1,
@@ -58,13 +67,14 @@ const devMockApi: WebApi = {
       gallery_recent_folders: [] as string[],
       gallery_thumbs_per_page: 48,
       gallery_include_subfolders: false,
-      gallery_sort_mode: "name",
+      gallery_sort_mode: "name,mtime,type",
       gallery_group_by_folder: false,
       gallery_timeline_view: false,
       gallery_section_dominant_color: true,
     },
     gallery: mockGalleryState(),
     destinations: [],
+    markers: [],
   }),
   gallery_load_folder: async () => ({ ...mockGalleryPayload(), recentFolders: [] as string[] }),
   gallery_reload: async () => mockGalleryPayload(),
@@ -85,12 +95,45 @@ const devMockApi: WebApi = {
     dataUrl: null,
     mediaType: "image" as const,
     fileUrl: null as string | null,
+    transcodeUrl: null as string | null,
+    needsTranscode: false,
   }),
+  gallery_media_url: async () => ({
+    path: "",
+    fileUrl: null as string | null,
+    transcodeUrl: null as string | null,
+    needsTranscode: false,
+    mimeType: null as string | null,
+    ffmpegAvailable: false,
+    ffprobeAvailable: false,
+    transcodeCached: false,
+    playbackFormat: "mp4",
+  }),
+  gallery_transcode_active: async () => ({ jobs: [] as Array<{ id: string; path: string; name: string; format: string }>, count: 0 }),
+  gallery_video_playback_blob: async () => ({ ok: false, error: "mock" }),
+  gallery_video_diagnostics: async () => ({
+    path: "",
+    exists: false,
+    error: "Solo disponible con la app Python (PyWebView).",
+  }),
+  gallery_open_external: async () => ({ ok: true }),
+  gallery_file_base64: async () => ({
+    dataUrl: null as string | null,
+    error: null as string | null,
+  }),
+  gallery_copy_to_clipboard: async () => ({
+    ok: false,
+    error: null as string | null,
+  }),
+  gallery_copy_text_to_clipboard: async () => ({ ok: true }),
   gallery_file_stat: async () => ({
     path: "",
     name: "",
     sizeBytes: 0,
     mtimeIso: "",
+    extension: "",
+    mediaType: "image",
+    mimeType: "",
   }),
   destination_move_selected: async () => ({
     ...mockGalleryPayload(),
@@ -120,16 +163,40 @@ const devMockApi: WebApi = {
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
   }),
+  gallery_rename_path: async () => ({
+    ...mockGalleryPayload(),
+    renameResult: { previousPath: "", newPath: "", newName: "" },
+  }),
+  gallery_delete_folder: async () => ({
+    ...mockGalleryPayload(),
+    deleteResult: { deleted: 0, errors: 0 },
+  }),
   gallery_image_rotate: async () => mockGalleryPayload(),
   gallery_image_crop_normalized: async () => mockGalleryPayload(),
   gallery_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
-  destination_preview: async () => ({ items: [], cols: 4 }),
+  destination_preview: async () => ({ items: [], cols: 4, total: 0 }),
+  destination_preview_thumbs: async () => ({ items: [] }),
   destination_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
-  destinations_add: async () => ({ destinations: [] }),
-  destinations_edit: async () => ({ destinations: [] }),
-  destinations_remove: async () => ({ destinations: [] }),
-  destinations_reorder: async () => ({ destinations: [] }),
-  destinations_get: async () => ({ destinations: [] }),
+  destinations_add: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_edit: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_remove: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_reorder: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_get: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_save_tree: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_set_toolbar_folder: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_folder_add: async () => ({ destinations: [], toolbarFolderId: "", folderId: "" }),
+  destinations_folder_edit: async () => ({ destinations: [], toolbarFolderId: "" }),
+  destinations_folder_remove: async () => ({ destinations: [], toolbarFolderId: "" }),
+  markers_get: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_save_tree: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_set_toolbar_folder: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_add: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_edit: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_remove: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_reorder: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_folder_add: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[], folderId: "" }),
+  markers_folder_edit: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
+  markers_folder_remove: async () => ({ markers: [], toolbarFolderId: "", pinnedFolders: [] as string[] }),
   settings_patch: async (data: Record<string, unknown>) => ({ settings: { ...data } }),
   organizer_start: async () => ({ ok: false, error: "Solo disponible con la app Python (PyWebView)." }),
   organizer_cancel: async () => ({ ok: true }),
@@ -176,8 +243,24 @@ export const bridge = {
   galleryClearSelection: () => call<any>("gallery_clear_selection"),
   galleryInvertSelection: () => call<any>("gallery_invert_selection"),
   galleryPreview: (path: string, width: number, height: number) =>
-    call<any>("gallery_preview", path, width, height),
-  galleryFileStat: (path: string) => call<any>("gallery_file_stat", path),
+    call<any>("gallery_preview", normalizePathForApi(path), width, height),
+  galleryMediaUrl: (path: string, warm = false, playbackMode = "auto") =>
+    call<any>("gallery_media_url", normalizePathForApi(path), warm, playbackMode),
+  galleryVideoProfiles: (path: string) =>
+    call<{ profiles: Array<{ id: string; available: boolean; recommended?: boolean; strategy?: string }>; defaultMode?: string; strategy?: string }>(
+      "gallery_video_profiles",
+      normalizePathForApi(path)
+    ),
+  galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }>; count: number }>("gallery_transcode_active"),
+  galleryVideoDiagnostics: (path: string, testTranscode = false) =>
+    call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
+  galleryVideoPlaybackBlob: (path: string) =>
+    call<any>("gallery_video_playback_blob", normalizePathForApi(path)),
+  galleryOpenExternal: (path: string) => call<any>("gallery_open_external", normalizePathForApi(path)),
+  galleryFileBase64: (path: string) => call<any>("gallery_file_base64", path),
+  galleryCopyToClipboard: (path: string) => call<any>("gallery_copy_to_clipboard", path),
+  galleryCopyTextToClipboard: (text: string) => call<any>("gallery_copy_text_to_clipboard", text),
+  galleryFileStat: (path: string) => call<any>("gallery_file_stat", normalizePathForApi(path)),
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMovePaths: (paths: string[], destPath: string) =>
     call<any>("destination_move_paths", paths, destPath),
@@ -192,14 +275,36 @@ export const bridge = {
   galleryThumbHq: (path: string, scale: number) => call<any>("gallery_thumb_hq", path, scale),
   destinationPreview: (path: string, scale: number, width: number) =>
     call<any>("destination_preview", path, scale, width),
+  destinationPreviewThumbs: (paths: string[], scale: number, profile: "lq" | "hq" = "lq") =>
+    call<any>("destination_preview_thumbs", paths, scale, profile),
   destinationThumbHq: (path: string, scale: number) => call<any>("destination_thumb_hq", path, scale),
-  destinationsAdd: (label: string, path: string) => call<any>("destinations_add", label, path),
-  destinationsEdit: (idx: number, label: string, path: string) =>
-    call<any>("destinations_edit", idx, label, path),
-  destinationsRemove: (idx: number) => call<any>("destinations_remove", idx),
-  destinationsReorder: (fromIdx: number, toIdx: number) => call<any>("destinations_reorder", fromIdx, toIdx),
-  /** Lista corta solo destinos (menos datos que get_initial_state; más fiable con Qt). */
+  destinationsAdd: (label: string, path: string, parentId = "") =>
+    call<any>("destinations_add", label, path, parentId),
+  destinationsEdit: (parentId: string, idx: number, label: string, path: string) =>
+    call<any>("destinations_edit", parentId, idx, label, path),
+  destinationsRemove: (parentId: string, idx: number) => call<any>("destinations_remove", parentId, idx),
+  destinationsReorder: (parentId: string, fromIdx: number, toIdx: number) =>
+    call<any>("destinations_reorder", parentId, fromIdx, toIdx),
+  destinationsSaveTree: (tree: unknown[]) => call<any>("destinations_save_tree", tree),
+  destinationsSetToolbarFolder: (folderId = "") => call<any>("destinations_set_toolbar_folder", folderId),
+  destinationsFolderAdd: (label: string, parentId = "") => call<any>("destinations_folder_add", label, parentId),
+  destinationsFolderEdit: (folderId: string, label: string) =>
+    call<any>("destinations_folder_edit", folderId, label),
+  destinationsFolderRemove: (folderId: string) => call<any>("destinations_folder_remove", folderId),
+  /** Lista de destinos en árbol (menos datos que get_initial_state; más fiable con Qt). */
   destinationsGet: () => call<any>("destinations_get"),
+  markersGet: () => call<any>("markers_get"),
+  markersSaveTree: (tree: unknown[]) => call<any>("markers_save_tree", tree),
+  markersSetToolbarFolder: (folderId = "") => call<any>("markers_set_toolbar_folder", folderId),
+  markersAdd: (path: string, label = "", parentId = "") => call<any>("markers_add", path, label, parentId),
+  markersEdit: (parentId: string, idx: number, label: string, path: string) =>
+    call<any>("markers_edit", parentId, idx, label, path),
+  markersRemove: (parentId: string, idx: number) => call<any>("markers_remove", parentId, idx),
+  markersReorder: (parentId: string, fromIdx: number, toIdx: number) =>
+    call<any>("markers_reorder", parentId, fromIdx, toIdx),
+  markersFolderAdd: (label: string, parentId = "") => call<any>("markers_folder_add", label, parentId),
+  markersFolderEdit: (folderId: string, label: string) => call<any>("markers_folder_edit", folderId, label),
+  markersFolderRemove: (folderId: string) => call<any>("markers_folder_remove", folderId),
   settingsPatch: (data: Record<string, any>) => call<any>("settings_patch", data),
   organizerStart: (path: string, options: Record<string, any>) => call<any>("organizer_start", path, options),
   organizerCancel: () => call<any>("organizer_cancel"),
