@@ -26,6 +26,7 @@ def load_app_settings() -> dict:
             "gallery_recent_folders": [],
             "gallery_pinned_folders": [],
             "gallery_thumb_scale": 1.0,
+            "gallery_thumb_quality_preset": "balanced",
             "gallery_show_thumb_filename": True,
             "gallery_thumbs_per_page": 48,
             "gallery_scroll_top_on_page_change": True,
@@ -89,6 +90,15 @@ def load_app_settings() -> dict:
             # Migrar valores viejos (0.5) a rango usable
             gs = float(data["gallery_thumb_scale"])
             data["gallery_thumb_scale"] = max(0.01, min(2.25, gs))
+        if "gallery_thumb_quality_preset" not in data:
+            data["gallery_thumb_quality_preset"] = "balanced"
+        elif str(data["gallery_thumb_quality_preset"]).lower() not in (
+            "balanced",
+            "sharp",
+            "hidpi",
+            "performance",
+        ):
+            data["gallery_thumb_quality_preset"] = "balanced"
         if "gallery_show_thumb_filename" not in data:
             data["gallery_show_thumb_filename"] = True
         if "gallery_thumbs_per_page" not in data:
@@ -203,6 +213,7 @@ def load_app_settings() -> dict:
             "gallery_recent_folders": [],
             "gallery_pinned_folders": [],
             "gallery_thumb_scale": 1.0,
+            "gallery_thumb_quality_preset": "balanced",
             "gallery_show_thumb_filename": True,
             "gallery_thumbs_per_page": 48,
             "gallery_scroll_top_on_page_change": True,

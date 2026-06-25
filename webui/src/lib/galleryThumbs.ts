@@ -73,7 +73,11 @@ export function cancelPendingGalleryThumbFlush() {
 export function bumpGalleryThumbHydrationToken(clearCache = false): number {
   galleryThumbHydrationToken++;
   cancelPendingGalleryThumbFlush();
-  if (clearCache) clearGalleryThumbHqCache();
+  if (clearCache) {
+    // Preservar LQ en el store antes de vaciar la caché HQ del cliente.
+    updateGalleryItems((items) => stripHqFromGalleryItems(items));
+    clearGalleryThumbHqCache();
+  }
   return galleryThumbHydrationToken;
 }
 
@@ -150,10 +154,7 @@ function queueGalleryThumbHq(path: string, thumbDataUrl: string, token: number) 
 export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: number, token: number) {
   const navGen = getGalleryNavigationGeneration();
   const base = snapshot.filter(
-    (x) =>
-      (x.kind === "image" || x.kind === "video") &&
-      x.thumbQuality !== "hq" &&
-      !hasGalleryThumbHq(x.path)
+    (x) => (x.kind === "image" || x.kind === "video") && !hasGalleryThumbHq(x.path)
   );
   if (base.length === 0) {
     galleryThumbHydrating.set(false);
@@ -214,6 +215,5 @@ export function disposeGalleryThumbs() {
 /** Re-solicita HQ (y LQ vía reload del caller) cuando cambia el tamaño en píxeles. */
 export async function refreshGalleryThumbsForScale(scale: number) {
   const token = bumpGalleryThumbHydrationToken(true);
-  updateGalleryItems((items) => stripHqFromGalleryItems(items));
   await hydrateGalleryThumbsHq(getGalleryItems(), scale, token);
 }

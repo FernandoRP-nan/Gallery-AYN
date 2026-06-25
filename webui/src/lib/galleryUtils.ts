@@ -51,9 +51,11 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
         prev.thumbLqDataUrl ??
         (prev.thumbQuality === "lq" ? prev.thumbDataUrl : null) ??
         cached?.lqUrl ??
+        cached?.hqUrl ??
         thumbLq;
       thumbUrl = thumbLq;
       thumbQ = thumbLq ? ("lq" as const) : undefined;
+      if (!thumbUrl && it.thumbDataUrl) return it;
     }
 
     const hasChanges =
@@ -80,6 +82,35 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
 
 const TIMELINE_DAY_MIN_PX = 130;
 
+/** Meses abreviados para marcas de día en la línea de tiempo. */
+const TIMELINE_MONTH_ABBR_ES = [
+  "",
+  "ene",
+  "feb",
+  "mar",
+  "abr",
+  "may",
+  "jun",
+  "jul",
+  "ago",
+  "sep",
+  "oct",
+  "nov",
+  "dic",
+] as const;
+
+/** Etiqueta de día: «15 Ene 2024» a partir de ISO YYYY-MM-DD. */
+export function formatTimelineDayLabel(isoDate: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(isoDate ?? "").trim());
+  if (!m) return String(isoDate ?? "").trim();
+  const year = m[1];
+  const monthIdx = parseInt(m[2], 10);
+  const day = parseInt(m[3], 10);
+  const abbr = TIMELINE_MONTH_ABBR_ES[monthIdx] ?? m[2];
+  const month = abbr.charAt(0).toUpperCase() + abbr.slice(1);
+  return `${day} ${month} ${year}`;
+}
+
 export function expandTimelineDayBreaks(raw: GalleryItem[], timeline: boolean, cellPx: number): GalleryItem[] {
   if (!timeline || cellPx < TIMELINE_DAY_MIN_PX) return raw;
   const out: GalleryItem[] = [];
@@ -98,10 +129,9 @@ export function expandTimelineDayBreaks(raw: GalleryItem[], timeline: boolean, c
     if (iso && iso.length >= 10) {
       const day = iso.slice(0, 10);
       if (lastDay !== null && day !== lastDay) {
-        const dayNum = iso.slice(8, 10);
         out.push({
           kind: "day_break",
-          name: dayNum,
+          name: formatTimelineDayLabel(day),
           path: `daybreak:${day}:${out.length}`,
           thumbDataUrl: null,
         });

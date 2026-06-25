@@ -171,6 +171,13 @@ _VIDEO_SETTINGS_KEYS = frozenset(
     }
 )
 
+_THUMB_SETTINGS_KEYS = frozenset(
+    {
+        "gallery_thumb_scale",
+        "gallery_thumb_quality_preset",
+    }
+)
+
 
 class SystemBridgeMixin:
     def get_initial_state(self) -> dict:
@@ -196,6 +203,8 @@ class SystemBridgeMixin:
             from ..core.video_transcode import invalidate_transcode_cache
 
             cleared = invalidate_transcode_cache()
+        if any(k in data for k in _THUMB_SETTINGS_KEYS) and hasattr(self, "_clear_thumb_cache"):
+            self._clear_thumb_cache()
         return {"settings": self.settings, "transcodeCacheCleared": cleared}
 
     def dialog_pick_folder(self, start_path: str = "") -> dict:

@@ -19,6 +19,7 @@
   export let videoTranscodeHw: "auto" | "off" = "auto";
   export let settingsThumbPresetIdx: number;
   export let settingsThumbScaleDraft: number;
+  export let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
   export let thumbGapPx: number;
   export let thumbImageRadiusPx: number;
   export let thumbTileRadiusPx: number;
@@ -72,6 +73,7 @@
       <SettingsThumbsSection
         bind:settingsThumbPresetIdx
         bind:settingsThumbScaleDraft
+        bind:galleryThumbQualityPreset
         bind:thumbGapPx
         bind:thumbImageRadiusPx
         bind:thumbTileRadiusPx

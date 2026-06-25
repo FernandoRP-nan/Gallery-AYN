@@ -512,7 +512,15 @@ class EditorBridgeMixin:
         self._thumb_cache.clear()
 
     def _thumb_data_url_cached(self, path: Path, thumb_px: int, profile: str = "hq") -> str | None:
-        key = (str(path.resolve()), thumb_px, profile)
+        from ..core.thumb_quality_options import thumb_encode_params
+
+        raw_preset = str(self.settings.get("gallery_thumb_quality_preset", "balanced")).lower()
+        preset_key = (
+            raw_preset
+            if raw_preset in ("balanced", "sharp", "hidpi", "performance")
+            else "balanced"
+        )
+        key = (str(path.resolve()), thumb_px, profile, preset_key)
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -521,8 +529,9 @@ class EditorBridgeMixin:
             hit = self._thumb_cache.get(key)
             if hit is not None and hit[0] == mtime:
                 return hit[1]
+        enc = thumb_encode_params(thumb_px, profile)
         if path.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS:
-            data = _video_thumb_jpeg_data_url_square(path, thumb_px)
+            data = _video_thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
             if data is not None:
                 with self._thumb_cache_lock:
                     self._thumb_cache[key] = (mtime, data)
@@ -530,12 +539,7 @@ class EditorBridgeMixin:
         # Pillow no rasteriza SVG de forma fiable; la UI usa `file://` en vista previa.
         if path.suffix.lower() == ".svg":
             return None
-        if profile == "lq":
-            # Fase 1: miniatura rápida (menos calidad) para pintar la rejilla antes.
-            data = _thumb_jpeg_data_url_square(path, max(48, int(thumb_px * 0.55)), quality=40)
-        else:
-            # Fase 2: miniatura nítida.
-            data = _thumb_jpeg_data_url_square(path, int(round(thumb_px * 1.35)), quality=96)
+        data = _thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
         with self._thumb_cache_lock:
             self._thumb_cache[key] = (mtime, data)
         return data

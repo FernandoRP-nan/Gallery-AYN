@@ -173,11 +173,13 @@ def _folder_preview_thumbs(
     thumb_px: int,
 ) -> list[str | None]:
     """Devuelve hasta `count` data-URLs LQ del primer nivel (imágenes y vídeos)."""
+    from ..core.thumb_quality_options import thumb_encode_params
     from .bridge_editor import _video_thumb_jpeg_data_url_square
 
     if Image is None:
         return []
-    thumb_cell = max(32, thumb_px // 2)
+    enc = thumb_encode_params(max(32, thumb_px // 2), "lq")
+    thumb_cell = enc.size_px
     candidates: list[Path] = []
     try:
         for p in folder.iterdir():
@@ -195,9 +197,9 @@ def _folder_preview_thumbs(
     for p in candidates[:count]:
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
-            url = _video_thumb_jpeg_data_url_square(p, thumb_cell, quality=40)
+            url = _video_thumb_jpeg_data_url_square(p, thumb_cell, quality=enc.jpeg_quality)
         else:
-            url = _thumb_jpeg_data_url_square(p, thumb_cell, quality=40)
+            url = _thumb_jpeg_data_url_square(p, thumb_cell, quality=enc.jpeg_quality)
         urls.append(url)
     return urls
 
@@ -343,7 +345,7 @@ class GalleryBridgeMixin:
             while j < len(ordered) and self._path_year_month(ordered[j], date_field) == (y, m):
                 j += 1
             key = f"{y}-{m:02d}"
-            label = f"{_MONTH_NAMES_ES[m]} {y}"
+            label = f"{_MONTH_NAMES_ES[m].capitalize()} {y}"
             spans.append((i, j, key, label))
             i = j
         return spans
@@ -366,7 +368,7 @@ class GalleryBridgeMixin:
                 "path": str(p),
                 "selected": p in selected_frozenset,
                 "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
-                "thumbQuality": "hq" if is_video else "lq",
+                "thumbQuality": "lq",
             }
             if timeline_meta:
                 d["mtimeIso"] = self._path_date_iso(p, timeline_date_field)

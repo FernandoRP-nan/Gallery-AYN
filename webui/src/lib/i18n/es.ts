@@ -329,6 +329,13 @@ export const es = {
     thumbPresetLarge: "Grande",
     thumbPresetXL: "XL",
     fineTune: "Ajuste fino",
+    thumbQualityLabel: "Calidad de miniaturas",
+    thumbQualityBalanced: "Equilibrado (recomendado)",
+    thumbQualitySharp: "Nítido (mejor en miniaturas pequeñas)",
+    thumbQualityHidpi: "HiDPI / pantallas 4K (máxima nitidez inicial)",
+    thumbQualityPerformance: "Rendimiento (carga más rápida, menos nitidez)",
+    thumbQualityHint:
+      "La galería muestra primero una vista rápida (LQ) y luego la versión nítida (HQ). En miniaturas pequeñas o monitores de alta densidad, prueba «Nítido» o «HiDPI».",
     thumbGap: "Separación entre miniaturas",
     thumbImageRadius: "Redondeado de imagen",
     thumbTileRadius: "Redondeado del elemento",

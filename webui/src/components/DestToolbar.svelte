@@ -61,6 +61,7 @@
         </button>
       {/if}
     {/each}
+    <span class="dest-toolbar-trail" aria-hidden="true"></span>
   </div>
 </div>
 
@@ -71,7 +72,10 @@
     right: 0;
     bottom: 0;
     z-index: 9;
-    padding: var(--om-space-2) var(--om-space-2) max(var(--om-space-2), env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+    padding-inline: var(--om-space-3);
+    padding-top: var(--om-space-3);
+    padding-bottom: max(var(--om-space-3), env(safe-area-inset-bottom, 0px));
     pointer-events: none;
   }
 
@@ -83,15 +87,25 @@
     gap: var(--om-space-1);
     overflow-x: auto;
     overflow-y: hidden;
-    max-width: 100%;
+    box-sizing: border-box;
     width: 100%;
+    max-width: 100%;
     padding: var(--om-space-1) var(--om-space-2);
+    scroll-padding-inline: var(--om-space-3);
     scrollbar-width: thin;
     scrollbar-color: rgb(124 140 255 / 0.38) transparent;
     background: rgb(8 10 18 / 0.92);
     border: 1px solid rgb(255 255 255 / 0.12);
+    border-radius: var(--om-radius-md);
     box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
     white-space: nowrap;
+  }
+
+  :global(.dest-toolbar-trail) {
+    flex: 0 0 var(--om-space-3);
+    width: var(--om-space-3);
+    min-height: 1px;
+    pointer-events: none;
   }
 
   .gallery-dest-rail :global(.selection-float--dest-bar::-webkit-scrollbar) {

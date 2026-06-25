@@ -58,7 +58,7 @@
     {/if}
   </div>
 {:else if it.kind === "day_break"}
-  <div class="timeline-day-break gallery-virtual-item" aria-hidden="true" {style}>
+  <div class="timeline-day-break gallery-virtual-item" role="separator" aria-label={it.name} {style}>
     <span class="timeline-day-break__n">{it.name}</span>
   </div>
 {:else}

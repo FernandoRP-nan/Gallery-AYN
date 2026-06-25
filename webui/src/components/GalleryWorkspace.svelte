@@ -459,7 +459,6 @@
       (x) =>
         visiblePaths.has(x.path) &&
         (x.kind === "image" || x.kind === "video") &&
-        x.thumbQuality !== "hq" &&
         !hasGalleryThumbHq(x.path)
     );
   }

@@ -97,7 +97,7 @@ export function stripHqFromGalleryItem(it: GalleryItem): GalleryItem {
   if (!isGalleryMediaKind(it.kind)) return it;
   if (hasGalleryThumbHq(it.path)) {
     const cached = getGalleryThumbHq(it.path);
-    const lq = lqFromItem(it) ?? cached?.lqUrl ?? null;
+    const lq = lqFromItem(it) ?? cached?.lqUrl ?? cached?.hqUrl ?? null;
     return {
       ...it,
       thumbDataUrl: lq,
@@ -108,12 +108,15 @@ export function stripHqFromGalleryItem(it: GalleryItem): GalleryItem {
   const hq = hqFromItem(it);
   if (hq) {
     preserveItemThumbInCache(it);
-    const lq = lqFromItem(it);
+    const cached = getGalleryThumbHq(it.path);
+    const lq = lqFromItem(it) ?? cached?.lqUrl ?? null;
+    // Vídeos LQ del listado venían marcados como hq; conservar la URL visible.
+    const visibleLq = lq ?? (it.kind === "video" ? hq : null);
     return {
       ...it,
-      thumbDataUrl: lq,
-      thumbLqDataUrl: lq,
-      thumbQuality: lq ? ("lq" as const) : undefined,
+      thumbDataUrl: visibleLq,
+      thumbLqDataUrl: visibleLq,
+      thumbQuality: visibleLq ? ("lq" as const) : undefined,
     };
   }
   return it;

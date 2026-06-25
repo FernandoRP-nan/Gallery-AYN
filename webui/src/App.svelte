@@ -62,7 +62,7 @@
     primaryGallerySortKey,
   } from "./lib/gallerySort";
   import type { ActiveProcess } from "./components/PagerBar.svelte";
-  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems } from "./lib/galleryThumbHqCache";
+  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems, hasGalleryThumbHq } from "./lib/galleryThumbHqCache";
   import {
     bumpGalleryNavigationGeneration,
     getGalleryNavigationGeneration,
@@ -301,6 +301,8 @@
     { id: "xgrande", labelKey: "settings.thumbPresetXL", value: 1.8 }
   ] as const;
   let settingsThumbPresetIdx = 1;
+  let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
+  let galleryThumbQualityPresetBackup: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
   let pageJumpDraft = 1;
   let previewRatio = 0.4;
   /** Fracción de altura para el panel inferior de destinos (solo pestaña Destinos). */
@@ -726,6 +728,11 @@
       const hw = String(data.settings?.video_transcode_hw ?? "auto").toLowerCase();
       videoTranscodeHw = hw === "off" ? "off" : "auto";
     }
+    {
+      const tq = String(data.settings?.gallery_thumb_quality_preset ?? "balanced").toLowerCase();
+      galleryThumbQualityPreset =
+        tq === "sharp" ? "sharp" : tq === "hidpi" ? "hidpi" : tq === "performance" ? "performance" : "balanced";
+    }
     await syncDestinationsFromApi();
     await syncMarkersFromApi();
   };
@@ -807,9 +814,9 @@
   }
 
   /** Recarga o cambio de página en la misma carpeta: conserva caché HQ del cliente. */
-  function beginGalleryRefresh(): number {
+  function beginGalleryRefresh(invalidateThumbCache = false): number {
     const navGen = bumpGalleryNavigationGeneration();
-    bumpGalleryThumbHydrationToken(false);
+    bumpGalleryThumbHydrationToken(invalidateThumbCache);
     galleryMoveQueue = [];
     galleryDeleteQueue = [];
     galleryWorkspace?.cancelBackgroundWork();
@@ -1089,13 +1096,23 @@
   };
 
   /** Recarga ítems de la galería. Por defecto sin overlay global (la rejilla ya da feedback). */
-  const reload = async (opts?: { silent?: boolean; loadingMessage?: string }) => {
-    const navGen = beginGalleryRefresh();
+  const reload = async (opts?: {
+    silent?: boolean;
+    loadingMessage?: string;
+    invalidateThumbCache?: boolean;
+  }) => {
+    const brokenThumbs = getGalleryItems().some(
+      (x) =>
+        (x.kind === "image" || x.kind === "video") &&
+        !x.thumbDataUrl &&
+        !hasGalleryThumbHq(x.path)
+    );
+    const navGen = beginGalleryRefresh(Boolean(opts?.invalidateThumbCache || brokenThumbs));
     const p = bridge.galleryReload();
     const silent = opts?.silent !== false;
     const out = silent ? await p : await trackLoad(p, opts?.loadingMessage ?? t("load.loading"));
     if (!isGalleryNavigationCurrent(navGen)) return;
-    setGalleryPayload(out.state, out.items);
+    setGalleryPayload(out.state, out.items ?? []);
     await afterGalleryDataLoaded();
   };
 
@@ -1141,6 +1158,7 @@
     videoTranscodePresetBackup = videoTranscodePreset;
     videoTranscodeMaxHeightBackup = videoTranscodeMaxHeight;
     videoTranscodeHwBackup = videoTranscodeHw;
+    galleryThumbQualityPresetBackup = galleryThumbQualityPreset;
     settingsOpen = true;
   };
 
@@ -1159,6 +1177,7 @@
     videoTranscodePreset = videoTranscodePresetBackup;
     videoTranscodeMaxHeight = videoTranscodeMaxHeightBackup;
     videoTranscodeHw = videoTranscodeHwBackup;
+    galleryThumbQualityPreset = galleryThumbQualityPresetBackup;
     settingsOpen = false;
   };
 
@@ -1182,11 +1201,11 @@
     const n = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     thumbsPerPage = n;
     const prevScale = appliedThumbScale;
+    const prevThumbQuality = galleryThumbQualityPresetBackup;
     const ts = Math.max(0.01, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
+    const thumbConfigChanged =
+      thumbQualityRefreshNeeded(prevScale, ts) || galleryThumbQualityPreset !== prevThumbQuality;
     thumbScale = ts;
-    if (thumbQualityRefreshNeeded(prevScale, ts)) {
-      bumpGalleryThumbHydrationToken(true);
-    }
     keyboardShortcuts = {
       toggleMode: normalizeShortcutValue(keyboardShortcuts.toggleMode, defaultKeyboardShortcuts.toggleMode),
       deleteAction: normalizeShortcutValue(keyboardShortcuts.deleteAction, defaultKeyboardShortcuts.deleteAction),
@@ -1197,6 +1216,7 @@
     await bridge.settingsPatch({
       gallery_thumbs_per_page: n, // 0 = sin límite
       gallery_thumb_scale: Number(ts.toFixed(3)),
+      gallery_thumb_quality_preset: galleryThumbQualityPreset,
       web_ui_theme: uiTheme,
       web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
       web_show_thumb_labels: Boolean(showThumbLabels),
@@ -1219,7 +1239,7 @@
     await trackLoad(bridge.markersSaveTree(markerTreeSettingsDraft));
     await syncDestinationsFromApi();
     await syncMarkersFromApi();
-    await reload();
+    await reload({ invalidateThumbCache: thumbConfigChanged });
     appliedThumbScale = ts;
     settingsOpen = false;
   };
@@ -2012,8 +2032,7 @@
     try {
       await bridge.settingsPatch({ gallery_thumb_scale: Number(nextScale.toFixed(3)) });
       if (thumbQualityRefreshNeeded(prevScale, nextScale)) {
-        bumpGalleryThumbHydrationToken(true);
-        await reload({ silent: true });
+        await reload({ silent: true, invalidateThumbCache: true });
         appliedThumbScale = nextScale;
         return;
       }
@@ -4778,6 +4797,7 @@
       bind:videoTranscodeHw
       bind:settingsThumbPresetIdx
       bind:settingsThumbScaleDraft
+      bind:galleryThumbQualityPreset
       bind:thumbGapPx
       bind:thumbImageRadiusPx
       bind:thumbTileRadiusPx

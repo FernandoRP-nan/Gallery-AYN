@@ -75,6 +75,73 @@ Con Qt WebEngine explícito:
 ORGANIZADOR_PREFER_QT=1 python3 -m org_multimedia
 ```
 
+## Windows
+
+En Windows el flujo es el mismo (Python + build de `webui/`); el **.exe portable** solo se puede generar **en un PC Windows x64** (PyInstaller no cruza desde Linux sin entorno extra).
+
+### Ejecutar desde código (desarrollo o uso local)
+
+En **PowerShell** desde la raíz del repositorio:
+
+```powershell
+git clone https://github.com/FernandoRP-nan/Organizador-Fedora-KDE.git
+cd Organizador-Fedora-KDE
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+pip install -e .
+# Opcional: pip install pywebview pillow
+
+cd webui
+npm ci
+npm run build
+cd ..
+
+python organizador_multimedia.py
+```
+
+Requisitos en el equipo:
+
+| Componente | Notas |
+|------------|--------|
+| **Python** | 3.10 o superior, en el `PATH` |
+| **Node.js + npm** | Para compilar la UI (`webui/`) |
+| **WebView2 Runtime** | Lo usa PyWebView; suele estar ya en Windows 10/11 |
+| **ffmpeg / ffprobe** | Opcional; necesario para transcodificar vídeos en el visor (AVI, MKV, etc.) |
+
+Para vídeo, puedes instalar ffmpeg en el `PATH` o colocar `ffmpeg.exe` y `ffprobe.exe` en `tools\ffmpeg\` junto al programa.
+
+### Compilar portable (.exe para compartir)
+
+1. Clona el repo en un **PC Windows 64 bits** con **Python 3.10+** y **Node.js**.
+2. En PowerShell, en la raíz del repo:
+
+   ```powershell
+   .\scripts\build-windows-portable.ps1
+   ```
+
+   El script ejecuta `npm run build`, PyInstaller (`GaleriaAYN.spec`) y copia **ffmpeg** a `dist\GaleriaAYN\tools\ffmpeg\`.
+
+3. Salida: carpeta **`dist\GaleriaAYN\`** con **`GaleriaAYN.exe`**. Comprime **toda la carpeta** en un `.zip` (modo *onedir*: no mover solo el `.exe` fuera de la carpeta).
+
+Build manual equivalente:
+
+```powershell
+cd webui
+npm ci
+npm run build
+cd ..
+pip install pyinstaller pillow pywebview
+pyinstaller --clean GaleriaAYN.spec
+.\scripts\fetch-ffmpeg-windows.ps1
+# Copiar tools\ffmpeg\*.exe a dist\GaleriaAYN\tools\ffmpeg\
+```
+
+Requisitos para quien **recibe** el zip, solución de problemas (SmartScreen, WebView2, «ffmpeg no encontrado», etc.): **[docs/windows-portable.md](docs/windows-portable.md)**.
+
+CI: el workflow `.github/workflows/build-windows-portable.yml` puede generar el artefacto en GitHub Actions (runner `windows-latest`).
+
 ### Integración en Fedora KDE (menú y autostart)
 
 Ver [docs/desktop-fedora-kde.md](docs/desktop-fedora-kde.md):
