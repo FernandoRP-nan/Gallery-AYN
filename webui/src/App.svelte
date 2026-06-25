@@ -30,6 +30,16 @@
   } from "./lib/videoDiagnostics";
   import { galleryGridCellPx, thumbQualityRefreshNeeded } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
+  import DestPreviewModal from "./components/DestPreviewModal.svelte";
+  import DestMoveCtxTree from "./components/DestMoveCtxTree.svelte";
+  import DestMoveFlyoutPortals from "./components/DestMoveFlyoutPortals.svelte";
+  import {
+    cancelMoveMenuClose,
+    moveDestPanelOpen,
+    moveRootHovered,
+    onMoveRootPointerLeave,
+    resetMoveFlyoutState,
+  } from "./lib/destMoveFlyoutState";
   import PagerBar from "./components/PagerBar.svelte";
   import PreviewZoomPanel from "./components/PreviewZoomPanel.svelte";
   import PreviewVideoIdle from "./components/PreviewVideoIdle.svelte";
@@ -81,11 +91,11 @@
     cloneTree,
     destToolbarItems as buildDestToolbarItems,
     findParentFolderId,
-    flattenDestList,
+    isDestNode,
+    isFolderNode,
     flattenMarkerPaths,
     folderLabelAt,
     getChildrenAt,
-    isDestNode,
     markerToolbarItems as buildMarkerToolbarItems,
     normalizeTreeNodes,
     parentIdOrEmpty,
@@ -106,7 +116,15 @@
   $: destToolbarVisibleItems = buildDestToolbarItems(destTree, destToolbarFolderId);
   $: destToolbarFolderLabel = folderLabelAt(destTree, destToolbarFolderId);
   $: destToolbarCanGoBack = Boolean(destToolbarFolderId);
-  $: destFlatList = flattenDestList(destTree);
+  function destTreeHasMoveTargets(nodes: TreeNode[]): boolean {
+    for (const n of nodes) {
+      if (isDestNode(n)) return true;
+      if (isFolderNode(n) && destTreeHasMoveTargets(n.children)) return true;
+    }
+    return false;
+  }
+
+  $: destTreeHasTargets = destTreeHasMoveTargets(destTree);
   $: markerToolbarVisibleItems = buildMarkerToolbarItems(markerTree, markerToolbarFolderId);
   $: markerToolbarCanGoBack = Boolean(markerToolbarFolderId);
   let selectedPreview: {
@@ -122,18 +140,8 @@
   /** Escala ya aplicada en servidor/caché HQ (detecta saltos de tamaño en px). */
   let appliedThumbScale = 1;
   let previewOpen = false;
-  let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
-  let previewSelectedPaths: string[] = [];
-  let previewSelectionMode = false;
-  let previewLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let previewLongPressPath: string | null = null;
-  let previewLongPressTriggered = false;
-  let previewRangeSelecting = false;
-  let previewRangeAnchorPath: string | null = null;
-  let previewRangeMode: "select" | "deselect" = "select";
-  let previewRangeBaseSelectedPaths: string[] = [];
-  let previewSuppressClick = false;
-  let previewDragActive = false;
+  let previewDestPath = "";
+  let destPreviewModal: DestPreviewModal | null = null;
   let galleryRangeSelecting = false;
   let galleryRangeSuppressClick = false;
   let galleryCursorPath: string | null = null;
@@ -234,9 +242,7 @@
   let zoomCropCurY = 0;
   let deferredZoomMoveRefresh: GalleryMutationResponse | null = null;
   let galleryScrollAtTop = true;
-  let previewThumbHydrationToken = 0;
   let previewVisible = true;
-  let previewDestPath = "";
   let destinationsMode = false;
   let folderBackStack: string[] = [];
   let folderForwardStack: string[] = [];
@@ -309,7 +315,6 @@
   let destPanelRatio = 0.26;
   let destSplitDrag = false;
   /** Modal “ver carpeta destino”: ~80 % del viewport (sin sliders). */
-  const DEST_MODAL_FRAC = 0.8;
   let orgPath = "";
   let orgRunning = false;
   let orgDetail = t("status.orgDetailIdle");
@@ -561,69 +566,6 @@
       .map((x) => x.trim())
       .filter((x) => x.length > 0);
     return opts.some((x) => token === x || token.toLowerCase() === x.toLowerCase());
-  }
-
-  function prioritizePathsByViewport(paths: string[], selector: string, attrName: string): string[] {
-    const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
-    if (nodes.length === 0) return paths;
-    const nodeByPath = new Map<string, HTMLElement>();
-    for (const n of nodes) {
-      const p = n.dataset[attrName];
-      if (p) nodeByPath.set(p, n);
-    }
-    const visible: string[] = [];
-    const rest: string[] = [];
-    for (const p of paths) {
-      const el = nodeByPath.get(p);
-      if (!el) {
-        rest.push(p);
-        continue;
-      }
-      const r = el.getBoundingClientRect();
-      const isVisible = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
-      (isVisible ? visible : rest).push(p);
-    }
-    return [...visible, ...rest];
-  }
-
-  async function hydratePreviewThumbsHq(
-    snapshot: Array<{ name: string; path: string; thumbDataUrl?: string | null }>,
-    scale: number,
-    token: number
-  ) {
-    const orderedPaths = prioritizePathsByViewport(
-      snapshot.map((x) => x.path),
-      ".pv-tile[data-preview-path]",
-      "previewPath"
-    );
-    const targets = orderedPaths
-      .map((p) => snapshot.find((x) => x.path === p))
-      .filter((x): x is { name: string; path: string; thumbDataUrl?: string | null } => Boolean(x));
-    let idx = 0;
-    const workers = Array.from({ length: 4 }, async () => {
-      while (idx < targets.length) {
-        const cur = idx++;
-        const it = targets[cur];
-        try {
-          const out = await bridge.destinationThumbHq(it.path, scale);
-          if (previewThumbHydrationToken !== token) return;
-          if (!out?.thumbDataUrl) continue;
-          previewItems = previewItems.map((x) =>
-            x.path === it.path ? { ...x, thumbDataUrl: out.thumbDataUrl, thumbQuality: "hq" } : x
-          );
-          if (
-            previewZoomOpen &&
-            previewZoomPath === it.path &&
-            previewZoomMediaType !== "video" &&
-            previewZoomMediaType !== "svg"
-          )
-            previewZoomDataUrl = out.thumbDataUrl;
-        } catch {
-          /* ignore: se queda LQ */
-        }
-      }
-    });
-    await Promise.all(workers);
   }
 
   /** Prioriza destinations_get (payload pequeño); get_initial_state a veces falla el parse en Qt. */
@@ -2150,12 +2092,9 @@
     requestAnimationFrame(apply);
   }
 
-  const openDestPreview = async (path: string) => {
+  const openDestPreview = (path: string) => {
     previewDestPath = path;
-    previewSelectedPaths = [];
-    previewSelectionMode = false;
     previewOpen = true;
-    await refreshDestPreview();
   };
 
   $: {
@@ -2164,68 +2103,8 @@
     keepRoutePathEndVisible();
   }
 
-  const refreshDestPreview = async () => {
-    const w = Math.max(320, Math.round(window.innerWidth * DEST_MODAL_FRAC));
-    const out = await bridge.destinationPreview(previewDestPath, thumbScale, w);
-    previewItems = out.items;
-    previewThumbHydrationToken++;
-    void hydratePreviewThumbsHq(previewItems, thumbScale, previewThumbHydrationToken);
-    const valid = new Set(out.items.map((x: { path: string }) => x.path));
-    previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
-  };
-
-  function togglePreviewPick(path: string) {
-    const has = previewSelectedPaths.includes(path);
-    previewSelectedPaths = has
-      ? previewSelectedPaths.filter((p) => p !== path)
-      : [...previewSelectedPaths, path];
-  }
-
-  function applyPreviewRangeSelection(fromPath: string, toPath: string, mode: "select" | "deselect") {
-    const a = previewItems.findIndex((x) => x.path === fromPath);
-    const b = previewItems.findIndex((x) => x.path === toPath);
-    if (a < 0 || b < 0) return;
-    const lo = Math.min(a, b);
-    const hi = Math.max(a, b);
-    const draft = new Set(previewRangeBaseSelectedPaths);
-    for (let i = lo; i <= hi; i++) {
-      const p = previewItems[i]?.path;
-      if (!p) continue;
-      if (mode === "select") draft.add(p);
-      else draft.delete(p);
-    }
-    previewSelectedPaths = [...draft];
-  }
-
-  function selectAllPreviewItems() {
-    previewSelectedPaths = previewItems.map((x) => x.path);
-  }
-
-  function clearPreviewSelection() {
-    previewSelectedPaths = [];
-  }
-
-  function invertPreviewSelection() {
-    const cur = new Set(previewSelectedPaths);
-    previewSelectedPaths = previewItems
-      .map((x) => x.path)
-      .filter((p) => !cur.has(p));
-  }
-
-  function enterPreviewSelectionMode(path?: string) {
-    previewSelectionMode = true;
-    if (path && !previewSelectedPaths.includes(path)) {
-      previewSelectedPaths = [...previewSelectedPaths, path];
-    }
-  }
-
-  function exitPreviewSelectionMode() {
-    previewSelectionMode = false;
-    previewSelectedPaths = [];
-  }
-
-  async function movePreviewSelectionToCurrentRoute() {
-    if (previewSelectedPaths.length === 0) {
+  async function movePreviewPathsToCurrentRoute(paths: string[]) {
+    if (paths.length === 0) {
       status = t("status.selectModalFirst");
       return;
     }
@@ -2233,8 +2112,10 @@
       status = t("status.loadFolderForDrop");
       return;
     }
+    destPreviewModal?.removePaths(paths);
+    destPreviewModal?.clearSelectedPaths();
     try {
-      const out = await trackLoad(bridge.destinationMoveFromPreview(previewSelectedPaths));
+      const out = await trackLoad(bridge.destinationMoveFromPreview(paths));
       setGalleryState(out.state ?? getGalleryState());
       mergeGalleryItemsFromApi(out.items ?? getGalleryItems(), out.state);
       void afterGalleryDataLoaded();
@@ -2243,24 +2124,27 @@
       status =
         t("status.previewMoved").replace("{moved}", String(moved)) +
         (errors ? t("status.previewMovedErrors").replace("{errors}", String(errors)) : "");
-      previewSelectedPaths = [];
-      await refreshDestPreview();
+      if (errors > 0 || moved < paths.length) destPreviewModal?.reloadPreview();
     } catch (e: unknown) {
+      destPreviewModal?.reloadPreview();
       status = e instanceof Error ? e.message : t("status.previewMoveError");
     }
   }
 
-  async function deletePreviewSelectedItems() {
-    if (previewSelectedPaths.length === 0) return;
-    const deleting = [...previewSelectedPaths];
-    const delSet = new Set(deleting);
-    previewItems = previewItems.filter((x) => !delSet.has(x.path));
-    previewSelectedPaths = [];
-    const snapshot = createGalleryMoveJobSnapshot(deleting);
+  async function deleteDestPreviewPaths(paths: string[]) {
+    if (paths.length === 0) return;
+    destPreviewModal?.removePaths(paths);
+    destPreviewModal?.clearSelectedPaths();
+    const snapshot = createGalleryMoveJobSnapshot(paths);
     await applyOptimisticGalleryRemove(snapshot);
     galleryDeleteQueue = [...galleryDeleteQueue, snapshot];
-    status = t("status.deleteQueued").replace("{n}", String(deleting.length));
+    status = t("status.deleteQueued").replace("{n}", String(paths.length));
     if (!galleryDeleteWorkerRunning) void processDeleteQueue();
+  }
+
+  async function deletePreviewSelectedItems() {
+    const paths = destPreviewModal?.getSelectedPaths() ?? [];
+    await deleteDestPreviewPaths(paths);
   }
 
   function enqueueDeletePaths(paths: string[]) {
@@ -2292,11 +2176,6 @@
             await reconcileGalleryMoveSuccess(out);
           }
           resetGalleryInteractionLocks();
-          if (previewOpen) {
-            const valid = new Set(getGalleryItems().filter((x) => isGalleryMediaKind(x.kind)).map((x) => x.path));
-            previewItems = previewItems.filter((x) => valid.has(x.path));
-            previewSelectedPaths = previewSelectedPaths.filter((p) => valid.has(p));
-          }
           status = t("status.deleteBatchLine")
             .replace("{deleted}", String(deleted))
             .replace("{errPart}", errors ? t("status.deleteErrorsPart").replace("{errors}", String(errors)) : "")
@@ -2304,6 +2183,7 @@
         } catch (e: unknown) {
           if (!isGalleryNavigationCurrent(job.navGen)) continue;
           await rollbackOptimisticGalleryMutation(job);
+          if (previewOpen) destPreviewModal?.reloadPreview();
           status = e instanceof Error ? e.message : t("status.deleteQueueError");
         }
       }
@@ -2487,109 +2367,6 @@
   function applyGalleryRefreshFromMove(out: GalleryMutationResponse) {
     void applyGalleryItemsDelta(out);
   }
-
-  function startPreviewLongPress(path: string) {
-    if (previewLongPressTimer) clearTimeout(previewLongPressTimer);
-    previewLongPressPath = path;
-    previewLongPressTriggered = false;
-    previewLongPressTimer = setTimeout(() => {
-      previewLongPressTriggered = true;
-      enterPreviewSelectionMode(path);
-    }, 380);
-  }
-
-  function cancelPreviewLongPress() {
-    if (previewLongPressTimer) clearTimeout(previewLongPressTimer);
-    previewLongPressTimer = null;
-    previewLongPressPath = null;
-  }
-
-  function endPreviewRangeSelection() {
-    if (!previewRangeSelecting) return;
-    previewRangeSelecting = false;
-    previewRangeAnchorPath = null;
-    previewRangeBaseSelectedPaths = [];
-    // Evita el click "fantasma" al soltar tras arrastre de selección.
-    previewSuppressClick = true;
-    setTimeout(() => {
-      previewSuppressClick = false;
-    }, 0);
-  }
-
-  function onPreviewTilePointerDown(
-    e: PointerEvent,
-    it: { path: string; name: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }
-  ) {
-    if (!previewSelectionMode) {
-      startPreviewLongPress(it.path);
-      return;
-    }
-    // Con Ctrl sostenido priorizamos arrastre, no rango de selección.
-    if (e.ctrlKey) return;
-    e.preventDefault();
-    cancelPreviewLongPress();
-    previewRangeSelecting = true;
-    previewRangeAnchorPath = it.path;
-    previewRangeBaseSelectedPaths = [...previewSelectedPaths];
-    previewRangeMode = previewSelectedPaths.includes(it.path) ? "deselect" : "select";
-    applyPreviewRangeSelection(it.path, it.path, previewRangeMode);
-  }
-
-  function onPreviewTilePointerEnter(path: string) {
-    if (!previewSelectionMode || !previewRangeSelecting || !previewRangeAnchorPath) return;
-    applyPreviewRangeSelection(previewRangeAnchorPath, path, previewRangeMode);
-  }
-
-  function onPreviewRangePointerMove(e: PointerEvent) {
-    if (!previewSelectionMode || !previewRangeSelecting || !previewRangeAnchorPath) return;
-    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-    const tile = el?.closest?.(".tile[data-preview-path]") as HTMLElement | null;
-    const path = tile?.dataset?.previewPath;
-    if (!path) return;
-    applyPreviewRangeSelection(previewRangeAnchorPath, path, previewRangeMode);
-  }
-
-  function onPreviewTileClick(e: MouseEvent, it: { path: string; name: string; thumbDataUrl?: string | null }) {
-    if (e.ctrlKey) return;
-    if (previewSuppressClick) return;
-    if (previewLongPressTriggered && previewLongPressPath === it.path) {
-      previewLongPressTriggered = false;
-      previewLongPressPath = null;
-      return;
-    }
-    if (previewSelectionMode) {
-      togglePreviewPick(it.path);
-      return;
-    }
-    openPreviewZoom(it, { navItems: previewItems });
-  }
-
-  function onPreviewTileDragStart(e: DragEvent, it: { path: string }) {
-    if (!previewSelectionMode) {
-      e.preventDefault();
-      return;
-    }
-    // Mantener el mismo patrón que en galería: arrastre solo con Ctrl sostenido.
-    if (!(e as DragEvent).ctrlKey) {
-      e.preventDefault();
-      status = t("status.ctrlDragHint");
-      return;
-    }
-    if (!previewSelectedPaths.includes(it.path)) {
-      previewSelectedPaths = [...previewSelectedPaths, it.path];
-    }
-    previewDragActive = true;
-    const dt = e.dataTransfer;
-    if (!dt) return;
-    dt.effectAllowed = "move";
-    dt.setData("application/x-om-preview-paths", JSON.stringify(previewSelectedPaths));
-    dt.setData("text/plain", previewSelectedPaths[0] ?? it.path);
-  }
-
-  function onPreviewTileDragEnd() {
-    previewDragActive = false;
-  }
-
 
   function getZoomStageSize(): { w: number; h: number } | null {
     if (!zoomStageEl) return null;
@@ -3327,6 +3104,16 @@
     thumbDataUrl?: string | null;
     submenuLeft: boolean;
   } | null = null;
+  /** Menú contextual en vista previa de carpeta destino. */
+  let destPreviewCtxMenu: {
+    x: number;
+    y: number;
+    paths: string[];
+    primaryPath: string;
+    primaryName: string;
+    thumbDataUrl?: string | null;
+    submenuLeft: boolean;
+  } | null = null;
   let renameModalOpen = false;
   let renameModalPath = "";
   let renameModalKind: "file" | "folder" = "file";
@@ -3509,6 +3296,21 @@
 
   function closeGalleryItemCtxMenu() {
     galleryItemCtxMenu = null;
+    resetMoveFlyoutState();
+  }
+
+  function closeDestPreviewCtxMenu() {
+    destPreviewCtxMenu = null;
+    resetMoveFlyoutState();
+  }
+
+  function onMoveDestRootEnter() {
+    cancelMoveMenuClose();
+    moveRootHovered.set(true);
+  }
+
+  function onMoveDestRootLeave(e: PointerEvent) {
+    onMoveRootPointerLeave(e);
   }
 
   function formatFileSizeBytes(n: number): string {
@@ -3547,6 +3349,7 @@
     const submenuLeft = it.kind !== "folder" && x + menuW + submenuW > window.innerWidth - pad;
     closeDestCtxMenu();
     closePinnedCtxMenu();
+    closeDestPreviewCtxMenu();
     galleryItemCtxMenu = {
       x,
       y,
@@ -3556,6 +3359,134 @@
       thumbDataUrl: it.thumbDataUrl ?? null,
       submenuLeft,
     };
+  }
+
+  function onDestPreviewItemContextMenu(
+    e: CustomEvent<{ item: { path: string; name: string; thumbDataUrl?: string | null }; clientX: number; clientY: number }>
+  ) {
+    const { item, clientX, clientY } = e.detail;
+    const selected = destPreviewModal?.getSelectedPaths() ?? [];
+    const paths =
+      selected.length > 0 && selected.includes(item.path) ? [...selected] : [item.path];
+    const pad = 8;
+    const menuW = 220;
+    const submenuW = 200;
+    const menuH = 360;
+    let x = clientX;
+    let y = clientY;
+    x = Math.min(x, window.innerWidth - menuW - pad);
+    y = Math.min(y, window.innerHeight - menuH - pad);
+    x = Math.max(pad, x);
+    y = Math.max(pad, y);
+    const submenuLeft = x + menuW + submenuW > window.innerWidth - pad;
+    closeGalleryItemCtxMenu();
+    closeDestCtxMenu();
+    closePinnedCtxMenu();
+    destPreviewCtxMenu = {
+      x,
+      y,
+      paths,
+      primaryPath: item.path,
+      primaryName: item.name,
+      thumbDataUrl: item.thumbDataUrl ?? null,
+      submenuLeft,
+    };
+  }
+
+  async function copyDestPreviewCtxPath() {
+    if (!destPreviewCtxMenu) return;
+    const text = destPreviewCtxMenu.paths.join("\n");
+    const ok = await copyTextToClipboard(text);
+    status = ok ? t("contextGallery.copyPathOk") : t("contextGallery.copyError");
+    closeDestPreviewCtxMenu();
+  }
+
+  async function copyDestPreviewCtxFullImage() {
+    if (!destPreviewCtxMenu) return;
+    const path = destPreviewCtxMenu.primaryPath;
+    status = t("load.loading");
+    try {
+      const res = await bridge.galleryCopyToClipboard(path);
+      status = res.ok ? t("contextGallery.copyThumbOk") : res.error || t("contextGallery.copyError");
+    } catch {
+      status = t("contextGallery.copyError");
+    }
+    closeDestPreviewCtxMenu();
+  }
+
+  async function moveDestPreviewCtxToRoute() {
+    if (!destPreviewCtxMenu) return;
+    const paths = [...destPreviewCtxMenu.paths];
+    closeDestPreviewCtxMenu();
+    await movePreviewPathsToCurrentRoute(paths);
+  }
+
+  async function moveDestPreviewCtxToDest(destPath: string) {
+    if (!destPreviewCtxMenu) return;
+    const paths = [...destPreviewCtxMenu.paths];
+    closeDestPreviewCtxMenu();
+    destPreviewModal?.removePaths(paths);
+    destPreviewModal?.clearSelectedPaths();
+    try {
+      const out = await trackLoad(bridge.destinationMovePaths(paths, destPath));
+      const moved = Number(out.moveResult?.moved ?? 0);
+      const errors = Number(out.moveResult?.errors ?? 0);
+      status =
+        t("contextDestPreview.movedOk").replace("{moved}", String(moved)) +
+        (errors ? t("status.previewMovedErrors").replace("{errors}", String(errors)) : "");
+      if (errors > 0 || moved < paths.length) destPreviewModal?.reloadPreview();
+    } catch (e: unknown) {
+      destPreviewModal?.reloadPreview();
+      status = e instanceof Error ? e.message : t("contextGallery.moveFailed");
+    }
+  }
+
+  function openRenameFromDestPreviewCtx() {
+    if (!destPreviewCtxMenu || destPreviewCtxMenu.paths.length !== 1) return;
+    renameModalPath = destPreviewCtxMenu.primaryPath;
+    renameModalKind = "file";
+    renameModalDraft = destPreviewCtxMenu.primaryName;
+    renameModalTitle = t("contextGallery.renameFileTitle");
+    closeDestPreviewCtxMenu();
+    renameModalOpen = true;
+  }
+
+  async function openDestPreviewFileInfoFromCtx() {
+    if (!destPreviewCtxMenu || destPreviewCtxMenu.paths.length !== 1) return;
+    const path = destPreviewCtxMenu.primaryPath;
+    closeDestPreviewCtxMenu();
+    try {
+      const st = await trackLoad(bridge.galleryFileStat(path));
+      galleryFileInfoModal = {
+        path: String(st.path ?? path),
+        name: String(st.name ?? ""),
+        sizeBytes: Number(st.sizeBytes ?? 0),
+        mtimeIso: String(st.mtimeIso ?? ""),
+        mediaType: String(st.mediaType ?? "other"),
+        extension: String(st.extension ?? ""),
+        mimeType: String(st.mimeType ?? ""),
+      };
+    } catch {
+      status = t("contextGallery.propertiesError");
+    }
+  }
+
+  function askDeleteDestPreviewFromCtx() {
+    if (!destPreviewCtxMenu) return;
+    const paths = [...destPreviewCtxMenu.paths];
+    const primaryName = destPreviewCtxMenu.primaryName;
+    const count = paths.length;
+    closeDestPreviewCtxMenu();
+    openConfirmDelete(
+      count > 1 ? t("confirm.deleteSelectionTitle") : t("contextGallery.deleteTitle"),
+      count > 1
+        ? t("confirm.deleteSelectionDetail").replace("{count}", String(count))
+        : t("confirm.deleteFileDetail").replace("{name}", primaryName),
+      async () => {
+        await deleteDestPreviewPaths(paths);
+      },
+      { confirmLabel: t("contextGallery.confirmDeleteBtn") }
+    );
   }
 
   function openRenameFromCtx() {
@@ -3595,6 +3526,9 @@
         );
       }
       status = t("contextGallery.renameOk");
+      if (previewOpen && newPath) {
+        destPreviewModal?.updateItemPath(path, newPath, finalName);
+      }
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("contextGallery.renameError");
     } finally {
@@ -3927,15 +3861,6 @@
 </script>
 
 <svelte:window
-  on:pointermove={(e) => {
-    onPreviewRangePointerMove(e);
-  }}
-  on:pointerup={() => {
-    endPreviewRangeSelection();
-  }}
-  on:pointercancel={() => {
-    endPreviewRangeSelection();
-  }}
   on:keydown={(e) => {
     if (confirmDeleteOpen) {
       if (e.key === "Enter") {
@@ -3972,6 +3897,15 @@
       }
       return;
     }
+    if (destPreviewCtxMenu) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDestPreviewCtxMenu();
+        return;
+      }
+      return;
+    }
     if (galleryFileInfoModal) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -4003,9 +3937,8 @@
         previewZoomDestMode = !previewZoomDestMode;
         status = previewZoomDestMode ? t("status.editionOnFs") : t("status.editionOffFs");
       } else if (previewOpen) {
-        previewSelectionMode = !previewSelectionMode;
-        if (!previewSelectionMode) previewSelectedPaths = [];
-        status = previewSelectionMode ? t("status.selectionOnPreview") : t("status.selectionOffPreview");
+        destPreviewModal?.clearSelectedPaths();
+        status = t("status.selectionCleared");
       } else {
         const nextMode = !destinationsMode;
         void toggleDestinationsModePreserveScroll();
@@ -4076,7 +4009,8 @@
       return;
     }
     if (!isTypingEl && shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.deleteAction)) {
-      const hasPreviewSelectionForDelete = previewOpen && previewSelectedPaths.length > 0;
+      const previewSelCount = previewOpen ? (destPreviewModal?.getSelectedPaths()?.length ?? 0) : 0;
+      const hasPreviewSelectionForDelete = previewOpen && previewSelCount > 0;
       const hasGallerySelectionForDelete =
         Number(getGalleryState()?.selectedCount ?? 0) > 0 ||
         getGalleryItems().some((x) => isGallerySelectableKind(x.kind) && Boolean(x.selected));
@@ -4089,7 +4023,7 @@
         e.preventDefault();
         openConfirmDelete(
           t("confirm.deleteSelectionTitle"),
-          t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelectedPaths.length)),
+          t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelCount)),
           deletePreviewSelectedItems
         );
         return;
@@ -4105,16 +4039,15 @@
       }
     }
     if (!shortcutMatchesSingle(e as KeyboardEvent, keyboardShortcuts.escape)) return;
-    const hasPreviewSelection = previewSelectedPaths.length > 0 || previewRangeSelecting;
+    const previewSelCount = previewOpen ? (destPreviewModal?.getSelectedPaths()?.length ?? 0) : 0;
+    const hasPreviewSelection = previewOpen && previewSelCount > 0;
     const hasGallerySelection =
       Number(getGalleryState()?.selectedCount ?? 0) > 0 ||
         getGalleryItems().some((x) => isGallerySelectableKind(x.kind) && Boolean(x.selected));
     if (hasPreviewSelection || hasGallerySelection) {
       e.preventDefault();
       if (hasPreviewSelection) {
-        endPreviewRangeSelection();
-        previewSelectedPaths = [];
-        previewSelectionMode = false;
+        destPreviewModal?.clearSelectedPaths();
       }
       if (hasGallerySelection) {
         void clearSelection();
@@ -4124,6 +4057,7 @@
     }
     if (pinnedCtxMenu) closePinnedCtxMenu();
     else if (galleryItemCtxMenu) closeGalleryItemCtxMenu();
+    else if (destPreviewCtxMenu) closeDestPreviewCtxMenu();
     else if (renameModalOpen) closeRenameModal();
     else if (galleryFileInfoModal) galleryFileInfoModal = null;
     else if (destCtxMenu) closeDestCtxMenu();
@@ -4368,118 +4302,28 @@
   />
 
   {#if previewOpen}
-    <div
-      class="overlay"
-      role="button"
-      tabindex="-1"
-      aria-label={t("preview.closeDestAria")}
-      on:dragover|preventDefault
-      on:drop={(e) => {
-        const t = e.target as HTMLElement | null;
-        if (t?.closest(".modal--dest")) return;
-        const raw = e.dataTransfer?.getData("application/x-om-preview-paths") ?? "";
-        if (!raw) return;
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            previewSelectedPaths = parsed.map((x) => String(x)).filter((x) => x.trim().length > 0);
-          }
-        } catch {
-          // Mantener selección actual si no se pudo parsear.
-        }
-        previewDragActive = false;
-        void movePreviewSelectionToCurrentRoute();
-      }}
-      on:click={() => (previewOpen = false)}
-      on:keydown={(e) => {
-        if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          previewOpen = false;
-        }
-      }}
-    >
-      <div
-        class="modal modal--dest om-panel om-panel--lift"
-        role="dialog"
-        tabindex="-1"
-        aria-modal="true"
-        aria-labelledby="dest-preview-title"
-        on:click|stopPropagation
-        on:keydown={(e) => e.stopPropagation()}
-      >
-        <header class="modal__head">
-          <strong id="dest-preview-title">{previewDestPath}</strong>
-          <div class="modal__head-actions">
-            <div class="selection-float preview-selection-float" role="toolbar" aria-label={t("selection.previewToolbarAria")}>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--mini"
-                on:click={() => (previewSelectionMode ? exitPreviewSelectionMode() : (previewSelectionMode = true))}
-                title={previewSelectionMode ? t("selection.deactivateMode") : t("selection.activateMode")}
-              >{previewSelectionMode ? t("selection.deactivate") : t("selection.activate")}</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectAllPreviewItems}
-                >{t("selection.selectAll")}</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearPreviewSelection}
-                >{t("selection.clearSelection")}</button>
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--mini"
-                disabled={previewSelectedPaths.length === 0}
-                on:click={() =>
-                  openConfirmDelete(
-                    t("confirm.deleteSelectionTitle"),
-                    t("confirm.deleteSelectionDetail").replace("{count}", String(previewSelectedPaths.length)),
-                    deletePreviewSelectedItems
-                  )}
-              >{t("selection.delete")}</button>
-              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={invertPreviewSelection}
-                >{t("selection.invert")}</button>
-              <span class="selection-float__count" title={t("selection.selectedTitle")}>{previewSelectedPaths.length}</span>
-            </div>
-            <button
-              type="button"
-              class="om-btn om-btn--ghost om-btn--close"
-              aria-label={t("common.closeModalAria")}
-              title={t("common.close")}
-              on:click={() => (previewOpen = false)}>✕</button
-            >
-          </div>
-        </header>
-        <div class="modal__scroll">
-          <section class="grid" style={`--cell:${gridCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}>
-            {#each previewItems as it}
-              <div
-                class="tile"
-                data-preview-path={it.path}
-                class:selected={previewSelectedPaths.includes(it.path)}
-                role="button"
-                tabindex="0"
-                draggable={previewSelectionMode}
-                on:pointerdown={(e) => onPreviewTilePointerDown(e, it)}
-                on:pointerenter={() => onPreviewTilePointerEnter(it.path)}
-                on:pointerup={cancelPreviewLongPress}
-                on:pointerleave={cancelPreviewLongPress}
-                on:pointercancel={cancelPreviewLongPress}
-                on:dragstart={(e) => onPreviewTileDragStart(e, it)}
-                on:dragend={onPreviewTileDragEnd}
-                on:click={(e) => onPreviewTileClick(e, it)}
-                on:keydown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onPreviewTileClick(e as unknown as MouseEvent, it);
-                  }
-                }}
-              >
-                {#if it.thumbDataUrl}
-                  <img src={it.thumbDataUrl} alt="" class:thumb--lq={it.thumbQuality === "lq"} draggable={false} />
-                {/if}
-                {#if showThumbLabels}<span class="tile__name">{it.name}</span>{/if}
-              </div>
-            {/each}
-          </section>
-        </div>
-      </div>
-    </div>
+    <DestPreviewModal
+      bind:this={destPreviewModal}
+      bind:open={previewOpen}
+      destPath={previewDestPath}
+      {thumbScale}
+      {thumbGapPx}
+      {showThumbLabels}
+      {gridCellPx}
+      on:close={() => (previewOpen = false)}
+      on:zoom={(e) => openPreviewZoom(e.detail.item, { navItems: e.detail.navItems })}
+      on:deleteSelected={() =>
+        openConfirmDelete(
+          t("confirm.deleteSelectionTitle"),
+          t("confirm.deleteSelectionDetail").replace(
+            "{count}",
+            String(destPreviewModal?.getSelectedPaths()?.length ?? 0)
+          ),
+          deletePreviewSelectedItems
+        )}
+      on:dropToRoute={(e) => void movePreviewPathsToCurrentRoute(e.detail.paths)}
+      on:contextmenu={onDestPreviewItemContextMenu}
+    />
   {/if}
 
   
@@ -4625,33 +4469,39 @@
         on:click={() => void copyGalleryCtxFullImage()}
         >{t("contextGallery.copyThumb")}</button
       >
-      <div class="ctx-menu__submenu-wrap ctx-menu__submenu-wrap--expand">
+      <div
+        class="ctx-menu__submenu-wrap"
+        class:ctx-menu__submenu-wrap--left={galleryItemCtxMenu.submenuLeft}
+        class:ctx-menu__submenu-wrap--open={$moveDestPanelOpen}
+        on:pointerenter={onMoveDestRootEnter}
+        on:pointerleave={onMoveDestRootLeave}
+      >
         <button
           type="button"
           class="dest-ctx-menu__item ctx-menu__submenu-trigger"
           role="menuitem"
           aria-haspopup="true"
           aria-expanded="false"
-          disabled={destFlatList.length === 0}
-          title={destFlatList.length === 0 ? t("contextGallery.noDestinations") : undefined}
+          disabled={!destTreeHasTargets}
+          title={!destTreeHasTargets ? t("contextGallery.noDestinations") : undefined}
         >
           <span>{t("contextGallery.moveTo")}</span>
-          <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">▾</span>
+          <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">{galleryItemCtxMenu.submenuLeft ? "◂" : "▸"}</span>
         </button>
-        <div class="ctx-menu__submenu ctx-menu__submenu--expand om-panel om-panel--lift" role="menu" aria-label={t("contextGallery.moveTo")}>
-          {#if destFlatList.length === 0}
+        <div
+          class="ctx-menu__submenu ctx-menu__submenu--dest-tree om-panel om-panel--lift"
+          role="menu"
+          aria-label={t("contextGallery.moveTo")}
+        >
+          {#if !destTreeHasTargets}
             <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
           {:else}
-            {#each destFlatList as d, di (d.path + "\0gctx\0" + di)}
-              <button
-                type="button"
-                class="dest-ctx-menu__item"
-                role="menuitem"
-                title={d.path}
-                on:click={() => void moveGalleryItemFromCtxTo(d.path)}
-                >{d.label}</button
-              >
-            {/each}
+            <div class="dest-move-tree__scroll">
+              <DestMoveCtxTree
+                nodes={destTree}
+                onPick={(p) => void moveGalleryItemFromCtxTo(p)}
+              />
+            </div>
           {/if}
         </div>
       </div>
@@ -4678,6 +4528,119 @@
       >
       {/if}
     </div>
+  {/if}
+
+  {#if destPreviewCtxMenu}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="ctx-menu-backdrop" role="presentation" on:click={closeDestPreviewCtxMenu}></div>
+    <!-- svelte-ignore a11y-interactive-supports-focus -->
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div
+      class="dest-ctx-menu gallery-item-ctx-menu om-panel om-panel--lift"
+      role="menu"
+      tabindex="-1"
+      aria-label={t("menus.destPreviewFileAria")}
+      style={`left:${destPreviewCtxMenu.x}px;top:${destPreviewCtxMenu.y}px`}
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+    >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyDestPreviewCtxPath()}
+        >{t("contextGallery.copyPath")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={destPreviewCtxMenu.paths.length !== 1 ||
+          !destPreviewCtxMenu.thumbDataUrl ||
+          !String(destPreviewCtxMenu.thumbDataUrl).startsWith("data:")}
+        on:click={() => void copyDestPreviewCtxFullImage()}
+        >{t("contextGallery.copyThumb")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={!folder.trim()}
+        title={!folder.trim() ? t("contextDestPreview.moveToRouteDisabled") : undefined}
+        on:click={() => void moveDestPreviewCtxToRoute()}
+        >{t("contextDestPreview.moveToRoute")}{destPreviewCtxMenu.paths.length > 1
+          ? ` (${destPreviewCtxMenu.paths.length})`
+          : ""}</button
+      >
+      <div
+        class="ctx-menu__submenu-wrap"
+        class:ctx-menu__submenu-wrap--left={destPreviewCtxMenu.submenuLeft}
+        class:ctx-menu__submenu-wrap--open={$moveDestPanelOpen}
+        on:pointerenter={onMoveDestRootEnter}
+        on:pointerleave={onMoveDestRootLeave}
+      >
+        <button
+          type="button"
+          class="dest-ctx-menu__item ctx-menu__submenu-trigger"
+          role="menuitem"
+          aria-haspopup="true"
+          aria-expanded="false"
+          disabled={!destTreeHasTargets}
+          title={!destTreeHasTargets ? t("contextGallery.noDestinations") : undefined}
+        >
+          <span>{t("contextGallery.moveTo")}{destPreviewCtxMenu.paths.length > 1
+            ? ` (${destPreviewCtxMenu.paths.length})`
+            : ""}</span>
+          <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">{destPreviewCtxMenu.submenuLeft ? "◂" : "▸"}</span>
+        </button>
+        <div
+          class="ctx-menu__submenu ctx-menu__submenu--dest-tree om-panel om-panel--lift"
+          role="menu"
+          aria-label={t("contextGallery.moveTo")}
+        >
+          {#if !destTreeHasTargets}
+            <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
+          {:else}
+            <div class="dest-move-tree__scroll">
+              <DestMoveCtxTree
+                nodes={destTree}
+                excludePath={previewDestPath}
+                onPick={(p) => void moveDestPreviewCtxToDest(p)}
+              />
+            </div>
+          {/if}
+        </div>
+      </div>
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={destPreviewCtxMenu.paths.length !== 1}
+        on:click={openRenameFromDestPreviewCtx}
+        >{t("contextGallery.rename")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item"
+        role="menuitem"
+        disabled={destPreviewCtxMenu.paths.length !== 1}
+        on:click={() => void openDestPreviewFileInfoFromCtx()}
+        >{t("contextGallery.properties")}</button
+      >
+      <button
+        type="button"
+        class="dest-ctx-menu__item dest-ctx-menu__item--danger"
+        role="menuitem"
+        on:click={askDeleteDestPreviewFromCtx}
+        >{t("contextGallery.delete")}{destPreviewCtxMenu.paths.length > 1
+          ? ` (${destPreviewCtxMenu.paths.length})`
+          : ""}</button
+      >
+    </div>
+  {/if}
+
+  {#if galleryItemCtxMenu || destPreviewCtxMenu}
+    <DestMoveFlyoutPortals
+      excludePath={destPreviewCtxMenu ? previewDestPath : ""}
+      onPick={(p) =>
+        destPreviewCtxMenu ? void moveDestPreviewCtxToDest(p) : void moveGalleryItemFromCtxTo(p)}
+    />
   {/if}
 
   {#if renameModalOpen}

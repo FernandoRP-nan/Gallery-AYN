@@ -240,23 +240,50 @@ class DestinationsBridgeMixin:
         return data
 
     def destination_preview(self, dest_path: str, scale: float, width: int) -> dict:
+        """Lista archivos del destino sin generar miniaturas (rápido; LQ/HQ las pide el cliente)."""
         folder = Path(dest_path).expanduser().resolve()
         paths = scan_images_flat(folder) if folder.is_dir() else []
         thumb = _thumb_px_from_dest_scale(float(scale))
         cols = max(2, min(10, int(max(400, width) // (thumb + 34))))
-        items = []
-        for p in paths:
-            items.append(
-                {
-                    "name": p.name,
-                    "path": str(p),
-                    "thumbDataUrl": _dest_thumb_jpeg_data_url_contain(
-                        p, max(48, int(thumb * 0.55)), quality=40
-                    ),
-                    "thumbQuality": "lq",
-                }
-            )
-        return {"items": items, "cols": cols}
+        items = [
+            {"name": p.name, "path": str(p), "thumbDataUrl": None, "thumbQuality": "lq"}
+            for p in paths
+        ]
+        return {"items": items, "cols": cols, "total": len(items)}
+
+    def destination_preview_thumbs(
+        self, paths: list[str], scale: float, profile: str = "lq"
+    ) -> dict:
+        """Miniaturas por lote (paralelo) para vista previa de destino."""
+        thumb = _thumb_px_from_dest_scale(float(scale))
+        is_lq = str(profile).lower() != "hq"
+        size = max(48, int(thumb * 0.55)) if is_lq else int(round(thumb * 1.35))
+        quality = 40 if is_lq else 96
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for raw in paths or []:
+            s = str(raw).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            unique.append(s)
+        if not unique:
+            return {"items": []}
+
+        def _one(raw_path: str) -> dict:
+            p = Path(raw_path).expanduser().resolve()
+            data = _dest_thumb_jpeg_data_url_contain(p, size, quality=quality)
+            return {
+                "path": str(p),
+                "thumbDataUrl": data,
+                "thumbQuality": "lq" if is_lq else "hq",
+            }
+
+        max_w = min(8, max(1, len(unique)))
+        with ThreadPoolExecutor(max_workers=max_w) as pool:
+            rows = list(pool.map(_one, unique))
+        return {"items": rows}
 
     def destination_thumb_hq(self, path: str, scale: float) -> dict:
         p = Path(path).expanduser().resolve()

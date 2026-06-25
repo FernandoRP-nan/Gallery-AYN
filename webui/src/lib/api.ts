@@ -174,7 +174,8 @@ const devMockApi: WebApi = {
   gallery_image_rotate: async () => mockGalleryPayload(),
   gallery_image_crop_normalized: async () => mockGalleryPayload(),
   gallery_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
-  destination_preview: async () => ({ items: [], cols: 4 }),
+  destination_preview: async () => ({ items: [], cols: 4, total: 0 }),
+  destination_preview_thumbs: async () => ({ items: [] }),
   destination_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),
   destinations_add: async () => ({ destinations: [], toolbarFolderId: "" }),
   destinations_edit: async () => ({ destinations: [], toolbarFolderId: "" }),
@@ -274,6 +275,8 @@ export const bridge = {
   galleryThumbHq: (path: string, scale: number) => call<any>("gallery_thumb_hq", path, scale),
   destinationPreview: (path: string, scale: number, width: number) =>
     call<any>("destination_preview", path, scale, width),
+  destinationPreviewThumbs: (paths: string[], scale: number, profile: "lq" | "hq" = "lq") =>
+    call<any>("destination_preview_thumbs", paths, scale, profile),
   destinationThumbHq: (path: string, scale: number) => call<any>("destination_thumb_hq", path, scale),
   destinationsAdd: (label: string, path: string, parentId = "") =>
     call<any>("destinations_add", label, path, parentId),

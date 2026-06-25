@@ -69,6 +69,7 @@ export const es = {
     pinnedAria: "Acciones del marcador",
     galleryFileAria: "Menú de archivo",
     galleryFolderAria: "Menú de carpeta",
+    destPreviewFileAria: "Menú de archivo en vista previa",
     viewFolder: "Ver carpeta",
     edit: "Editar…",
     delete: "Eliminar",
@@ -77,6 +78,16 @@ export const es = {
   load: {
     loading: "Cargando…",
     openingFolder: "Abriendo carpeta…",
+  },
+  destPreview: {
+    loading: "Cargando lista…",
+    empty: "Esta carpeta no tiene imágenes.",
+    loadError: "No se pudo cargar la vista previa.",
+  },
+  contextDestPreview: {
+    moveToRoute: "Mover a ruta actual",
+    moveToRouteDisabled: "Carga una carpeta en Ruta para recibir los archivos",
+    movedOk: "Movidos {moved} a carpeta destino",
   },
   selection: {
     toolbarGalleryAria: "Selección",

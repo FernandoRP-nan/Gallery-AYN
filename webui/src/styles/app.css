@@ -1243,6 +1243,13 @@
     gap: 2px;
   }
 
+.ctx-menu__submenu.ctx-menu__submenu--expand {
+    position: static;
+    left: auto;
+    right: auto;
+    top: auto;
+  }
+
 .ctx-menu__submenu--expand {
     position: static;
     left: auto;
@@ -1254,7 +1261,7 @@
     min-width: 100%;
     max-width: 100%;
     max-height: min(42vh, 260px);
-    overflow-x: hidden;
+    overflow-x: visible;
     overflow-y: auto;
     padding: var(--om-space-1);
     margin-top: 1px;
@@ -1295,14 +1302,14 @@
     min-width: 10rem;
     max-width: 14rem;
     max-height: min(50vh, 280px);
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: visible;
     padding: var(--om-space-2);
     box-sizing: border-box;
   }
 
 .ctx-menu__submenu-wrap:hover .ctx-menu__submenu,
-.ctx-menu__submenu-wrap:focus-within .ctx-menu__submenu {
+.ctx-menu__submenu-wrap:focus-within .ctx-menu__submenu,
+.ctx-menu__submenu-wrap--open > .ctx-menu__submenu {
     display: flex;
   }
 
@@ -1310,6 +1317,25 @@
     left: auto;
     right: calc(100% + 2px);
 }
+
+/* Panel lateral «Mover a destino»: no tapa el resto del menú contextual. */
+.ctx-menu__submenu--dest-tree {
+    overflow: visible;
+    padding: 0;
+    min-width: 11rem;
+    max-width: 15rem;
+  }
+
+.dest-move-tree__scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: min(50vh, 280px);
+    overflow-x: visible;
+    overflow-y: auto;
+    padding: var(--om-space-2);
+    box-sizing: border-box;
+  }
 
 .ctx-menu__submenu-empty {
     font-size: 0.6875rem;
