@@ -7,7 +7,8 @@ import {
   clearGalleryThumbHqCache,
 } from "./galleryThumbHqCache";
 import { getGalleryNavigationGeneration, isGalleryNavigationCurrent } from "./gallerySession";
-import { getGalleryItems } from "./galleryRuntime";
+import { getGalleryItems, updateGalleryItems } from "./galleryRuntime";
+import { stripHqFromGalleryItems } from "./galleryThumbHqCache";
 import { galleryScrolling } from "./galleryScrollState";
 
 /** True mientras corre la hidratación HQ (para estabilizar el chrome de la UI). */
@@ -208,4 +209,11 @@ galleryScrolling.subscribe((scrolling) => {
 
 export function disposeGalleryThumbs() {
   cancelPendingGalleryThumbFlush();
+}
+
+/** Re-solicita HQ (y LQ vía reload del caller) cuando cambia el tamaño en píxeles. */
+export async function refreshGalleryThumbsForScale(scale: number) {
+  const token = bumpGalleryThumbHydrationToken(true);
+  updateGalleryItems((items) => stripHqFromGalleryItems(items));
+  await hydrateGalleryThumbsHq(getGalleryItems(), scale, token);
 }

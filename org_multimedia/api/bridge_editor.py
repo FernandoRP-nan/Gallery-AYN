@@ -327,7 +327,7 @@ class EditorBridgeMixin:
             "name": p.name,
             "dataUrl": data_url,
             "mediaType": "image",
-            "fileUrl": None,
+            "fileUrl": build_media_file_url(p),
         }
 
     def gallery_file_base64(self, path: str) -> dict:

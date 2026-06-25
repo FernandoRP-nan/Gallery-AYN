@@ -33,7 +33,9 @@ export function pickPreviewPlaybackUrl(
   const direct = absolutizeMediaUrl(
     api.fileUrl ??
       current?.fileUrl ??
-      (mediaType === "video" || mediaType === "svg" ? buildMediaFileUrl(sourcePath ?? "") : null)
+      (mediaType === "video" || mediaType === "svg" || mediaType === "image"
+        ? buildMediaFileUrl(sourcePath ?? "")
+        : null)
   );
   if (mediaType === "video") {
     const needs = Boolean(api.needsTranscode ?? current?.needsTranscode);

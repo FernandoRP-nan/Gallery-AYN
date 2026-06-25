@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
   import type { DestToolbarItem } from '../lib/itemTree';
+  import { pickImageDisplaySrc } from '../lib/imageZoomView';
 
   // Bindings y estado
   export let previewZoomOpen: boolean;
@@ -68,6 +69,16 @@
   export let onDestChipDragEnd: () => void;
   export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
   export let openPreviewZoom: (it: any, opts: any) => void;
+
+  $: previewZoomImageSrc =
+    previewZoomMediaType === "image"
+      ? pickImageDisplaySrc(
+          previewZoomMode as "fit" | "fillWidth",
+          previewZoomScale,
+          previewZoomFileUrl,
+          previewZoomDataUrl
+        )
+      : null;
 </script>
 
 {#if previewZoomOpen}
@@ -200,7 +211,7 @@
         </div>
       </header>
       <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
-        {#if (previewZoomMediaType === "video" && previewZoomFileUrl) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomDataUrl}
+        {#if (previewZoomMediaType === "video" && previewZoomFileUrl) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
@@ -241,14 +252,14 @@
                 on:click={onZoomImageClick}
                 on:load={onZoomImageLoad}
               />
-            {:else if previewZoomDataUrl}
+            {:else if previewZoomImageSrc}
               <img
                 class="zoom-modal__img"
                 class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
                 class:zoom-modal__img--interacting={previewPanDrag}
                 bind:this={zoomImgEl}
-                src={previewZoomDataUrl}
+                src={previewZoomImageSrc}
                 alt={previewZoomName}
                 on:click={onZoomImageClick}
                 on:load={onZoomImageLoad}
@@ -257,7 +268,9 @@
             {#if zoomHudVisible && !previewPanDrag}
               <div class="zoom-mini" bind:this={zoomMiniEl}>
                 <img
-                  src={previewZoomMediaType === "svg" ? previewZoomFileUrl : previewZoomDataUrl}
+                  src={previewZoomMediaType === "svg"
+                    ? previewZoomFileUrl
+                    : previewZoomImageSrc ?? previewZoomDataUrl}
                   alt=""
                 />
                 <div class="zoom-mini__rect" style={zoomMiniRect}></div>

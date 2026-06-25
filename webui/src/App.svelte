@@ -17,10 +17,10 @@
     probeVideoHttpUrl,
     type VideoBackendDiagnostics,
   } from "./lib/videoDiagnostics";
-  import { galleryGridCellPx } from "./lib/thumbScale";
+  import { galleryGridCellPx, thumbQualityRefreshNeeded } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
   import PagerBar from "./components/PagerBar.svelte";
-  import PreviewImage from "./components/PreviewImage.svelte";
+  import PreviewZoomPanel from "./components/PreviewZoomPanel.svelte";
   import {
     applyGalleryMutationResponse,
     getGalleryItems,
@@ -35,7 +35,12 @@
     type GalleryMutationResponse,
     type GalleryState,
   } from "./lib/galleryRuntime";
-  import { bumpGalleryThumbHydrationToken, disposeGalleryThumbs, galleryThumbHydrating } from "./lib/galleryThumbs";
+  import {
+    bumpGalleryThumbHydrationToken,
+    disposeGalleryThumbs,
+    galleryThumbHydrating,
+    refreshGalleryThumbsForScale,
+  } from "./lib/galleryThumbs";
   import { cancelZoomCarouselHydration, hydrateZoomCarouselThumbs } from "./lib/zoomCarouselThumbs";
   import {
     formatGallerySortMode,
@@ -101,6 +106,8 @@
   } | null = null;
   let status = t("status.ready");
   let thumbScale = 1;
+  /** Escala ya aplicada en servidor/caché HQ (detecta saltos de tamaño en px). */
+  let appliedThumbScale = 1;
   let previewOpen = false;
   let previewItems: Array<{ name: string; path: string; thumbDataUrl?: string | null; thumbQuality?: "lq" | "hq" }> = [];
   let previewSelectedPaths: string[] = [];
@@ -607,6 +614,7 @@
   const loadInitial = async () => {
     const data = await trackLoad(bridge.getInitialState());
     thumbScale = Number(data.settings?.gallery_thumb_scale ?? 1);
+    appliedThumbScale = thumbScale;
     thumbGapPx = Math.max(0, Math.min(20, Number(data.settings?.web_thumb_gap_px ?? 12)));
     showThumbLabels = Boolean(data.settings?.web_show_thumb_labels ?? true);
     {
@@ -1099,8 +1107,12 @@
     const perPageRaw = Number.isFinite(parsedPerPage) ? Math.round(parsedPerPage) : 48;
     const n = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     thumbsPerPage = n;
+    const prevScale = appliedThumbScale;
     const ts = Math.max(0.01, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
     thumbScale = ts;
+    if (thumbQualityRefreshNeeded(prevScale, ts)) {
+      bumpGalleryThumbHydrationToken(true);
+    }
     keyboardShortcuts = {
       toggleMode: normalizeShortcutValue(keyboardShortcuts.toggleMode, defaultKeyboardShortcuts.toggleMode),
       deleteAction: normalizeShortcutValue(keyboardShortcuts.deleteAction, defaultKeyboardShortcuts.deleteAction),
@@ -1125,6 +1137,7 @@
     await syncDestinationsFromApi();
     await syncMarkersFromApi();
     await reload();
+    appliedThumbScale = ts;
     settingsOpen = false;
   };
 
@@ -1329,8 +1342,7 @@
     if (!row) return;
     const isVideo = row.kind === "video";
     const isSvg = row.path.toLowerCase().endsWith(".svg");
-    const fallbackUrl =
-      isVideo || isSvg ? buildMediaFileUrl(row.path) : null;
+    const fallbackUrl = isVideo ? null : buildMediaFileUrl(row.path);
     const thumbPlaceholder = row.thumbDataUrl ?? null;
     selectedPreview = {
       path: row.path,
@@ -1763,9 +1775,17 @@
   }
 
   async function applyThumbScaleNow() {
+    const prevScale = appliedThumbScale;
+    const nextScale = thumbScale;
     try {
-      await bridge.settingsPatch({ gallery_thumb_scale: Number(thumbScale.toFixed(3)) });
-      await reload({ silent: true });
+      await bridge.settingsPatch({ gallery_thumb_scale: Number(nextScale.toFixed(3)) });
+      if (thumbQualityRefreshNeeded(prevScale, nextScale)) {
+        bumpGalleryThumbHydrationToken(true);
+        await reload({ silent: true });
+        appliedThumbScale = nextScale;
+        return;
+      }
+      appliedThumbScale = nextScale;
     } catch {
       status = t("status.thumbScaleError");
     }
@@ -2047,10 +2067,7 @@
     previewZoomDataUrl = null;
     previewZoomMediaType =
       it.kind === "video" ? "video" : it.path.toLowerCase().endsWith(".svg") ? "svg" : "image";
-    const zoomFallbackUrl =
-      previewZoomMediaType === "video" || previewZoomMediaType === "svg"
-        ? buildMediaFileUrl(it.path)
-        : null;
+    const zoomFallbackUrl = buildMediaFileUrl(it.path);
     previewZoomFileUrl = zoomFallbackUrl;
     previewZoomPlayback = null;
     if (previewZoomMediaType === "video" || previewZoomMediaType === "svg") {
@@ -3828,11 +3845,13 @@
                 src={selectedPreview.fileUrl}
                 alt={selectedPreview.name}
               />
-            {:else if selectedPreview?.dataUrl || selectedPreview?.placeholderUrl}
-              <PreviewImage
-                placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl}
-                fullUrl={selectedPreview.dataUrl}
-                alt={selectedPreview.name}
+            {:else if selectedPreview?.dataUrl || selectedPreview?.fileUrl || selectedPreview?.placeholderUrl}
+              <PreviewZoomPanel
+                path={selectedPreview.path}
+                name={selectedPreview.name}
+                fileUrl={selectedPreview.fileUrl ?? null}
+                dataUrl={selectedPreview.dataUrl ?? null}
+                placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl ?? null}
               />
             {:else}
               <div class="preview__empty">{t("preview.emptySelect")}</div>
