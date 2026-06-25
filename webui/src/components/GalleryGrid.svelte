@@ -7,6 +7,8 @@
     type VirtualLayoutEntry,
   } from "../lib/galleryVirtualLayout";
   import GalleryGridItem from "./GalleryGridItem.svelte";
+  import DestToolbar from "./DestToolbar.svelte";
+  import type { DestToolbarItem } from "../lib/itemTree";
 
   export let galleryGridItems: any[];
   export let gridCellPx: number;
@@ -18,7 +20,9 @@
   export let galleryRangeSuppressClick: boolean;
   export let showThumbLabels: boolean;
   export let selectionCount = 0;
-  export let destRows: Array<{ label: string; path: string }> = [];
+  export let destToolbarItems: DestToolbarItem[] = [];
+  export let destToolbarFolderLabel: string | null = null;
+  export let destToolbarCanGoBack = false;
   export let dragOverDestPath: string | null;
   export let draggedDestIdx: number | null = null;
   export let destinationsMode: boolean;
@@ -47,12 +51,14 @@
   export let invertSelection: () => void;
   export let openConfirmDelete: (title: string, msg: string, action: () => void) => void;
   export let deleteSelectedGalleryItems: () => void;
+  export let onDestToolbarBack: () => void;
+  export let onDestToolbarOpenFolder: (folderId: string) => void;
   export let openAddDestForm: () => void;
   export let onDestCardClick: (e: MouseEvent, path: string) => void;
   export let onDestContextMenu: (e: MouseEvent, idx: number, mode: string) => void;
   export let onDestChipDragStart: (e: DragEvent, idx: number) => void;
   export let onDestChipDragEnd: () => void;
-  export let onDestDrop: (e: DragEvent, path: string) => void;
+  export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
 
   let scrollTop = 0;
   let scrollViewportH = 640;
@@ -176,34 +182,21 @@
   </div>
 
   {#if destinationsMode}
-    <div class="gallery-dest-rail">
-      <div class="selection-float selection-float--dest-bar app-chrome" role="toolbar" aria-label={t("selection.destBarAria")}>
-        <button type="button" class="om-btn om-btn--ghost om-btn--mini" title="Añadir destino" on:click={openAddDestForm}>+</button>
-        {#if destRows.length === 0}
-          <span class="selection-float__hint">{t("selection.noDestFolders")}</span>
-        {/if}
-        {#each destRows as d, i (d.path + "\0" + i)}
-          <button
-            type="button"
-            class="om-btn om-btn--ghost om-btn--mini dest-chip-btn"
-            class:dest-chip-btn--drop-target={dragOverDestPath === d.path}
-            class:dest-chip-btn--dragging={draggedDestIdx === i}
-            data-dest-path={d.path}
-            title={d.path}
-            draggable={true}
-            on:click={(e) => onDestCardClick(e, d.path)}
-            on:contextmenu={(e) => onDestContextMenu(e, i, "gallery")}
-            on:dragstart={(e) => onDestChipDragStart(e, i)}
-            on:dragend={onDestChipDragEnd}
-            on:dragenter|preventDefault
-            on:dragover|preventDefault
-            on:drop={(e) => onDestDrop(e, d.path)}
-          >
-            <span class="dest-chip-btn__title">{d.label}</span>
-          </button>
-        {/each}
-      </div>
-    </div>
+    <DestToolbar
+      toolbarItems={destToolbarItems}
+      folderLabel={destToolbarFolderLabel}
+      canGoBack={destToolbarCanGoBack}
+      {dragOverDestPath}
+      {draggedDestIdx}
+      onBack={onDestToolbarBack}
+      onOpenFolder={onDestToolbarOpenFolder}
+      onAddDest={openAddDestForm}
+      onDestClick={onDestCardClick}
+      onDestContextMenu={(e, idx) => onDestContextMenu(e, idx, "gallery")}
+      {onDestChipDragStart}
+      {onDestChipDragEnd}
+      {onDestDrop}
+    />
   {/if}
 </article>
 
@@ -289,76 +282,8 @@
   .gallery--scrolling .selection-float-rail,
   .gallery--busy .selection-float-rail,
   .gallery--scrolling .selection-float,
-  .gallery--busy .selection-float,
-  .gallery--scrolling .gallery-dest-rail,
-  .gallery--busy .gallery-dest-rail {
+  .gallery--busy .selection-float {
     transform: none;
-  }
-
-  .gallery-dest-rail {
-    position: absolute;
-    left: var(--om-space-2);
-    right: var(--om-space-2);
-    bottom: var(--om-space-2);
-    z-index: 11;
-    pointer-events: none;
-  }
-
-  .gallery-dest-rail > .selection-float.selection-float--dest-bar {
-    pointer-events: auto;
-    flex-wrap: nowrap;
-    white-space: nowrap;
-    width: 100%;
-    max-width: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-    background: rgb(8 10 18 / 0.92);
-    border: 1px solid rgb(255 255 255 / 0.12);
-    box-shadow: 0 10px 28px rgb(0 0 0 / 0.42);
-    scrollbar-width: thin;
-    scrollbar-color: rgb(124 140 255 / 0.38) transparent;
-  }
-
-  .gallery-dest-rail > .selection-float--dest-bar::-webkit-scrollbar {
-    height: 6px;
-  }
-
-  .gallery-dest-rail > .selection-float--dest-bar::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .gallery-dest-rail > .selection-float--dest-bar::-webkit-scrollbar-thumb {
-    background: linear-gradient(90deg, rgb(124 140 255 / 0.42), rgb(94 228 212 / 0.28));
-    border-radius: 999px;
-  }
-
-  .selection-float__hint {
-    font-size: 0.72rem;
-    color: var(--om-text-muted);
-    white-space: nowrap;
-  }
-
-  :global(.dest-chip-btn) {
-    flex: 0 0 auto;
-    max-width: min(280px, 100%);
-  }
-
-  :global(.dest-chip-btn__title) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 12rem;
-  }
-
-  :global(.dest-chip-btn.dest-chip-btn--drop-target) {
-    border-color: rgb(124 140 255 / 0.82);
-    background: rgb(124 140 255 / 0.14);
-    color: var(--om-text-primary);
-    box-shadow: 0 0 0 1px rgb(124 140 255 / 0.35);
-  }
-
-  :global(.dest-chip-btn.dest-chip-btn--dragging) {
-    opacity: 0.58;
   }
 
   .gallery--scrolling .gallery__scroll,

@@ -1,22 +1,23 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
 
-  // Bindings y estado
   export let routePickerOpen: boolean;
   export let pinMarkerOpen: boolean;
   export let folder: string;
-  export let pinnedFolders: string[];
+  export let markerToolbarItems: Array<
+    { kind: "folder"; id: string; label: string } | { kind: "marker"; label: string; path: string; index: number }
+  > = [];
+  export let markerToolbarCanGoBack = false;
   export let recentUnpinnedFolders: string[];
   export let pinMarkerName: string;
   export let pinMarkerPath: string;
 
-  // Funciones
   export let pickGalleryFolder: () => void;
   export let loadFolder: () => void;
   export let pickRecentFolder: (p: string) => void;
   export let onPinnedContextMenu: (e: MouseEvent, p: string) => void;
-  export let markerLabelForPath: (p: string) => string;
-  export let pathTailLabel: (p: string) => string;
+  export let onMarkerToolbarBack: () => void;
+  export let onMarkerToolbarOpenFolder: (folderId: string) => void;
   export let openPinMarkerModal: (p: string) => void;
   export let closePinMarkerModal: () => void;
   export let savePinMarkerModal: () => void;
@@ -63,21 +64,35 @@
           </button>
           <button type="button" class="om-btn om-btn--primary" on:click={loadFolder}>{t("routePicker.open")}</button>
         </div>
-        {#if pinnedFolders.length > 0}
+        {#if markerToolbarItems.length > 0 || markerToolbarCanGoBack}
           <div class="recent-folders__head">
+            {#if markerToolbarCanGoBack}
+              <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={onMarkerToolbarBack}>{t("treeManager.back")}</button>
+            {/if}
             <span class="field-label">{t("routePicker.pinnedHead")}</span>
           </div>
           <div class="recent-folders__list">
-            {#each pinnedFolders as p}
-              <button
-                type="button"
-                class="om-btn om-btn--ghost recent-folders__chip recent-folders__chip--pinned"
-                title={p}
-                on:click={() => pickRecentFolder(p)}
-                on:contextmenu={(e) => onPinnedContextMenu(e, p)}
-              >
-                {markerLabelForPath(p)}
-              </button>
+            {#each markerToolbarItems as item (item.kind === "folder" ? item.id : item.path)}
+              {#if item.kind === "folder"}
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost recent-folders__chip recent-folders__chip--folder"
+                  title={item.label}
+                  on:click={() => onMarkerToolbarOpenFolder(item.id)}
+                >
+                  📁 {item.label}
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class="om-btn om-btn--ghost recent-folders__chip recent-folders__chip--pinned"
+                  title={item.path}
+                  on:click={() => pickRecentFolder(item.path)}
+                  on:contextmenu={(e) => onPinnedContextMenu(e, item.path)}
+                >
+                  {item.label}
+                </button>
+              {/if}
             {/each}
           </div>
         {/if}
@@ -89,7 +104,7 @@
             {#each recentUnpinnedFolders as p}
               <div class="recent-folders__chip-wrap">
                 <button type="button" class="om-btn om-btn--ghost recent-folders__chip" title={p} on:click={() => pickRecentFolder(p)}>
-                  {pathTailLabel(p)}
+                  {p.split(/[/\\]/).filter(Boolean).pop() ?? p}
                 </button>
                 <button type="button" class="om-btn om-btn--ghost recent-folders__pin" title={t("routePicker.createMarkerTitle")} on:click={() => openPinMarkerModal(p)}>☆</button>
               </div>
@@ -164,6 +179,9 @@
     word-break: break-all;
     padding: 0.2rem 0.55rem;
     min-height: 1.65rem;
+  }
+.recent-folders__chip--folder {
+    border-color: color-mix(in oklab, var(--om-accent) 45%, var(--om-border-default));
   }
 .recent-folders__pin {
     min-width: 1.55rem;

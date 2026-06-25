@@ -164,10 +164,16 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
 
 class SystemBridgeMixin:
     def get_initial_state(self) -> dict:
+        dest_payload = self._destinations_payload() if hasattr(self, "_destinations_payload") else {"destinations": [], "toolbarFolderId": ""}
+        marker_payload = self._markers_payload() if hasattr(self, "_markers_payload") else {"markers": [], "toolbarFolderId": "", "pinnedFolders": []}
         return {
             "settings": self.settings,
             "gallery": self._gallery_state(),
-            "destinations": list(self._destinations_list()),
+            "destinations": dest_payload.get("destinations", []),
+            "destToolbarFolderId": dest_payload.get("toolbarFolderId", ""),
+            "markers": marker_payload.get("markers", []),
+            "markerToolbarFolderId": marker_payload.get("toolbarFolderId", ""),
+            "pinnedFolders": marker_payload.get("pinnedFolders", []),
         }
 
     def settings_patch(self, data: dict) -> dict:
@@ -218,6 +224,10 @@ class SystemBridgeMixin:
         self.settings["gallery_recent_folders"] = unique[:20]
 
     def _pinned_folders(self) -> list[str]:
+        if hasattr(self, "_markers_tree"):
+            from ..core.item_tree import flatten_marker_paths
+
+            return flatten_marker_paths(self._markers_tree())
         pins = self.settings.get("gallery_pinned_folders")
         if not isinstance(pins, list):
             pins = []
@@ -225,6 +235,8 @@ class SystemBridgeMixin:
         return [str(x) for x in pins if str(x).strip()]
 
     def gallery_pin_folder(self, raw_path: str) -> dict:
+        if hasattr(self, "markers_add"):
+            return self.markers_add(raw_path, "", "")
         p = str(resolve_dir_path(raw_path))
         pins = self._pinned_folders()
         if p not in pins:

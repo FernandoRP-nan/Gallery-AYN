@@ -4,9 +4,13 @@
   import { galleryGridCellPx } from "../lib/thumbScale";
   import type { UiThemeId } from "../lib/uiTheme";
   import SettingsAppearanceSection from "./settings/SettingsAppearanceSection.svelte";
+  import SettingsDestinationsSection from "./settings/SettingsDestinationsSection.svelte";
+  import SettingsMarkersSection from "./settings/SettingsMarkersSection.svelte";
   import SettingsPerformanceSection from "./settings/SettingsPerformanceSection.svelte";
   import SettingsShortcutsSection from "./settings/SettingsShortcutsSection.svelte";
   import SettingsThumbsSection from "./settings/SettingsThumbsSection.svelte";
+
+  import type { TreeNode } from "../lib/itemTree";
 
   export let thumbsPerPage: number;
   export let settingsThumbPresetIdx: number;
@@ -20,6 +24,12 @@
   export let thumbCardStyle: "soft" | "flat" | "outlined";
   export let keyboardShortcuts: Record<string, string>;
   export let defaultShortcuts: Record<string, string>;
+  export let destTree: TreeNode[];
+  export let markerTree: TreeNode[];
+  export let onDestTreeChange: (next: TreeNode[]) => void;
+  export let onMarkerTreeChange: (next: TreeNode[]) => void;
+  export let onPickDestFolder: () => Promise<string | null>;
+  export let onPickMarkerFolder: () => Promise<string | null>;
 
   export let themeNameLabel: (id: UiThemeId) => string;
   export let onCancel: () => void;
@@ -69,6 +79,8 @@
         {themeNameLabel}
       />
       <SettingsShortcutsSection bind:keyboardShortcuts {defaultShortcuts} />
+      <SettingsDestinationsSection {destTree} {onDestTreeChange} {onPickDestFolder} />
+      <SettingsMarkersSection {markerTree} {onMarkerTreeChange} {onPickMarkerFolder} />
     </section>
     <div class="settings-actions">
       <button type="button" class="om-btn om-btn--ghost" on:click={onCancel}>{t("common.cancel")}</button>

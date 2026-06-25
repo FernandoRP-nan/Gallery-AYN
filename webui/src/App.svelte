@@ -58,14 +58,39 @@
     readCachedUiTheme,
     type UiThemeId,
   } from "./lib/uiTheme";
+  import type { TreeNode } from "./lib/itemTree";
+  import {
+    cloneTree,
+    destToolbarItems as buildDestToolbarItems,
+    findParentFolderId,
+    flattenDestList,
+    flattenMarkerPaths,
+    folderLabelAt,
+    getChildrenAt,
+    isDestNode,
+    markerToolbarItems as buildMarkerToolbarItems,
+    normalizeTreeNodes,
+    parentIdOrEmpty,
+  } from "./lib/itemTree";
 
   const BLANK_DRAG_IMG =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
   let folder = "";
   let galleryWorkspace: GalleryWorkspace | null = null;
-  /** Carpetas destino (mismo patrón reactivo que `items`: `let` + asignación tras el API). */
-  let destRows: Array<{ label: string; path: string }> = [];
+  /** Árbol de carpetas destino y carpeta activa en la barra inferior. */
+  let destTree: TreeNode[] = [];
+  let destToolbarFolderId: string | null = null;
+  let markerTree: TreeNode[] = [];
+  let markerToolbarFolderId: string | null = null;
+  let destTreeSettingsDraft: TreeNode[] = [];
+  let markerTreeSettingsDraft: TreeNode[] = [];
+  $: destToolbarVisibleItems = buildDestToolbarItems(destTree, destToolbarFolderId);
+  $: destToolbarFolderLabel = folderLabelAt(destTree, destToolbarFolderId);
+  $: destToolbarCanGoBack = Boolean(destToolbarFolderId);
+  $: destFlatList = flattenDestList(destTree);
+  $: markerToolbarVisibleItems = buildMarkerToolbarItems(markerTree, markerToolbarFolderId);
+  $: markerToolbarCanGoBack = Boolean(markerToolbarFolderId);
   let selectedPreview: {
     path: string;
     name: string;
@@ -379,22 +404,73 @@
     });
   }
 
-  /** Destinos: la API puede devolverlos en la raíz, dentro de settings, o el payload puede ser el array. */
-  function normalizeDestinationsFromPayload(data: any): Array<{ label: string; path: string }> {
-    const raw = Array.isArray(data)
-      ? data
-      : (data?.destinations ?? data?.settings?.destinations);
-    if (!Array.isArray(raw)) return [];
-    const out: Array<{ label: string; path: string }> = [];
-    for (const x of raw) {
-      if (!x || typeof x !== "object") continue;
-      const o = x as { path?: string; label?: string; folder?: string; dir?: string };
-      const path = normalizePathForApi(String(o.path ?? o.folder ?? o.dir ?? ""));
-      if (!path) continue;
-      const label = String(o.label ?? "").trim() || path;
-      out.push({ label, path });
+  /** Destinos: la API devuelve árbol + carpeta activa de la barra. */
+  function applyDestinationsPayload(data: any) {
+    const raw = data?.destinations ?? data?.settings?.destinations ?? data;
+    destTree = normalizeTreeNodes(raw, "dest");
+    const fid = String(data?.toolbarFolderId ?? "").trim();
+    destToolbarFolderId = fid || null;
+  }
+
+  function applyMarkersPayload(data: any) {
+    const raw = data?.markers ?? data?.settings?.marker_tree ?? data;
+    markerTree = normalizeTreeNodes(raw, "marker");
+    const fid = String(data?.toolbarFolderId ?? "").trim();
+    markerToolbarFolderId = fid || null;
+    pinnedFolders = flattenMarkerPaths(markerTree);
+    const labels: Record<string, string> = {};
+    for (const p of pinnedFolders) labels[p] = markerLabelFromTree(markerTree, p) ?? defaultMarkerNameForPath(p);
+    pinnedFolderLabels = labels;
+  }
+
+  function markerLabelFromTree(nodes: TreeNode[], path: string): string | null {
+    const target = String(path ?? "").trim();
+    for (const node of nodes) {
+      if (node.kind === "marker" && node.path === target) return node.label;
+      if (node.kind === "folder") {
+        const nested = markerLabelFromTree(node.children, target);
+        if (nested) return nested;
+      }
     }
-    return out;
+    return null;
+  }
+
+  async function persistDestToolbarFolder(folderId: string | null) {
+    destToolbarFolderId = folderId;
+    try {
+      await bridge.destinationsSetToolbarFolder(parentIdOrEmpty(folderId));
+    } catch {
+      /* conservar estado local si falla el bridge */
+    }
+  }
+
+  async function navigateDestToolbarFolder(folderId: string) {
+    await persistDestToolbarFolder(folderId);
+  }
+
+  async function destToolbarBack() {
+    if (!destToolbarFolderId) return;
+    const parent = findParentFolderId(destTree, destToolbarFolderId);
+    await persistDestToolbarFolder(parent);
+  }
+
+  async function persistMarkerToolbarFolder(folderId: string | null) {
+    markerToolbarFolderId = folderId;
+    try {
+      await bridge.markersSetToolbarFolder(parentIdOrEmpty(folderId));
+    } catch {
+      /* conservar estado local */
+    }
+  }
+
+  async function navigateMarkerToolbarFolder(folderId: string) {
+    await persistMarkerToolbarFolder(folderId);
+  }
+
+  async function markerToolbarBack() {
+    if (!markerToolbarFolderId) return;
+    const parent = findParentFolderId(markerTree, markerToolbarFolderId);
+    await persistMarkerToolbarFolder(parent);
   }
 
   function normalizeShortcutValue(raw: unknown, fallback: string): string {
@@ -490,13 +566,36 @@
   async function syncDestinationsFromApi() {
     try {
       const d = await bridge.destinationsGet();
-      destRows = normalizeDestinationsFromPayload(d);
+      applyDestinationsPayload(d);
     } catch {
       try {
         const data = await bridge.getInitialState();
-        destRows = normalizeDestinationsFromPayload(data);
+        applyDestinationsPayload({
+          destinations: data?.destinations,
+          toolbarFolderId: data?.destToolbarFolderId ?? data?.settings?.web_dest_toolbar_folder_id,
+        });
       } catch {
-        destRows = [];
+        destTree = [];
+        destToolbarFolderId = null;
+      }
+    }
+  }
+
+  async function syncMarkersFromApi() {
+    try {
+      const m = await bridge.markersGet();
+      applyMarkersPayload(m);
+    } catch {
+      try {
+        const data = await bridge.getInitialState();
+        applyMarkersPayload({
+          markers: data?.markers ?? data?.settings?.marker_tree,
+          toolbarFolderId: data?.markerToolbarFolderId ?? data?.settings?.web_marker_toolbar_folder_id,
+          pinnedFolders: data?.pinnedFolders ?? data?.settings?.gallery_pinned_folders,
+        });
+      } catch {
+        markerTree = [];
+        markerToolbarFolderId = null;
       }
     }
   }
@@ -552,6 +651,7 @@
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
     gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
     await syncDestinationsFromApi();
+    await syncMarkersFromApi();
   };
 
   $: applyUiThemeToDocument(uiTheme);
@@ -870,7 +970,7 @@
   const pinFolder = async (path: string) => {
     try {
       const out = await bridge.galleryPinFolder(path);
-      pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders;
+      applyMarkersPayload(out);
       status = t("status.routePinned");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.routePinError");
@@ -880,13 +980,7 @@
   const unpinFolder = async (path: string) => {
     try {
       const out = await bridge.galleryUnpinFolder(path);
-      pinnedFolders = Array.isArray(out.pinnedFolders) ? out.pinnedFolders : pinnedFolders.filter((x) => x !== path);
-      if (pinnedFolderLabels[path]) {
-        const next = { ...pinnedFolderLabels };
-        delete next[path];
-        pinnedFolderLabels = next;
-        await bridge.settingsPatch({ web_pinned_folder_labels: next });
-      }
+      applyMarkersPayload(out);
       status = t("status.routeUnpinned");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.routeUnpinError");
@@ -966,6 +1060,8 @@
       }
     }
     settingsThumbPresetIdx = bestIdx;
+    destTreeSettingsDraft = cloneTree(destTree);
+    markerTreeSettingsDraft = cloneTree(markerTree);
     settingsOpen = true;
   };
 
@@ -979,8 +1075,24 @@
     thumbImageRadiusPx = thumbImageRadiusPxBackup;
     thumbTileRadiusPx = thumbTileRadiusPxBackup;
     keyboardShortcuts = { ...keyboardShortcutsBackup };
+    destTreeSettingsDraft = cloneTree(destTree);
+    markerTreeSettingsDraft = cloneTree(markerTree);
     settingsOpen = false;
   };
+
+  async function pickSettingsDestFolder(): Promise<string | null> {
+    try {
+      const out = await bridge.dialogPickFolder("");
+      if (out.cancelled || !out.path) return null;
+      return out.path;
+    } catch {
+      return null;
+    }
+  }
+
+  async function pickSettingsMarkerFolder(): Promise<string | null> {
+    return pickSettingsDestFolder();
+  }
 
   const saveSettingsModal = async () => {
     const parsedPerPage = Number(thumbsPerPage);
@@ -1008,6 +1120,10 @@
       web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx),
       web_shortcuts: { ...keyboardShortcuts },
     });
+    await trackLoad(bridge.destinationsSaveTree(destTreeSettingsDraft));
+    await trackLoad(bridge.markersSaveTree(markerTreeSettingsDraft));
+    await syncDestinationsFromApi();
+    await syncMarkersFromApi();
     await reload();
     settingsOpen = false;
   };
@@ -1718,10 +1834,8 @@
       return;
     }
     const label = pinMarkerName.trim() || defaultMarkerNameForPath(path);
-    await pinFolder(path);
-    const next = { ...pinnedFolderLabels, [path]: label };
-    pinnedFolderLabels = next;
-    await bridge.settingsPatch({ web_pinned_folder_labels: next });
+    await trackLoad(bridge.markersAdd(path, label, parentIdOrEmpty(markerToolbarFolderId)));
+    await syncMarkersFromApi();
     pinMarkerOpen = false;
     status = t("pinMarker.saved");
   }
@@ -2850,14 +2964,13 @@
     askConfirmMoveSelected(fp);
   }
 
-  function onDestDrop(e: DragEvent, destPath: string) {
+  function onDestDrop(e: DragEvent, destPath: string, destIdx: number) {
     e.preventDefault();
     e.stopPropagation();
     const fromRaw = e.dataTransfer?.getData("application/x-om-dest-idx") ?? "";
     const fromIdx = Number.parseInt(fromRaw, 10);
-    const toIdx = destRows.findIndex((x) => x.path === destPath);
-    if (Number.isFinite(fromIdx) && fromIdx >= 0 && toIdx >= 0) {
-      void reorderDestinations(fromIdx, toIdx);
+    if (Number.isFinite(fromIdx) && fromIdx >= 0 && fromIdx !== destIdx) {
+      void reorderDestinations(fromIdx, destIdx);
       return;
     }
     ignoreDestCardClickUntil = Date.now() + 450;
@@ -2882,10 +2995,12 @@
 
   async function reorderDestinations(fromIdx: number, toIdx: number) {
     if (fromIdx === toIdx) return;
-    if (fromIdx < 0 || toIdx < 0 || fromIdx >= destRows.length || toIdx >= destRows.length) return;
+    const parentId = parentIdOrEmpty(destToolbarFolderId);
+    const siblingCount = getChildrenAt(destTree, destToolbarFolderId).length;
+    if (fromIdx < 0 || toIdx < 0 || fromIdx >= siblingCount || toIdx >= siblingCount) return;
     try {
-      const out = await trackLoad(bridge.destinationsReorder(fromIdx, toIdx));
-      destRows = normalizeDestinationsFromPayload(out);
+      const out = await trackLoad(bridge.destinationsReorder(parentId, fromIdx, toIdx));
+      applyDestinationsPayload(out);
       status = t("status.destReorderOk");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("status.destReorderError");
@@ -3210,11 +3325,13 @@
     }
     try {
       if (destFormMode === "add") {
-        await trackLoad(bridge.destinationsAdd(label, path));
+        await trackLoad(bridge.destinationsAdd(label, path, parentIdOrEmpty(destToolbarFolderId)));
         await syncDestinationsFromApi();
         status = t("status.destAdded");
       } else if (destFormIdx !== null) {
-        await trackLoad(bridge.destinationsEdit(destFormIdx, label, path));
+        await trackLoad(
+          bridge.destinationsEdit(parentIdOrEmpty(destToolbarFolderId), destFormIdx, label, path)
+        );
         await syncDestinationsFromApi();
         status = t("status.destUpdated");
       }
@@ -3224,26 +3341,28 @@
     }
   }
 
+  function destNodeAtToolbarIdx(idx: number) {
+    return getChildrenAt(destTree, destToolbarFolderId)[idx] ?? null;
+  }
+
   function openEditFromCtx() {
     if (destCtxMenu === null) return;
-    const i = destCtxMenu.idx;
-    const d = destRows[i];
+    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
     closeDestCtxMenu();
-    if (!d) return;
+    if (!node || !isDestNode(node)) return;
     destFormMode = "edit";
-    destFormIdx = i;
-    destFormLabel = d.label;
-    destFormPath = d.path;
+    destFormIdx = destCtxMenu.idx;
+    destFormLabel = node.label;
+    destFormPath = node.path;
     destFormOpen = true;
   }
 
   function openPreviewFromCtx() {
     if (destCtxMenu === null) return;
-    const i = destCtxMenu.idx;
-    const d = destRows[i];
+    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
     closeDestCtxMenu();
-    if (!d) return;
-    openDestPreview(d.path);
+    if (!node || !isDestNode(node)) return;
+    openDestPreview(node.path);
   }
 
   async function removeDestFromCtx() {
@@ -3251,7 +3370,7 @@
     const i = destCtxMenu.idx;
     closeDestCtxMenu();
     try {
-      await trackLoad(bridge.destinationsRemove(i));
+      await trackLoad(bridge.destinationsRemove(parentIdOrEmpty(destToolbarFolderId), i));
       await syncDestinationsFromApi();
       status = t("status.destRemoved");
     } catch (e: unknown) {
@@ -3634,7 +3753,11 @@
           {onDestChipDragStart}
           {onDestChipDragEnd}
           {onDestDrop}
-          {destRows}
+          destToolbarItems={destToolbarVisibleItems}
+          {destToolbarFolderLabel}
+          {destToolbarCanGoBack}
+          onDestToolbarBack={() => void destToolbarBack()}
+          onDestToolbarOpenFolder={(id) => void navigateDestToolbarFolder(id)}
           on:preview={(e) => setSelectedPreviewFromPath(e.detail.path)}
         />
 
@@ -4001,17 +4124,17 @@
           role="menuitem"
           aria-haspopup="true"
           aria-expanded="false"
-          disabled={destRows.length === 0}
-          title={destRows.length === 0 ? t("contextGallery.noDestinations") : undefined}
+          disabled={destFlatList.length === 0}
+          title={destFlatList.length === 0 ? t("contextGallery.noDestinations") : undefined}
         >
           <span>{t("contextGallery.moveTo")}</span>
           <span class="ctx-menu__submenu-trigger-mark" aria-hidden="true">▾</span>
         </button>
         <div class="ctx-menu__submenu ctx-menu__submenu--expand om-panel om-panel--lift" role="menu" aria-label={t("contextGallery.moveTo")}>
-          {#if destRows.length === 0}
+          {#if destFlatList.length === 0}
             <div class="ctx-menu__submenu-empty">{t("contextGallery.noDestinations")}</div>
           {:else}
-            {#each destRows as d, di (d.path + "\0gctx\0" + di)}
+            {#each destFlatList as d, di (d.path + "\0gctx\0" + di)}
               <button
                 type="button"
                 class="dest-ctx-menu__item"
@@ -4206,6 +4329,12 @@
       bind:thumbCardStyle
       bind:keyboardShortcuts
       defaultShortcuts={defaultKeyboardShortcuts}
+      destTree={destTreeSettingsDraft}
+      markerTree={markerTreeSettingsDraft}
+      onDestTreeChange={(next) => (destTreeSettingsDraft = next)}
+      onMarkerTreeChange={(next) => (markerTreeSettingsDraft = next)}
+      onPickDestFolder={pickSettingsDestFolder}
+      onPickMarkerFolder={pickSettingsMarkerFolder}
       themeNameLabel={themeNameLabel}
       onCancel={cancelSettingsModal}
       onSave={saveSettingsModal}
@@ -4238,7 +4367,8 @@
     bind:routePickerOpen
     bind:pinMarkerOpen
     bind:folder
-    bind:pinnedFolders
+    markerToolbarItems={markerToolbarVisibleItems}
+    {markerToolbarCanGoBack}
     bind:recentUnpinnedFolders
     bind:pinMarkerName
     bind:pinMarkerPath
@@ -4246,8 +4376,8 @@
     {loadFolder}
     {pickRecentFolder}
     {onPinnedContextMenu}
-    {markerLabelForPath}
-    {pathTailLabel}
+    onMarkerToolbarBack={() => void markerToolbarBack()}
+    onMarkerToolbarOpenFolder={(id) => void navigateMarkerToolbarFolder(id)}
     {openPinMarkerModal}
     {closePinMarkerModal}
     {savePinMarkerModal}
@@ -4268,7 +4398,10 @@
     bind:zoomHudVisible
     bind:zoomMiniRect
     bind:zoomCropMarqueeStyle
-    bind:destRows
+    bind:destToolbarItems={destToolbarVisibleItems}
+    {destToolbarCanGoBack}
+    onDestToolbarBack={() => void destToolbarBack()}
+    onDestToolbarOpenFolder={(id) => void navigateDestToolbarFolder(id)}
     bind:draggedDestIdx
     bind:previewZoomCanUndoMove
     bind:zoomNavItems

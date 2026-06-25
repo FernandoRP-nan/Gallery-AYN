@@ -66,8 +66,12 @@
   export let onDestContextMenu: (e: MouseEvent, idx: number, mode: string) => void;
   export let onDestChipDragStart: (e: DragEvent, idx: number) => void;
   export let onDestChipDragEnd: () => void;
-  export let onDestDrop: (e: DragEvent, path: string) => void;
-  export let destRows: Array<{ label: string; path: string }> = [];
+  export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
+  export let destToolbarItems: import("../lib/itemTree").DestToolbarItem[] = [];
+  export let destToolbarFolderLabel: string | null = null;
+  export let destToolbarCanGoBack = false;
+  export let onDestToolbarBack: () => void;
+  export let onDestToolbarOpenFolder: (folderId: string) => void;
 
   export let galleryScrollEl: HTMLDivElement | null = null;
   export let galleryGridEl: HTMLDivElement | null = null;
@@ -501,7 +505,11 @@
   bind:showThumbLabels
   galleryState={frozenGalleryState}
   selectionCount={liveSelectedCount}
-  {destRows}
+  {destToolbarItems}
+  {destToolbarFolderLabel}
+  {destToolbarCanGoBack}
+  {onDestToolbarBack}
+  {onDestToolbarOpenFolder}
   bind:dragOverDestPath
   bind:draggedDestIdx
   bind:galleryScrollEl

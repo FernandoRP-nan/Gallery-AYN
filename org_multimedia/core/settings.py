@@ -21,6 +21,7 @@ def load_app_settings() -> dict:
     if not path.exists():
         return {
             "destinations": [],
+            "marker_tree": [],
             "gallery_last_folder": "",
             "gallery_recent_folders": [],
             "gallery_pinned_folders": [],
@@ -58,6 +59,8 @@ def load_app_settings() -> dict:
             data = json.load(f)
         if "destinations" not in data or not isinstance(data.get("destinations"), list):
             data["destinations"] = []
+        if "marker_tree" not in data or not isinstance(data.get("marker_tree"), list):
+            data["marker_tree"] = []
         if "gallery_last_folder" not in data:
             data["gallery_last_folder"] = ""
         if "gallery_recent_folders" not in data:
@@ -167,6 +170,7 @@ def load_app_settings() -> dict:
     except (OSError, json.JSONDecodeError):
         return {
             "destinations": [],
+            "marker_tree": [],
             "gallery_last_folder": "",
             "gallery_recent_folders": [],
             "gallery_pinned_folders": [],

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
+  import type { DestToolbarItem } from '../lib/itemTree';
 
   // Bindings y estado
   export let previewZoomOpen: boolean;
@@ -17,8 +18,11 @@
   export let zoomHudVisible: boolean;
   export let zoomMiniRect: string;
   export let zoomCropMarqueeStyle: string | null;
-  export let destRows: any[];
-  export let draggedDestIdx: number;
+  export let destToolbarItems: DestToolbarItem[] = [];
+  export let destToolbarCanGoBack = false;
+  export let onDestToolbarBack: () => void;
+  export let onDestToolbarOpenFolder: (folderId: string) => void;
+  export let draggedDestIdx: number | null;
   export let previewZoomCanUndoMove: boolean;
   export let zoomNavItems: any[];
   export let previewZoomPath: string;
@@ -62,7 +66,7 @@
   export let onDestContextMenu: (e: MouseEvent, idx: number, mode: string) => void;
   export let onDestChipDragStart: (e: DragEvent, idx: number) => void;
   export let onDestChipDragEnd: () => void;
-  export let onDestDrop: (e: DragEvent, path: string) => void;
+  export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
   export let openPreviewZoom: (it: any, opts: any) => void;
 </script>
 
@@ -294,22 +298,34 @@
                   disabled={!previewZoomCanUndoMove}
                   on:click={undoLastZoomMove}
                 >Deshacer</button>
-                {#each destRows as d, i (d.path + "\0zoom\0" + i)}
-                  <button
-                    type="button"
-                    class="zoom-dest-chip"
-                    class:zoom-dest-chip--dragging={draggedDestIdx === i}
-                    data-dest-path={d.path}
-                    title={d.path}
-                    draggable={true}
-                    on:click={() => requestMoveCurrentZoomToDestination(d.path)}
-                    on:contextmenu={(e) => onDestContextMenu(e, i, "fullscreen")}
-                    on:dragstart={(e) => onDestChipDragStart(e, i)}
-                    on:dragend={onDestChipDragEnd}
-                    on:dragenter|preventDefault
-                    on:dragover|preventDefault
-                    on:drop={(e) => onDestDrop(e, d.path)}
-                  >{d.label}</button>
+                {#if destToolbarCanGoBack}
+                  <button type="button" class="om-btn om-btn--ghost om-btn--compact zoom-dest-chip" on:click={onDestToolbarBack}>←</button>
+                {/if}
+                {#each destToolbarItems as item (item.kind === "folder" ? item.id : item.path)}
+                  {#if item.kind === "folder"}
+                    <button
+                      type="button"
+                      class="zoom-dest-chip zoom-dest-chip--folder"
+                      title={item.label}
+                      on:click={() => onDestToolbarOpenFolder(item.id)}
+                    >📁 {item.label}</button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="zoom-dest-chip"
+                      class:zoom-dest-chip--dragging={draggedDestIdx === item.index}
+                      data-dest-path={item.path}
+                      title={item.path}
+                      draggable={true}
+                      on:click={() => requestMoveCurrentZoomToDestination(item.path)}
+                      on:contextmenu={(e) => onDestContextMenu(e, item.index, "fullscreen")}
+                      on:dragstart={(e) => onDestChipDragStart(e, item.index)}
+                      on:dragend={onDestChipDragEnd}
+                      on:dragenter|preventDefault
+                      on:dragover|preventDefault
+                      on:drop={(e) => onDestDrop(e, item.path, item.index)}
+                    >{item.label}</button>
+                  {/if}
                 {/each}
               </div>
             {/if}

@@ -53,6 +53,17 @@ _MONTH_NAMES_ES = (
 
 from ..core.media_organizer import MediaOrganizer
 
+from ..core.item_tree import (
+    KIND_DEST,
+    KIND_FOLDER,
+    find_folder,
+    get_children_list,
+    migrate_flat_destinations,
+    new_folder_id,
+    normalize_tree,
+    prune_invalid_toolbar_folder,
+    remove_folder,
+)
 from ..core.settings import load_app_settings, save_app_settings
 
 try:
@@ -289,65 +300,127 @@ class DestinationsBridgeMixin:
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
-    def _destinations_list(self) -> list:
-        """Si en JSON quedó null o tipo inválido, setdefault no crea lista y falla el append."""
-        d = self.settings.get("destinations")
-        if not isinstance(d, list):
-            d = []
-            self.settings["destinations"] = d
-        return d
+    def _destinations_tree(self) -> list:
+        """Árbol de destinos; migra listas planas legacy al cargar."""
+        raw = self.settings.get("destinations")
+        if not isinstance(raw, list):
+            raw = []
+        tree = migrate_flat_destinations(raw)
+        if tree != raw:
+            self.settings["destinations"] = tree
+        return tree
+
+    def _destinations_payload(self) -> dict:
+        tree = self._destinations_tree()
+        toolbar_id = prune_invalid_toolbar_folder(
+            tree, self.settings.get("web_dest_toolbar_folder_id")
+        )
+        if toolbar_id != self.settings.get("web_dest_toolbar_folder_id"):
+            if toolbar_id:
+                self.settings["web_dest_toolbar_folder_id"] = toolbar_id
+            else:
+                self.settings.pop("web_dest_toolbar_folder_id", None)
+        return {
+            "destinations": tree,
+            "toolbarFolderId": toolbar_id or "",
+        }
 
     def destinations_get(self) -> dict:
-        # Solo dicts planos serializables (evita sorpresas en el bridge Qt).
-        out: list[dict[str, str]] = []
-        for x in self._destinations_list():
-            if isinstance(x, dict):
-                out.append(
-                    {
-                        "label": str(x.get("label", "")),
-                        "path": str(x.get("path", "")),
-                    }
-                )
-        return {"destinations": out}
+        return self._destinations_payload()
 
-    def destinations_add(self, label: str, path: str) -> dict:
+    def destinations_save_tree(self, tree: list) -> dict:
+        self.settings["destinations"] = normalize_tree(tree if isinstance(tree, list) else [], KIND_DEST)
+        save_app_settings(self.settings)
+        return self._destinations_payload()
+
+    def destinations_set_toolbar_folder(self, folder_id: str = "") -> dict:
+        fid = str(folder_id or "").strip()
+        tree = self._destinations_tree()
+        if fid and not find_folder(tree, fid):
+            fid = ""
+        if fid:
+            self.settings["web_dest_toolbar_folder_id"] = fid
+        else:
+            self.settings.pop("web_dest_toolbar_folder_id", None)
+        save_app_settings(self.settings)
+        return self._destinations_payload()
+
+    def destinations_add(self, label: str, path: str, parent_id: str = "") -> dict:
         p = str(Path(path).expanduser().resolve())
         label = label.strip() or Path(p).name
-        dests = self._destinations_list()
-        for x in dests:
-            if isinstance(x, dict) and str(x.get("path", "")) == p:
-                return self.destinations_get()
-        dests.append({"label": label, "path": p})
+        tree = self._destinations_tree()
+        container = get_children_list(tree, str(parent_id or "").strip() or None)
+        for x in container:
+            if isinstance(x, dict) and x.get("kind") == KIND_DEST and str(x.get("path", "")) == p:
+                return self._destinations_payload()
+        container.append({"kind": KIND_DEST, "label": label, "path": p})
+        self.settings["destinations"] = tree
         save_app_settings(self.settings)
-        return self.destinations_get()
+        return self._destinations_payload()
 
-    def destinations_remove(self, idx: int) -> dict:
-        dests = self._destinations_list()
-        if 0 <= idx < len(dests):
-            dests.pop(idx)
+    def destinations_remove(self, parent_id: str, idx: int) -> dict:
+        tree = self._destinations_tree()
+        container = get_children_list(tree, str(parent_id or "").strip() or None)
+        if 0 <= int(idx) < len(container):
+            container.pop(int(idx))
+            self.settings["destinations"] = tree
             save_app_settings(self.settings)
-        return self.destinations_get()
+        return self._destinations_payload()
 
-    def destinations_edit(self, idx: int, label: str, path: str) -> dict:
-        dests = self._destinations_list()
-        if 0 <= idx < len(dests):
-            p = str(Path(path).expanduser().resolve())
-            label = label.strip() or Path(p).name
-            dests[idx] = {"label": label, "path": p}
-            save_app_settings(self.settings)
-        return self.destinations_get()
+    def destinations_edit(self, parent_id: str, idx: int, label: str, path: str) -> dict:
+        tree = self._destinations_tree()
+        container = get_children_list(tree, str(parent_id or "").strip() or None)
+        i = int(idx)
+        if 0 <= i < len(container):
+            node = container[i]
+            if isinstance(node, dict) and node.get("kind") == KIND_DEST:
+                p = str(Path(path).expanduser().resolve())
+                label = label.strip() or Path(p).name
+                container[i] = {"kind": KIND_DEST, "label": label, "path": p}
+                self.settings["destinations"] = tree
+                save_app_settings(self.settings)
+        return self._destinations_payload()
 
-    def destinations_reorder(self, from_idx: int, to_idx: int) -> dict:
-        dests = self._destinations_list()
-        n = len(dests)
-        if n <= 1:
-            return self.destinations_get()
-        if not (0 <= from_idx < n and 0 <= to_idx < n):
-            return self.destinations_get()
-        if from_idx == to_idx:
-            return self.destinations_get()
-        # Reordenar sin perder contenido ni metadatos del destino.
-        item = dests.pop(from_idx)
-        dests.insert(to_idx, item)
+    def destinations_reorder(self, parent_id: str, from_idx: int, to_idx: int) -> dict:
+        tree = self._destinations_tree()
+        container = get_children_list(tree, str(parent_id or "").strip() or None)
+        n = len(container)
+        fi, ti = int(from_idx), int(to_idx)
+        if n <= 1 or not (0 <= fi < n and 0 <= ti < n) or fi == ti:
+            return self._destinations_payload()
+        item = container.pop(fi)
+        container.insert(ti, item)
+        self.settings["destinations"] = tree
         save_app_settings(self.settings)
-        return self.destinations_get()
+        return self._destinations_payload()
+
+    def destinations_folder_add(self, label: str, parent_id: str = "") -> dict:
+        label = (label or "").strip() or "Carpeta"
+        tree = self._destinations_tree()
+        container = get_children_list(tree, str(parent_id or "").strip() or None)
+        folder = {"kind": KIND_FOLDER, "id": new_folder_id(), "label": label, "children": []}
+        container.append(folder)
+        self.settings["destinations"] = tree
+        save_app_settings(self.settings)
+        payload = self._destinations_payload()
+        payload["folderId"] = folder["id"]
+        return payload
+
+    def destinations_folder_edit(self, folder_id: str, label: str) -> dict:
+        tree = self._destinations_tree()
+        folder = find_folder(tree, str(folder_id or "").strip())
+        if folder:
+            folder["label"] = (label or "").strip() or folder.get("label") or "Carpeta"
+            self.settings["destinations"] = tree
+            save_app_settings(self.settings)
+        return self._destinations_payload()
+
+    def destinations_folder_remove(self, folder_id: str) -> dict:
+        tree = self._destinations_tree()
+        fid = str(folder_id or "").strip()
+        if fid and remove_folder(tree, fid):
+            if self.settings.get("web_dest_toolbar_folder_id") == fid:
+                self.settings.pop("web_dest_toolbar_folder_id", None)
+            self.settings["destinations"] = tree
+            save_app_settings(self.settings)
+        return self._destinations_payload()

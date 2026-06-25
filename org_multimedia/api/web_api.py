@@ -169,8 +169,9 @@ from .bridge_gallery import GalleryBridgeMixin
 from .bridge_selection import SelectionBridgeMixin
 from .bridge_destinations import DestinationsBridgeMixin
 from .bridge_editor import EditorBridgeMixin
+from .bridge_markers import MarkersBridgeMixin
 
-class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, SelectionBridgeMixin, DestinationsBridgeMixin, EditorBridgeMixin):
+class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, SelectionBridgeMixin, DestinationsBridgeMixin, MarkersBridgeMixin, EditorBridgeMixin):
     def __init__(self) -> None:
         self.settings = load_app_settings()
         self.gallery_folder: Path | None = None
