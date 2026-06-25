@@ -56,6 +56,16 @@
   let thumbToken = 0;
   let loadGen = 0;
   let loadedDestPath = "";
+  let hoverCursorPath: string | null = null;
+  let scrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastPointer: { x: number; y: number } | null = null;
+
+  function destThumbHydrateOpts() {
+    return {
+      cursorPath: hoverCursorPath,
+      pointer: lastPointer,
+    };
+  }
 
   function restoreScrollTop(top: number) {
     queueMicrotask(() => {
@@ -76,14 +86,39 @@
     });
   }
 
-  async function startThumbHydration(snapshot: DestPreviewItem[], gen: number) {
+  async function startThumbHydration(
+    snapshot: DestPreviewItem[],
+    gen: number,
+    opts?: { limitPaths?: string[] }
+  ) {
     if (itemsNeedingHydration(snapshot).length === 0) return;
     await tick();
     const token = thumbToken;
-    void hydrateDestPreviewThumbs(items, thumbScale, token, scrollEl, (next) => {
-      if (token !== thumbToken || gen !== loadGen) return;
-      items = next;
-    });
+    void hydrateDestPreviewThumbs(
+      items,
+      thumbScale,
+      token,
+      scrollEl,
+      (next) => {
+        if (token !== thumbToken || gen !== loadGen) return;
+        items = next;
+      },
+      { ...destThumbHydrateOpts(), limitPaths: opts?.limitPaths }
+    );
+  }
+
+  function filterVisibleItemsNeedingHydration(list: DestPreviewItem[]): string[] {
+    if (!scrollEl) return [];
+    const bounds = scrollEl.getBoundingClientRect();
+    const visible = new Set<string>();
+    for (const tile of scrollEl.querySelectorAll<HTMLElement>(".dest-preview-tile[data-preview-path]")) {
+      const r = tile.getBoundingClientRect();
+      if (r.bottom > bounds.top + 2 && r.top < bounds.bottom - 2) {
+        const p = tile.dataset.previewPath;
+        if (p) visible.add(p);
+      }
+    }
+    return list.filter((x) => visible.has(x.path) && itemsNeedingHydration([x]).length > 0).map((x) => x.path);
   }
 
   async function loadPreview(path: string, opts?: { hardReset?: boolean }) {
@@ -160,6 +195,18 @@
 
   function onScroll(e: Event) {
     syncScrollMetrics(e.currentTarget as HTMLDivElement);
+    if (scrollIdleTimer !== null) clearTimeout(scrollIdleTimer);
+    scrollIdleTimer = setTimeout(() => {
+      scrollIdleTimer = null;
+      const visiblePaths = filterVisibleItemsNeedingHydration(items);
+      if (visiblePaths.length > 0) {
+        void startThumbHydration(items, loadGen, { limitPaths: visiblePaths });
+      }
+    }, 280);
+  }
+
+  function onScrollPointerMove(e: PointerEvent) {
+    lastPointer = { x: e.clientX, y: e.clientY };
   }
 
   function togglePick(path: string) {
@@ -209,6 +256,7 @@
   }
 
   function onTilePointerEnter(path: string) {
+    hoverCursorPath = path;
     if (!rangeSelecting || !rangeAnchorPath) return;
     applyRange(rangeAnchorPath, path, rangeMode);
   }
@@ -255,6 +303,7 @@
   }
 
   onDestroy(() => {
+    if (scrollIdleTimer !== null) clearTimeout(scrollIdleTimer);
     resizeObserver?.disconnect();
     bumpDestPreviewThumbToken();
     clearDestPreviewThumbCache();
@@ -369,7 +418,12 @@
       >
     </header>
 
-    <div class="modal__scroll dest-preview-scroll" bind:this={scrollEl} on:scroll={onScroll}>
+    <div
+      class="modal__scroll dest-preview-scroll"
+      bind:this={scrollEl}
+      on:scroll={onScroll}
+      on:pointermove={onScrollPointerMove}
+    >
       {#if floatActive}
         <div class="selection-float-rail">
           <div

@@ -19,7 +19,9 @@
     galleryThumbHydrating,
     getGalleryThumbHydrationToken,
     hydrateGalleryThumbsHq,
+    type GalleryThumbHydrateOpts,
   } from "../lib/galleryThumbs";
+  import { setGalleryPointerAnchor } from "../lib/thumbPriority";
   import { hasGalleryThumbHq } from "../lib/galleryThumbHqCache";
   import { getGalleryNavigationGeneration, isGalleryNavigationCurrent } from "../lib/gallerySession";
   import { galleryChromeBusy } from "../lib/chromeRemember";
@@ -196,6 +198,29 @@
     return Number($galleryState?.endIndex ?? 0) < Number($galleryState?.total ?? 0);
   }
 
+  function galleryThumbHydrateOpts(): GalleryThumbHydrateOpts {
+    return {
+      cursorPath: galleryCursorPath,
+      scrollContainer: galleryScrollEl,
+      pathOrder: getGalleryItems().map((x) => x.path),
+    };
+  }
+
+  async function hydrateVisibleThumbsAfterScrollIdle() {
+    const needingHq = filterVisibleItemsNeedingHq(getGalleryItems());
+    if (needingHq.length === 0) return;
+    void hydrateGalleryThumbsHq(
+      needingHq,
+      thumbScale,
+      getGalleryThumbHydrationToken(),
+      galleryThumbHydrateOpts()
+    );
+  }
+
+  function onGalleryScrollPointerMove(e: PointerEvent) {
+    setGalleryPointerAnchor(e.clientX, e.clientY);
+  }
+
   async function loadMoreGalleryBatch() {
     if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return false;
     const navGen = getGalleryNavigationGeneration();
@@ -207,7 +232,12 @@
       const extra = Array.isArray(out?.items) ? out.items : [];
       if (extra.length > 0) {
         updateGalleryItems((items) => [...items, ...extra]);
-        void hydrateGalleryThumbsHq(extra, thumbScale, getGalleryThumbHydrationToken());
+        void hydrateGalleryThumbsHq(
+          extra,
+          thumbScale,
+          getGalleryThumbHydrationToken(),
+          galleryThumbHydrateOpts()
+        );
       }
       if (out?.state) setGalleryStateFromApi(out.state);
       else syncSelectedCountFromItems();
@@ -234,6 +264,7 @@
       galleryScrolling = false;
       galleryScrollingStore.set(false);
       galleryScrollIdleTimer = null;
+      void hydrateVisibleThumbsAfterScrollIdle();
     }, 280);
     if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
@@ -481,7 +512,13 @@
   /** Tras cargar carpeta / recargar. La invalidación de hidratación ocurre en beginGalleryNavigation/Refresh(). */
   export async function afterGalleryPayloadLoaded(items: GalleryItem[], scale: number) {
     await tick();
-    await hydrateGalleryThumbsHq(items, scale, getGalleryThumbHydrationToken());
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    await hydrateGalleryThumbsHq(
+      items,
+      scale,
+      getGalleryThumbHydrationToken(),
+      galleryThumbHydrateOpts()
+    );
     if (thumbsPerPage === 0) {
       await tick();
       void maybeAutoLoadMoreForViewport();
@@ -513,7 +550,12 @@
     await tick();
     const needingHq = filterVisibleItemsNeedingHq(items);
     if (needingHq.length > 0) {
-      void hydrateGalleryThumbsHq(needingHq, scale, getGalleryThumbHydrationToken());
+      void hydrateGalleryThumbsHq(
+        needingHq,
+        scale,
+        getGalleryThumbHydrationToken(),
+        galleryThumbHydrateOpts()
+      );
     }
     if (thumbsPerPage === 0) {
       await tick();
@@ -563,6 +605,7 @@
   {galleryScrolling}
   {galleryRangeDraftSelectedSet}
   {onGalleryScroll}
+  onGalleryScrollPointerMove={onGalleryScrollPointerMove}
   {onSectionFolderDrop}
   {navigateToFolder}
   {isGalleryTileSelected}

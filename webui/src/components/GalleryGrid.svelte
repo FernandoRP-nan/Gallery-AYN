@@ -37,6 +37,7 @@
   const DEST_BAR_RESERVE_PX = 56;
 
   export let onGalleryScroll: (e: UIEvent) => void;
+  export let onGalleryScrollPointerMove: (e: PointerEvent) => void = () => {};
   export let onSectionFolderDrop: (e: DragEvent, folder: string) => void;
   export let navigateToFolder: (path: string, opts: any) => void;
   export let isGalleryMediaKind: (kind: string) => boolean;
@@ -126,6 +127,7 @@
     class:gallery__scroll--dest={destinationsMode}
     bind:this={galleryScrollEl}
     on:scroll={handleGalleryScroll}
+    on:pointermove={onGalleryScrollPointerMove}
   >
     {#if galleryFloatChromeActive}
       <div class="selection-float-rail">

@@ -10,6 +10,7 @@ import { getGalleryNavigationGeneration, isGalleryNavigationCurrent } from "./ga
 import { getGalleryItems, updateGalleryItems } from "./galleryRuntime";
 import { stripHqFromGalleryItems } from "./galleryThumbHqCache";
 import { galleryScrolling } from "./galleryScrollState";
+import { prioritizeThumbPaths, type ThumbPointerAnchor } from "./thumbPriority";
 
 /** True mientras corre la hidratación HQ (para estabilizar el chrome de la UI). */
 export const galleryThumbHydrating = writable(false);
@@ -24,28 +25,14 @@ const THUMB_FLUSH_MS = 96;
 const THUMB_FLUSH_SCROLL_RETRY_MS = 120;
 const MAX_SCROLL_FLUSH_DEFERRALS = 48;
 
-function prioritizePathsByViewport(paths: string[], selector: string, attrName: string): string[] {
-  const nodes = Array.from(document.querySelectorAll<HTMLElement>(selector));
-  if (nodes.length === 0) return paths;
-  const nodeByPath = new Map<string, HTMLElement>();
-  for (const n of nodes) {
-    const p = n.dataset[attrName];
-    if (p) nodeByPath.set(p, n);
-  }
-  const visible: string[] = [];
-  const rest: string[] = [];
-  for (const p of paths) {
-    const el = nodeByPath.get(p);
-    if (!el) {
-      rest.push(p);
-      continue;
-    }
-    const r = el.getBoundingClientRect();
-    const isVisible = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
-    (isVisible ? visible : rest).push(p);
-  }
-  return [...visible, ...rest];
-}
+export type GalleryThumbHydrateOpts = {
+  cursorPath?: string | null;
+  scrollContainer?: HTMLElement | null;
+  pathOrder?: string[];
+  pointer?: ThumbPointerAnchor | null;
+};
+
+const IMMEDIATE_HQ_FLUSH = 10;
 
 /** Precarga/decodifica data-URLs antes de tocar el DOM (evita parpadeo al cambiar src). */
 function preloadDataUrl(url: string): Promise<boolean> {
@@ -151,7 +138,12 @@ function queueGalleryThumbHq(path: string, thumbDataUrl: string, token: number) 
   scheduleGalleryThumbFlush(token);
 }
 
-export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: number, token: number) {
+export async function hydrateGalleryThumbsHq(
+  snapshot: GalleryItem[],
+  scale: number,
+  token: number,
+  hydrateOpts?: GalleryThumbHydrateOpts
+) {
   const navGen = getGalleryNavigationGeneration();
   const base = snapshot.filter(
     (x) => (x.kind === "image" || x.kind === "video") && !hasGalleryThumbHq(x.path)
@@ -161,10 +153,17 @@ export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: num
     return;
   }
 
-  const orderedPaths = prioritizePathsByViewport(
+  const pathOrder = hydrateOpts?.pathOrder ?? snapshot.map((x) => x.path);
+  const orderedPaths = prioritizeThumbPaths(
     base.map((x) => x.path),
-    ".tile[data-item-path]",
-    "itemPath"
+    {
+      selector: ".tile[data-item-path]",
+      attrName: "itemPath",
+      scrollContainer: hydrateOpts?.scrollContainer ?? null,
+      cursorPath: hydrateOpts?.cursorPath ?? null,
+      pointer: hydrateOpts?.pointer ?? null,
+      pathOrder,
+    }
   );
   const targets = orderedPaths
     .map((p) => base.find((x) => x.path === p))
@@ -173,6 +172,7 @@ export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: num
   galleryThumbHydrating.set(true);
   galleryThumbFlushToken = token;
   let idx = 0;
+  let immediateFlushLeft = IMMEDIATE_HQ_FLUSH;
   try {
     const workers = Array.from({ length: 4 }, async () => {
       while (idx < targets.length) {
@@ -182,7 +182,13 @@ export async function hydrateGalleryThumbsHq(snapshot: GalleryItem[], scale: num
           const out = await bridge.galleryThumbHq(it.path, scale);
           if (galleryThumbHydrationToken !== token || !isGalleryNavigationCurrent(navGen)) return;
           if (!out?.thumbDataUrl) continue;
-          queueGalleryThumbHq(it.path, out.thumbDataUrl, token);
+          if (immediateFlushLeft > 0) {
+            immediateFlushLeft--;
+            pendingGalleryThumbHq.set(it.path, out.thumbDataUrl);
+            await flushPendingGalleryThumbs(token, true);
+          } else {
+            queueGalleryThumbHq(it.path, out.thumbDataUrl, token);
+          }
         } catch {
           /* ignore: se queda LQ */
         }
@@ -213,7 +219,10 @@ export function disposeGalleryThumbs() {
 }
 
 /** Re-solicita HQ (y LQ vía reload del caller) cuando cambia el tamaño en píxeles. */
-export async function refreshGalleryThumbsForScale(scale: number) {
+export async function refreshGalleryThumbsForScale(
+  scale: number,
+  hydrateOpts?: GalleryThumbHydrateOpts
+) {
   const token = bumpGalleryThumbHydrationToken(true);
-  await hydrateGalleryThumbsHq(getGalleryItems(), scale, token);
+  await hydrateGalleryThumbsHq(getGalleryItems(), scale, token, hydrateOpts);
 }
