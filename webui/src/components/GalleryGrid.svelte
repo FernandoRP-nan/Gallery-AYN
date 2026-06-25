@@ -6,7 +6,12 @@
     getVisibleLayoutEntries,
     type VirtualLayoutEntry,
   } from "../lib/galleryVirtualLayout";
+  import {
+    buildMasonrySegments,
+    computeMasonryColumnCount,
+  } from "../lib/galleryMasonryLayout";
   import GalleryGridItem from "./GalleryGridItem.svelte";
+  import GalleryMessSuggestions from "./GalleryMessSuggestions.svelte";
   import DestToolbar from "./DestToolbar.svelte";
   import type { DestToolbarItem } from "../lib/itemTree";
 
@@ -61,6 +66,19 @@
   export let onDestChipDragEnd: () => void;
   export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
 
+  export let messSuggestionsEnabled = false;
+  export let messFolder = "";
+  export let galleryTargetFolder = "";
+  export let messSuggestionsMasonry = true;
+  export let galleryMasonryView = false;
+  export let onMessSuggestionMoved: () => void = () => {};
+
+  let messSuggestionsRefresh = 0;
+  function handleMessSuggestionMoved() {
+    messSuggestionsRefresh += 1;
+    onMessSuggestionMoved();
+  }
+
   let scrollTop = 0;
   let scrollViewportH = 640;
   let scrollViewportW = 640;
@@ -80,6 +98,17 @@
     scrollTop,
     scrollViewportH
   );
+  $: masonryCellPx = Math.max(72, Math.round(gridCellPx));
+  $: masonryStyle = `--cell:${masonryCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px;--masonry-max-h:${Math.round(masonryCellPx * 2.4)}px`;
+  $: masonryColumnCount = computeMasonryColumnCount(
+    scrollViewportW,
+    masonryCellPx,
+    thumbGapPx,
+    GALLERY_GRID_EDGE_PAD_PX
+  );
+  $: masonrySegments = galleryMasonryView
+    ? buildMasonrySegments(galleryGridItems, masonryColumnCount)
+    : [];
 
   function entryStyle(entry: VirtualLayoutEntry): string {
     return `top:${entry.top}px;left:${entry.left}px;width:${entry.width}px;height:${entry.height}px`;
@@ -118,6 +147,7 @@
   class="gallery om-panel om-panel--lift"
   class:gallery--with-float={galleryFloatChromeActive}
   class:gallery--with-dest={destinationsMode}
+  class:gallery--masonry={galleryMasonryView}
   class:gallery--range-selecting={galleryRangeSelecting}
   class:gallery--scrolling={galleryScrolling}
   class:gallery--busy={galleryBusy}
@@ -150,37 +180,115 @@
         </div>
       </div>
     {/if}
-    <div
-      class="grid-virtual"
-      bind:this={galleryGridEl}
-      style={`height:${virtualLayout.totalHeight}px;--cell:${virtualLayout.cellSize}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}
-    >
-      {#each visibleEntries as entry (entry.item.path)}
-        <GalleryGridItem
-          it={entry.item}
-          style={`position:absolute;box-sizing:border-box;${entryStyle(entry)}`}
-          {dragOverSectionPath}
-          {galleryKeyboardNavHintActive}
-          {galleryCursorPath}
-          {galleryFloatChromeActive}
-          {galleryRangeSelecting}
-          {galleryRangeSuppressClick}
-          {galleryRangeDraftSelectedSet}
-          {showThumbLabels}
-          {galleryScrolling}
-          {galleryBusy}
-          {navigateToFolder}
-          {onSectionFolderDrop}
-          {isGalleryMediaKind}
-          {onGalleryTilePointerDown}
-          {onGalleryTilePointerEnter}
-          {onTileDragStart}
-          {clickItem}
-          {openZoomFromGallery}
-          {onGalleryItemContextMenu}
-        />
-      {/each}
-    </div>
+    {#if galleryMasonryView}
+      <div class="grid-masonry" bind:this={galleryGridEl} style={masonryStyle}>
+        {#each masonrySegments as segment, segIdx (`${segment.kind}:${segment.kind === "span" ? segment.item.path : segIdx}`)}
+          {#if segment.kind === "span"}
+            <GalleryGridItem
+              it={segment.item}
+              masonrySpan={true}
+              masonryLayout={false}
+              {dragOverSectionPath}
+              {galleryKeyboardNavHintActive}
+              {galleryCursorPath}
+              {galleryFloatChromeActive}
+              {galleryRangeSelecting}
+              {galleryRangeSuppressClick}
+              {galleryRangeDraftSelectedSet}
+              {showThumbLabels}
+              {galleryScrolling}
+              {galleryBusy}
+              {navigateToFolder}
+              {onSectionFolderDrop}
+              {isGalleryMediaKind}
+              {onGalleryTilePointerDown}
+              {onGalleryTilePointerEnter}
+              {onTileDragStart}
+              {clickItem}
+              {openZoomFromGallery}
+              {onGalleryItemContextMenu}
+            />
+          {:else}
+            <div class="grid-masonry-cols">
+              {#each segment.columns as colItems, colIdx (colIdx)}
+                <div class="grid-masonry-col">
+                  {#each colItems as it (it.path)}
+                    <GalleryGridItem
+                      {it}
+                      masonrySpan={false}
+                      masonryLayout={isGalleryMediaKind(it.kind)}
+                      {dragOverSectionPath}
+                      {galleryKeyboardNavHintActive}
+                      {galleryCursorPath}
+                      {galleryFloatChromeActive}
+                      {galleryRangeSelecting}
+                      {galleryRangeSuppressClick}
+                      {galleryRangeDraftSelectedSet}
+                      {showThumbLabels}
+                      {galleryScrolling}
+                      {galleryBusy}
+                      {navigateToFolder}
+                      {onSectionFolderDrop}
+                      {isGalleryMediaKind}
+                      {onGalleryTilePointerDown}
+                      {onGalleryTilePointerEnter}
+                      {onTileDragStart}
+                      {clickItem}
+                      {openZoomFromGallery}
+                      {onGalleryItemContextMenu}
+                    />
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/each}
+      </div>
+    {:else}
+      <div
+        class="grid-virtual"
+        bind:this={galleryGridEl}
+        style={`height:${virtualLayout.totalHeight}px;--cell:${virtualLayout.cellSize}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px`}
+      >
+        {#each visibleEntries as entry (entry.item.path)}
+          <GalleryGridItem
+            it={entry.item}
+            style={`position:absolute;box-sizing:border-box;${entryStyle(entry)}`}
+            {dragOverSectionPath}
+            {galleryKeyboardNavHintActive}
+            {galleryCursorPath}
+            {galleryFloatChromeActive}
+            {galleryRangeSelecting}
+            {galleryRangeSuppressClick}
+            {galleryRangeDraftSelectedSet}
+            {showThumbLabels}
+            {galleryScrolling}
+            {galleryBusy}
+            {navigateToFolder}
+            {onSectionFolderDrop}
+            {isGalleryMediaKind}
+            {onGalleryTilePointerDown}
+            {onGalleryTilePointerEnter}
+            {onTileDragStart}
+            {clickItem}
+            {openZoomFromGallery}
+            {onGalleryItemContextMenu}
+          />
+        {/each}
+      </div>
+    {/if}
+
+    {#key `${messSuggestionsRefresh}:${messFolder}:${gridCellPx}:${messSuggestionsEnabled}`}
+      <GalleryMessSuggestions
+        enabled={messSuggestionsEnabled}
+        {messFolder}
+        targetFolder={galleryTargetFolder}
+        masonry={messSuggestionsMasonry}
+        {gridCellPx}
+        {thumbGapPx}
+        on:moved={handleMessSuggestionMoved}
+      />
+    {/key}
   </div>
 
   {#if destinationsMode}
@@ -317,6 +425,28 @@
     position: relative;
     width: 100%;
     box-sizing: border-box;
+  }
+
+  .grid-masonry {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0 var(--grid-edge-pad);
+  }
+
+  .grid-masonry-cols {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--thumb-gap);
+    width: 100%;
+    margin-bottom: var(--thumb-gap);
+  }
+
+  .grid-masonry-col {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--thumb-gap);
   }
 
   :global(.gallery-virtual-item.tile) {

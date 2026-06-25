@@ -18,11 +18,13 @@
     disposeGalleryThumbs,
     galleryThumbHydrating,
     getGalleryThumbHydrationToken,
-    hydrateGalleryThumbsHq,
+    refreshGalleryThumbsForScale,
+    requestGalleryThumbHqHydration,
     type GalleryThumbHydrateOpts,
   } from "../lib/galleryThumbs";
+  import { listGalleryItemsNeedingHq } from "../lib/galleryThumbNeeding";
+  import { waitForGalleryTilesReady } from "../lib/galleryThumbDomReady";
   import { setGalleryPointerAnchor } from "../lib/thumbPriority";
-  import { hasGalleryThumbHq } from "../lib/galleryThumbHqCache";
   import { getGalleryNavigationGeneration, isGalleryNavigationCurrent } from "../lib/gallerySession";
   import { galleryChromeBusy } from "../lib/chromeRemember";
   import { galleryScrolling as galleryScrollingStore } from "../lib/galleryScrollState";
@@ -41,6 +43,11 @@
 
   export let destinationsMode = false;
   export let timelineView = false;
+  export let galleryMasonryView = false;
+  export let messSuggestionsEnabled = false;
+  export let messFolder = "";
+  export let galleryFolder = "";
+  export let messSuggestionsMasonry = true;
   export let thumbScale = 1;
   export let thumbGapPx = 12;
   export let showThumbLabels = true;
@@ -70,6 +77,7 @@
   export let onDestChipDragStart: (e: DragEvent, idx: number) => void;
   export let onDestChipDragEnd: () => void;
   export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
+  export let onMessSuggestionMoved: () => void | Promise<void> = () => {};
   export let destToolbarItems: import("../lib/itemTree").DestToolbarItem[] = [];
   export let destToolbarFolderLabel: string | null = null;
   export let destToolbarCanGoBack = false;
@@ -165,6 +173,14 @@
     }, 160);
   }
 
+  $: if (galleryMasonryView && galleryScrollEl && thumbsPerPage === 0 && $galleryItems.length > 0) {
+    if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
+    galleryAutoLoadTimer = setTimeout(() => {
+      galleryAutoLoadTimer = null;
+      void fillViewportIfNeeded();
+    }, 180);
+  }
+
   $: {
     const hydrating = $galleryThumbHydrating;
     if (galleryHydratingPrev && !hydrating) {
@@ -207,10 +223,9 @@
   }
 
   async function hydrateVisibleThumbsAfterScrollIdle() {
-    const needingHq = filterVisibleItemsNeedingHq(getGalleryItems());
-    if (needingHq.length === 0) return;
-    void hydrateGalleryThumbsHq(
-      needingHq,
+    const needing = listGalleryItemsNeedingHq(getGalleryItems());
+    if (needing.length === 0) return;
+    await requestGalleryThumbHqHydration(
       thumbScale,
       getGalleryThumbHydrationToken(),
       galleryThumbHydrateOpts()
@@ -232,8 +247,7 @@
       const extra = Array.isArray(out?.items) ? out.items : [];
       if (extra.length > 0) {
         updateGalleryItems((items) => [...items, ...extra]);
-        void hydrateGalleryThumbsHq(
-          extra,
+        void requestGalleryThumbHqHydration(
           thumbScale,
           getGalleryThumbHydrationToken(),
           galleryThumbHydrateOpts()
@@ -248,7 +262,6 @@
     }
   }
 
-  /** Invalida scroll infinito y cargas en segundo plano al cambiar de carpeta. */
   export function cancelBackgroundWork() {
     galleryAutoLoadRunId++;
     galleryLoadingMore = false;
@@ -276,7 +289,6 @@
     dispatch("preview", { path });
   }
 
-  /** Restablece gestos de selección/arrastre que pueden bloquear clics en la rejilla. */
   export function resetGalleryInteractionState() {
     if (galleryRangeRaf !== null) {
       cancelAnimationFrame(galleryRangeRaf);
@@ -509,12 +521,14 @@
     }
   };
 
-  /** Tras cargar carpeta / recargar. La invalidación de hidratación ocurre en beginGalleryNavigation/Refresh(). */
+  export async function refreshThumbsAtScale(scale: number) {
+    await refreshGalleryThumbsForScale(scale, galleryThumbHydrateOpts());
+  }
+
   export async function afterGalleryPayloadLoaded(items: GalleryItem[], scale: number) {
     await tick();
-    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-    await hydrateGalleryThumbsHq(
-      items,
+    await waitForGalleryTilesReady(galleryScrollEl, 1);
+    await requestGalleryThumbHqHydration(
       scale,
       getGalleryThumbHydrationToken(),
       galleryThumbHydrateOpts()
@@ -526,32 +540,11 @@
     }
   }
 
-  function filterVisibleItemsNeedingHq(items: GalleryItem[]): GalleryItem[] {
-    if (!galleryScrollEl) return [];
-    const bounds = galleryScrollEl.getBoundingClientRect();
-    const visiblePaths = new Set<string>();
-    for (const tile of galleryScrollEl.querySelectorAll<HTMLElement>("[data-item-path]")) {
-      const r = tile.getBoundingClientRect();
-      if (r.bottom > bounds.top + 2 && r.top < bounds.bottom - 2) {
-        const p = tile.dataset.itemPath;
-        if (p) visiblePaths.add(p);
-      }
-    }
-    return items.filter(
-      (x) =>
-        visiblePaths.has(x.path) &&
-        (x.kind === "image" || x.kind === "video") &&
-        !hasGalleryThumbHq(x.path)
-    );
-  }
-
-  /** Tras mover/eliminar: no invalidar HQ ni re-hidratar toda la galería. */
   export async function afterGalleryMoveDelta(items: GalleryItem[], scale: number) {
     await tick();
-    const needingHq = filterVisibleItemsNeedingHq(items);
+    const needingHq = listGalleryItemsNeedingHq(items);
     if (needingHq.length > 0) {
-      void hydrateGalleryThumbsHq(
-        needingHq,
+      void requestGalleryThumbHqHydration(
         scale,
         getGalleryThumbHydrationToken(),
         galleryThumbHydrateOpts()
@@ -579,54 +572,70 @@
 />
 
 <div class="gallery-workspace">
-<GalleryGrid
-  {galleryGridItems}
-  bind:gridCellPx
-  bind:thumbGapPx
-  bind:dragOverSectionPath
-  bind:galleryKeyboardNavHintActive
-  bind:galleryCursorPath
-  bind:galleryRangeSelecting
-  bind:galleryRangeSuppressClick
-  bind:showThumbLabels
-  galleryState={frozenGalleryState}
-  selectionCount={liveSelectedCount}
-  {destToolbarItems}
-  {destToolbarFolderLabel}
-  {destToolbarCanGoBack}
-  {onDestToolbarBack}
-  {onDestToolbarOpenFolder}
-  bind:dragOverDestPath
-  bind:draggedDestIdx
-  bind:galleryScrollEl
-  bind:galleryGridEl
-  {galleryFloatChromeActive}
-  galleryBusy={$galleryChromeBusy}
-  {galleryScrolling}
-  {galleryRangeDraftSelectedSet}
-  {onGalleryScroll}
-  onGalleryScrollPointerMove={onGalleryScrollPointerMove}
-  {onSectionFolderDrop}
-  {navigateToFolder}
-  {isGalleryTileSelected}
-  {isGalleryMediaKind}
-  {onGalleryTilePointerDown}
-  {onGalleryTilePointerEnter}
-  {onTileDragStart}
-  clickItem={clickGalleryItem}
-  {openZoomFromGallery}
-  {onGalleryItemContextMenu}
-  {selectPage}
-  {clearSelection}
-  {invertSelection}
-  {openConfirmDelete}
-  {deleteSelectedGalleryItems}
-  {openAddDestForm}
-  {onDestCardClick}
-  {onDestContextMenu}
-  {onDestChipDragStart}
-  {onDestChipDragEnd}
-  {onDestDrop}
-  {destinationsMode}
-/>
+  <GalleryGrid
+    {galleryGridItems}
+    bind:gridCellPx
+    bind:thumbGapPx
+    bind:dragOverSectionPath
+    bind:galleryKeyboardNavHintActive
+    bind:galleryCursorPath
+    bind:galleryRangeSelecting
+    bind:galleryRangeSuppressClick
+    bind:showThumbLabels
+    galleryState={frozenGalleryState}
+    selectionCount={liveSelectedCount}
+    {destToolbarItems}
+    {destToolbarFolderLabel}
+    {destToolbarCanGoBack}
+    {onDestToolbarBack}
+    {onDestToolbarOpenFolder}
+    bind:dragOverDestPath
+    bind:draggedDestIdx
+    bind:galleryScrollEl
+    bind:galleryGridEl
+    {galleryFloatChromeActive}
+    galleryBusy={$galleryChromeBusy}
+    {galleryScrolling}
+    {galleryRangeDraftSelectedSet}
+    {onGalleryScroll}
+    onGalleryScrollPointerMove={onGalleryScrollPointerMove}
+    {onSectionFolderDrop}
+    {navigateToFolder}
+    {isGalleryTileSelected}
+    {isGalleryMediaKind}
+    {onGalleryTilePointerDown}
+    {onGalleryTilePointerEnter}
+    {onTileDragStart}
+    clickItem={clickGalleryItem}
+    {openZoomFromGallery}
+    {onGalleryItemContextMenu}
+    {selectPage}
+    {clearSelection}
+    {invertSelection}
+    {openConfirmDelete}
+    {deleteSelectedGalleryItems}
+    {openAddDestForm}
+    {onDestCardClick}
+    {onDestContextMenu}
+    {onDestChipDragStart}
+    {onDestChipDragEnd}
+    {onDestDrop}
+    {destinationsMode}
+    {galleryMasonryView}
+    {messSuggestionsEnabled}
+    messFolder={messFolder}
+    galleryTargetFolder={galleryFolder}
+    messSuggestionsMasonry={messSuggestionsMasonry}
+    onMessSuggestionMoved={() => void onMessSuggestionMoved()}
+  />
 </div>
+
+<style>
+  .gallery-workspace {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1 1 auto;
+    height: 100%;
+  }
+</style>

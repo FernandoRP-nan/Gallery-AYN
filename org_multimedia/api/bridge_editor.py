@@ -213,6 +213,44 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
     except Exception:
         return None
 
+def _video_thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quality: int = 80) -> str | None:
+    """Primer fotograma del vídeo con proporción original (vista masonry)."""
+    import subprocess
+
+    from ..core.video_tools import resolve_ffmpeg
+
+    ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        return None
+
+    mw, mh = max(48, int(max_w)), max(48, int(max_h))
+    if mw % 2:
+        mw += 1
+    if mh % 2:
+        mh += 1
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg, "-y",
+                "-ss", "0.5",
+                "-i", str(path),
+                "-vframes", "1",
+                "-vf", f"scale={mw}:{mh}:force_original_aspect_ratio=decrease",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "-q:v", str(max(2, min(31, int((100 - quality) / 3)))),
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return None
+        payload = base64.b64encode(result.stdout).decode("ascii")
+        return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        return None
+
 class EditorBridgeMixin:
     def gallery_media_url(self, path: str, warm: bool = False, playback_mode: str = "auto") -> dict:
         """URL de streaming para vídeo/SVG (ruta corta /om-media/…)."""
@@ -520,7 +558,8 @@ class EditorBridgeMixin:
             if raw_preset in ("balanced", "sharp", "hidpi", "performance")
             else "balanced"
         )
-        key = (str(path.resolve()), thumb_px, profile, preset_key)
+        masonry = bool(self.settings.get("gallery_masonry_view", False))
+        key = (str(path.resolve()), thumb_px, profile, preset_key, masonry)
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -531,7 +570,15 @@ class EditorBridgeMixin:
                 return hit[1]
         enc = thumb_encode_params(thumb_px, profile)
         if path.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS:
-            data = _video_thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
+            if masonry:
+                from .bridge_gallery import MASONRY_THUMB_HEIGHT_FACTOR
+
+                max_h = max(48, int(round(enc.size_px * MASONRY_THUMB_HEIGHT_FACTOR)))
+                data = _video_thumb_jpeg_data_url_masonry(
+                    path, enc.size_px, max_h, quality=enc.jpeg_quality
+                )
+            else:
+                data = _video_thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
             if data is not None:
                 with self._thumb_cache_lock:
                     self._thumb_cache[key] = (mtime, data)
@@ -539,7 +586,15 @@ class EditorBridgeMixin:
         # Pillow no rasteriza SVG de forma fiable; la UI usa `file://` en vista previa.
         if path.suffix.lower() == ".svg":
             return None
-        data = _thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
+        if masonry:
+            from .bridge_gallery import MASONRY_THUMB_HEIGHT_FACTOR, _thumb_jpeg_data_url_masonry
+
+            max_h = max(48, int(round(enc.size_px * MASONRY_THUMB_HEIGHT_FACTOR)))
+            data = _thumb_jpeg_data_url_masonry(
+                path, enc.size_px, max_h, quality=enc.jpeg_quality
+            )
+        else:
+            data = _thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
         with self._thumb_cache_lock:
             self._thumb_cache[key] = (mtime, data)
         return data

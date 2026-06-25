@@ -97,6 +97,9 @@ def _thumb_px_from_dest_scale(scale: float) -> int:
     s = max(lo, min(hi, float(scale)))
     return int(round(px_min + (s - lo) / (hi - lo) * (px_max - px_min)))
 
+# Altura máxima de miniatura masonry = ancho × factor (debe coincidir con --masonry-max-h en la UI).
+MASONRY_THUMB_HEIGHT_FACTOR = 2.4
+
 def _img_to_data_url(path: Path, size: tuple[int, int]) -> str | None:
     if Image is None:
         return None
@@ -141,6 +144,22 @@ def _thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 90) -> str
                 im = ImageOps.fit(im, (size, size), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
             else:
                 im.thumbnail((size, size), Image.Resampling.LANCZOS)
+            bio = io.BytesIO()
+            im.save(bio, format="JPEG", quality=quality, optimize=True)
+            payload = base64.b64encode(bio.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        return None
+
+def _thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quality: int = 90) -> str | None:
+    """Miniatura con proporción original para vista masonry (encaja en max_w × max_h)."""
+    if Image is None:
+        return None
+    try:
+        mw, mh = max(1, int(max_w)), max(1, int(max_h))
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((mw, mh), Image.Resampling.LANCZOS)
             bio = io.BytesIO()
             im.save(bio, format="JPEG", quality=quality, optimize=True)
             payload = base64.b64encode(bio.getvalue()).decode("ascii")

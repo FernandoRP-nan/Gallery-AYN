@@ -205,6 +205,19 @@ const devMockApi: WebApi = {
     progress: { current: 0, total: 0, detail: "Modo navegador (mock)" },
     done: null,
   }),
+  mess_scan_start: async () => ({ ok: false, error: "Solo disponible con la app Python (PyWebView)." }),
+  mess_scan_cancel: async () => ({ ok: true }),
+  mess_scan_status: async () => ({
+    running: false,
+    progress: { current: 0, total: 0, detail: "Modo navegador (mock)" },
+    result: null,
+    error: null,
+  }),
+  mess_move_cluster: async () => ({ ok: false, moved: 0, errors: 0 }),
+  mess_save_settings: async (_folder: string, _sim?: number) => ({ settings: {} }),
+  mess_thumbs: async () => ({ items: [] }),
+  mess_list_images: async () => ({ ok: true, paths: [], folder: "", total: 0, truncated: false }),
+  mess_similar_paths: async () => ({ ok: true, anchor: "", items: [] }),
   dialog_pick_folder: async () => ({
     path: null as string | null,
     cancelled: true,
@@ -309,5 +322,17 @@ export const bridge = {
   organizerStart: (path: string, options: Record<string, any>) => call<any>("organizer_start", path, options),
   organizerCancel: () => call<any>("organizer_cancel"),
   organizerStatus: () => call<any>("organizer_status"),
+  messScanStart: (folderPath: string, minSimilarity?: number) =>
+    call<any>("mess_scan_start", folderPath, minSimilarity),
+  messScanCancel: () => call<any>("mess_scan_cancel"),
+  messScanStatus: () => call<any>("mess_scan_status"),
+  messMoveCluster: (paths: string[], destPath: string) => call<any>("mess_move_cluster", paths, destPath),
+  messSaveSettings: (folderPath: string, minSimilarity?: number) =>
+    call<any>("mess_save_settings", folderPath, minSimilarity),
+  messThumbs: (paths: string[], size = 120) => call<any>("mess_thumbs", paths, size),
+  messListImages: (folderPath?: string, limit?: number) =>
+    call<any>("mess_list_images", folderPath ?? "", limit),
+  messSimilarPaths: (anchorPath: string, candidatePaths: string[], minSimilarity?: number, limit = 32) =>
+    call<any>("mess_similar_paths", anchorPath, candidatePaths, minSimilarity, limit),
   dialogPickFolder: (startPath?: string) => call<any>("dialog_pick_folder", startPath ?? ""),
 };

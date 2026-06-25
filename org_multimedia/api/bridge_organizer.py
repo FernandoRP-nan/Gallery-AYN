@@ -187,6 +187,12 @@ class OrganizerBridgeMixin:
                     include_pending_scan=bool(options.get("includePending", False)),
                     remove_duplicate_images=bool(options.get("removeDuplicates", False)),
                     group_similar_images=bool(options.get("groupSimilarImages", False)),
+                    group_similar_visual=bool(options.get("groupSimilarVisual", False)),
+                    visual_similarity_min=float(
+                        options.get("visualSimilarityMin")
+                        if options.get("visualSimilarityMin") is not None
+                        else self.settings.get("mess_similarity_min", 0.82)
+                    ),
                 )
 
                 def on_progress(cur: int, total: int, detail: str) -> None:

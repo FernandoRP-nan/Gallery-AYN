@@ -28,9 +28,10 @@
     probeVideoHttpUrl,
     type VideoBackendDiagnostics,
   } from "./lib/videoDiagnostics";
-  import { galleryGridCellPx, thumbQualityRefreshNeeded } from "./lib/thumbScale";
+  import { galleryGridCellPx, thumbQualityRefreshNeeded, galleryThumbPx } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
   import DestPreviewModal from "./components/DestPreviewModal.svelte";
+  import MessPanel from "./components/MessPanel.svelte";
   import DestMoveCtxTree from "./components/DestMoveCtxTree.svelte";
   import DestMoveFlyoutPortals from "./components/DestMoveFlyoutPortals.svelte";
   import {
@@ -62,6 +63,7 @@
     bumpGalleryThumbHydrationToken,
     disposeGalleryThumbs,
     galleryThumbHydrating,
+    invalidateGalleryThumbHqForScale,
     refreshGalleryThumbsForScale,
   } from "./lib/galleryThumbs";
   import { cancelZoomCarouselHydration, hydrateZoomCarouselThumbs } from "./lib/zoomCarouselThumbs";
@@ -72,7 +74,7 @@
     primaryGallerySortKey,
   } from "./lib/gallerySort";
   import type { ActiveProcess } from "./components/PagerBar.svelte";
-  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems, hasGalleryThumbHq } from "./lib/galleryThumbHqCache";
+  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems, hasGalleryThumbHq, getGalleryThumbHqValidPx } from "./lib/galleryThumbHqCache";
   import {
     bumpGalleryNavigationGeneration,
     getGalleryNavigationGeneration,
@@ -248,6 +250,15 @@
   let folderForwardStack: string[] = [];
   /** Panel organizador en ventana flotante (tarea por lotes). */
   let orgPanelOpen = false;
+  let messPanelOpen = false;
+  let messFolderSetting = "";
+  let messSimilaritySetting = 0.82;
+  let messSuggestionsEnabled = false;
+  let messPinterestMasonry = false;
+  let messScanMaxFiles = 400;
+  let messSuggestionsEnabledBackup = false;
+  let messPinterestMasonryBackup = false;
+  let messScanMaxFilesBackup = 400;
   /** Menú Vista (subcarpetas, orden, futuro agrupar). */
   let viewMenuOpen = false;
   let includeSubfolders = false;
@@ -256,6 +267,7 @@
   let sectionDominantColor = true;
   /** Vista calendario: secciones por mes; marcas por día según zoom (solo cliente). */
   let timelineView = false;
+  let galleryMasonryView = false;
   let gallerySortMode = "name,mtime,type";
   /** Resaltado al arrastrar sobre encabezado de sección (agrupar por carpeta). */
   let dragOverSectionPath: string | null = null;
@@ -324,7 +336,8 @@
     includeComics: false,
     includePending: false,
     removeDuplicates: false,
-    groupSimilarImages: false
+    groupSimilarImages: false,
+    groupSimilarVisual: false
   };
 
   /** Rutas recientes (persistidas en settings) para acceso rápido si el campo está vacío. */
@@ -441,6 +454,16 @@
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
   let galleryActionBusy = false;
   let thumbScaleDebounce: ReturnType<typeof setTimeout> | null = null;
+  let prevThumbScaleForHq = thumbScale;
+
+  $: {
+    if (thumbScale !== prevThumbScaleForHq) {
+      prevThumbScaleForHq = thumbScale;
+      if (invalidateGalleryThumbHqForScale(thumbScale)) {
+        void galleryWorkspace?.refreshThumbsAtScale(thumbScale);
+      }
+    }
+  }
 
   const isDevMock = () =>
     typeof import.meta !== "undefined" && Boolean((import.meta as any).env?.DEV) && !window.pywebview?.api;
@@ -638,6 +661,11 @@
     const last = normalizePathForApi(String(data.settings?.gallery_last_folder ?? ""));
     folder = normalizePathForApi(String(data.gallery?.folder ?? last) || "");
     orgPath = folder || orgPath;
+    messFolderSetting = String(data.settings?.mess_folder_path ?? "").trim();
+    messSimilaritySetting = Number(data.settings?.mess_similarity_min ?? 0.82);
+    messSuggestionsEnabled = Boolean(data.settings?.mess_suggestions_enabled ?? false);
+    messPinterestMasonry = Boolean(data.settings?.mess_pinterest_masonry ?? false);
+    messScanMaxFiles = Math.max(50, Math.min(2000, Number(data.settings?.mess_scan_max_files ?? 400) || 400));
     if (data.gallery) setGalleryState(data.gallery);
     recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
       ? (data.settings.gallery_recent_folders as string[]).map((p) => normalizePathForApi(String(p))).filter(Boolean)
@@ -656,6 +684,7 @@
     groupByFolder = Boolean(data.settings?.gallery_group_by_folder ?? false);
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
+    galleryMasonryView = Boolean(data.settings?.gallery_masonry_view ?? false);
     gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
     {
       const vp = String(data.settings?.video_transcode_preset ?? "fast").toLowerCase();
@@ -735,6 +764,18 @@
     await persistViewAndReload();
   }
 
+  async function onGalleryMasonryViewChange(checked: boolean) {
+    galleryMasonryView = checked;
+    try {
+      await trackLoad(bridge.settingsPatch({ gallery_masonry_view: checked }));
+      bumpGalleryThumbHydrationToken(true);
+      await reload({ silent: false });
+      status = t("status.viewUpdated");
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("status.viewApplyError");
+    }
+  }
+
   async function onGallerySortApply(mode: string) {
     gallerySortMode = mode;
     const primary = primaryGallerySortKey(mode);
@@ -743,6 +784,11 @@
     }
     viewMenuOpen = false;
     await persistViewAndReload();
+  }
+
+  async function onMessSuggestionMoved() {
+    await reload({ silent: true });
+    status = t("suggestions.movedOk");
   }
 
   /** Cancela trabajo en curso de la carpeta anterior (miniaturas HQ, colas, scroll infinito). */
@@ -1049,7 +1095,10 @@
         !x.thumbDataUrl &&
         !hasGalleryThumbHq(x.path)
     );
-    const navGen = beginGalleryRefresh(Boolean(opts?.invalidateThumbCache || brokenThumbs));
+    const thumbPxStale = getGalleryThumbHqValidPx() !== galleryThumbPx(thumbScale);
+    const navGen = beginGalleryRefresh(
+      Boolean(opts?.invalidateThumbCache || brokenThumbs || thumbPxStale)
+    );
     const p = bridge.galleryReload();
     const silent = opts?.silent !== false;
     const out = silent ? await p : await trackLoad(p, opts?.loadingMessage ?? t("load.loading"));
@@ -1057,6 +1106,8 @@
     setGalleryPayload(out.state, out.items ?? []);
     await afterGalleryDataLoaded();
   };
+
+  const reloadGalleryFresh = () => reload({ invalidateThumbCache: true, silent: false });
 
   const goPage = async (page: number) => {
     const navGen = beginGalleryRefresh();
@@ -1101,6 +1152,9 @@
     videoTranscodeMaxHeightBackup = videoTranscodeMaxHeight;
     videoTranscodeHwBackup = videoTranscodeHw;
     galleryThumbQualityPresetBackup = galleryThumbQualityPreset;
+    messPinterestMasonryBackup = messPinterestMasonry;
+    messSuggestionsEnabledBackup = messSuggestionsEnabled;
+    messScanMaxFilesBackup = messScanMaxFiles;
     settingsOpen = true;
   };
 
@@ -1120,6 +1174,9 @@
     videoTranscodeMaxHeight = videoTranscodeMaxHeightBackup;
     videoTranscodeHw = videoTranscodeHwBackup;
     galleryThumbQualityPreset = galleryThumbQualityPresetBackup;
+    messPinterestMasonry = messPinterestMasonryBackup;
+    messSuggestionsEnabled = messSuggestionsEnabledBackup;
+    messScanMaxFiles = messScanMaxFilesBackup;
     settingsOpen = false;
   };
 
@@ -1170,6 +1227,9 @@
       video_transcode_preset: videoTranscodePreset,
       video_transcode_max_height: Math.max(0, Math.min(2160, Math.round(Number(videoTranscodeMaxHeight) || 1080))),
       video_transcode_hw: videoTranscodeHw,
+      mess_suggestions_enabled: Boolean(messSuggestionsEnabled),
+      mess_pinterest_masonry: Boolean(messPinterestMasonry),
+      mess_scan_max_files: Math.max(50, Math.min(2000, Math.round(Number(messScanMaxFiles) || 400))),
     });
     if (selectedPreview?.mediaType === "video" && selectedPreview.path) {
       previewVideoMode = "auto";
@@ -1994,12 +2054,15 @@
     const nextScale = thumbScale;
     try {
       await bridge.settingsPatch({ gallery_thumb_scale: Number(nextScale.toFixed(3)) });
+      appliedThumbScale = nextScale;
       if (thumbQualityRefreshNeeded(prevScale, nextScale)) {
+        invalidateGalleryThumbHqForScale(nextScale);
         await reload({ silent: true, invalidateThumbCache: true });
-        appliedThumbScale = nextScale;
         return;
       }
-      appliedThumbScale = nextScale;
+      if (invalidateGalleryThumbHqForScale(nextScale)) {
+        await galleryWorkspace?.refreshThumbsAtScale(nextScale);
+      }
     } catch {
       status = t("status.thumbScaleError");
     }
@@ -3035,7 +3098,10 @@
   };
 
   const startOrganizer = async () => {
-    const out = await bridge.organizerStart(orgPath, orgOptions);
+    const out = await bridge.organizerStart(orgPath, {
+      ...orgOptions,
+      visualSimilarityMin: messSimilaritySetting
+    });
     if (!out.ok) {
       status = out.error ?? t("status.organizerStartError");
       return;
@@ -3060,7 +3126,8 @@
         : t("status.organizerDoneOk")
             .replace("{moved}", String(stats.moved_media ?? 0))
             .replace("{cbz}", String(stats.moved_cbz ?? 0))
-            .replace("{other}", String(stats.moved_other ?? 0));
+            .replace("{other}", String(stats.moved_other ?? 0))
+            .replace("{grouped}", String(stats.grouped_similar_images ?? 0));
     }
   };
 
@@ -3969,6 +4036,7 @@
       !viewMenuOpen &&
       !settingsOpen &&
       !orgPanelOpen &&
+      !messPanelOpen &&
       !destFormOpen &&
       !routePickerOpen &&
       isGalleryNavKey
@@ -3998,6 +4066,7 @@
       !viewMenuOpen &&
       !settingsOpen &&
       !orgPanelOpen &&
+      !messPanelOpen &&
       !destFormOpen &&
       !routePickerOpen &&
       shortcutMatchesSingle(e as KeyboardEvent, " ")
@@ -4075,6 +4144,7 @@
     else if (previewOpen) previewOpen = false;
     else if (routePickerOpen) routePickerOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
+    else if (messPanelOpen) messPanelOpen = false;
   }}
 />
 
@@ -4096,10 +4166,12 @@
     bind:groupByFolder
     bind:sectionDominantColor
     bind:timelineView
+    bind:galleryMasonryView
     bind:gallerySortMode
     bind:orgPath
     bind:folder
     bind:orgPanelOpen
+    bind:messPanelOpen
     bind:routePathEl
     bind:routePickerOpen
     bind:folderBackStack
@@ -4110,13 +4182,14 @@
     {onGroupByFolderChange}
     {onSectionDominantColorChange}
     {onTimelineViewChange}
+    {onGalleryMasonryViewChange}
     {onGallerySortApply}
     {goBackFolder}
     {goForwardFolder}
     {goUpFolder}
     {unpinFolder}
     {openPinMarkerModal}
-    {reload}
+    reload={reloadGalleryFresh}
     {pickGalleryFolder}
     {loadFolder}
     {openSettingsModal}
@@ -4133,7 +4206,7 @@
   >
     <div class="destinos-work__top">
       <section
-        class="content"
+        class="content content--gallery-shell"
         style={previewVisible
           ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
           : "grid-template-columns:minmax(0,1fr)"}
@@ -4153,6 +4226,11 @@
           bind:showThumbLabels
           {destinationsMode}
           {timelineView}
+          {galleryMasonryView}
+          messSuggestionsEnabled={messSuggestionsEnabled}
+          messFolder={messFolderSetting}
+          galleryFolder={folder}
+          messSuggestionsMasonry={galleryMasonryView || messPinterestMasonry}
           {thumbScale}
           {thumbsPerPage}
           {previewVisible}
@@ -4175,6 +4253,7 @@
           {destToolbarCanGoBack}
           onDestToolbarBack={() => void destToolbarBack()}
           onDestToolbarOpenFolder={(id) => void navigateDestToolbarFolder(id)}
+          onMessSuggestionMoved={onMessSuggestionMoved}
           on:preview={(e) => setSelectedPreviewFromPath(e.detail.path)}
         />
 
@@ -4378,6 +4457,7 @@
           <label class="check"><input type="checkbox" bind:checked={orgOptions.includeComics} /> {t("organizer.includeComics")}</label>
           <label class="check"><input type="checkbox" bind:checked={orgOptions.includePending} /> {t("organizer.includePending")}</label>
           <label class="check"><input type="checkbox" bind:checked={orgOptions.removeDuplicates} /> {t("organizer.removeDuplicates")}</label>
+          <label class="check"><input type="checkbox" bind:checked={orgOptions.groupSimilarVisual} /> {t("organizer.groupSimilarVisual")}</label>
           <label class="check"><input type="checkbox" bind:checked={orgOptions.groupSimilarImages} /> {t("organizer.groupSimilar")}</label>
         </div>
         <div class="org-row org-row--footer">
@@ -4389,6 +4469,17 @@
       </div>
     </div>
   {/if}
+
+  <MessPanel
+    open={messPanelOpen}
+    galleryFolder={folder}
+    initialMessFolder={messFolderSetting}
+    initialSimilarity={messSimilaritySetting}
+    onClose={() => (messPanelOpen = false)}
+    onMoved={async () => {
+      await reload({ silent: true });
+    }}
+  />
 
   {#if destCtxMenu}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -4803,6 +4894,9 @@
       bind:thumbFrameVisible
       bind:thumbCardStyle
       bind:keyboardShortcuts
+      bind:pinterestMasonry={messPinterestMasonry}
+      bind:suggestionsEnabled={messSuggestionsEnabled}
+      bind:messScanMaxFiles
       defaultShortcuts={defaultKeyboardShortcuts}
       destTree={destTreeSettingsDraft}
       markerTree={markerTreeSettingsDraft}
