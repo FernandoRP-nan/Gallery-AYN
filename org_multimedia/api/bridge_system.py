@@ -162,6 +162,16 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
     except Exception:
         return None
 
+_VIDEO_SETTINGS_KEYS = frozenset(
+    {
+        "video_transcode_preset",
+        "video_transcode_max_height",
+        "video_transcode_max_width",
+        "video_transcode_hw",
+    }
+)
+
+
 class SystemBridgeMixin:
     def get_initial_state(self) -> dict:
         dest_payload = self._destinations_payload() if hasattr(self, "_destinations_payload") else {"destinations": [], "toolbarFolderId": ""}
@@ -177,9 +187,16 @@ class SystemBridgeMixin:
         }
 
     def settings_patch(self, data: dict) -> dict:
+        before = {k: self.settings.get(k) for k in _VIDEO_SETTINGS_KEYS}
         self.settings.update(data)
         save_app_settings(self.settings)
-        return {"settings": self.settings}
+        after = {k: self.settings.get(k) for k in _VIDEO_SETTINGS_KEYS}
+        cleared = 0
+        if before != after:
+            from ..core.video_transcode import invalidate_transcode_cache
+
+            cleared = invalidate_transcode_cache()
+        return {"settings": self.settings, "transcodeCacheCleared": cleared}
 
     def dialog_pick_folder(self, start_path: str = "") -> dict:
         """Abre el selector de carpeta del sistema (ventana PyWebView)."""

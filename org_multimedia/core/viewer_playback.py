@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .video_playback_mode import list_video_playback_profiles, normalize_playback_mode
 from .video_transcode import (
     ensure_transcoded_mp4,
     ensure_transcoded_webm,
@@ -70,37 +71,75 @@ def viewer_engine_label() -> str:
     return f"{gui} · MP4/H.264"
 
 
-def needs_viewer_transcode(path: Path) -> bool:
+def needs_viewer_transcode(path: Path, *, playback_mode: str = "auto") -> bool:
+    mode = normalize_playback_mode(playback_mode)
+    if mode == "direct":
+        return False
+    if mode in ("remux", "turbo", "fast", "quality"):
+        return True
+
+    from .video_tools import ffprobe_available
+
     if viewer_prefers_webm():
         if path.suffix.lower() == ".webm":
+            if not ffprobe_available():
+                return True
             return not is_webm_playable(path)
         return True
+    if not ffprobe_available():
+        return path.suffix.lower() not in (".mp4", ".m4v")
     return not is_browser_playable(path)
 
 
-def ensure_viewer_playback(path: Path) -> tuple[Path, str]:
+def viewer_playback_strategy(path: Path, *, playback_mode: str = "auto") -> str:
+    """direct = sin conversión; remux = copiar a MP4; encode = re-codificar (lento)."""
+    mode = normalize_playback_mode(playback_mode)
+    if mode == "direct":
+        return "direct"
+    if mode == "remux":
+        return "remux"
+    if mode in ("turbo", "fast", "quality"):
+        return "encode"
+
+    if not needs_viewer_transcode(path, playback_mode="auto"):
+        return "direct"
+    if viewer_prefers_webm():
+        return "encode"
+    from .video_transcode import _ffprobe_streams, mp4_playback_mode
+
+    video, audio = _ffprobe_streams(path)
+    plan = mp4_playback_mode(video, audio)
+    if plan in ("copy_all", "copy_video_aac"):
+        return "remux"
+    return "encode"
+
+
+def ensure_viewer_playback(path: Path, *, playback_mode: str = "auto") -> tuple[Path, str]:
     """Devuelve (archivo, mime) listo para el visor integrado."""
+    mode = normalize_playback_mode(playback_mode)
     if viewer_prefers_webm():
         out = ensure_transcoded_webm(path)
         return out, "video/webm"
-    out = ensure_transcoded_mp4(path)
+    out = ensure_transcoded_mp4(path, playback_mode=mode)
     return out, "video/mp4"
 
 
-def warm_viewer_playback_async(path: Path) -> None:
+def warm_viewer_playback_async(path: Path, *, playback_mode: str = "auto") -> None:
+    mode = normalize_playback_mode(playback_mode)
     if viewer_prefers_webm():
         warm_webm_transcode_async(path)
     else:
-        warm_transcode_async(path)
+        warm_transcode_async(path, playback_mode=mode)
 
 
-def viewer_playback_cache_status(path: Path) -> dict:
+def viewer_playback_cache_status(path: Path, *, playback_mode: str = "auto") -> dict:
+    mode = normalize_playback_mode(playback_mode)
     if viewer_prefers_webm():
         cached = transcode_webm_output_path(path)
         mime = "video/webm"
         fmt = "webm"
     else:
-        cached = transcode_output_path(path)
+        cached = transcode_output_path(path, playback_mode=mode)
         mime = "video/mp4"
         fmt = "mp4"
     ok = cached.is_file() and cached.stat().st_size > 512
@@ -111,3 +150,7 @@ def viewer_playback_cache_status(path: Path) -> dict:
         "transcodeCacheBytes": cached.stat().st_size if ok else 0,
         "transcodeCachePath": str(cached) if ok else None,
     }
+
+
+def video_playback_profiles(path: Path) -> list[dict[str, object]]:
+    return list_video_playback_profiles(path)

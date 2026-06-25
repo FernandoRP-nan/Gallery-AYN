@@ -18,7 +18,9 @@
     miniMapPointToNorm,
     panFromMiniMapNorm,
   } from "./lib/zoomMiniMap";
-  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, type MediaPlaybackInfo } from "./lib/mediaUrl";
+  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
+  import { canTranscodeVideo, tryAutoplayVideo } from "./lib/videoPlayback";
+  import { scheduleNextZoomVideoWarm, cancelZoomVideoWarm } from "./lib/videoCarouselWarm";
   import {
     formatVideoDiagnosticReport,
     isQtPlayerCreationError,
@@ -31,6 +33,7 @@
   import PagerBar from "./components/PagerBar.svelte";
   import PreviewZoomPanel from "./components/PreviewZoomPanel.svelte";
   import PreviewVideoIdle from "./components/PreviewVideoIdle.svelte";
+  import PreviewVideoProfiles from "./components/PreviewVideoProfiles.svelte";
   import {
     applyGalleryMutationResponse,
     getGalleryItems,
@@ -183,14 +186,31 @@
   let previewVideoPlayback: MediaPlaybackInfo | null = null;
   let previewZoomPlayback: MediaPlaybackInfo | null = null;
   let previewVideoPreparing = false;
+  let previewVideoPrepareMsg = "";
   /** true tras pulsar reproducir; evita precargar al seleccionar o saltar entre vídeos. */
+  let previewVideoEl: HTMLVideoElement | null = null;
   let previewVideoArmed = false;
+  let previewVideoLaunching = false;
+  let previewVideoPlayLocked = false;
   let previewVideoSession = 0;
   let previewZoomVideoArmed = false;
+  let previewZoomVideoLaunching = false;
+  let previewZoomVideoPlayLocked = false;
+  let previewZoomVideoStatus = "";
   let previewZoomVideoSession = 0;
   let previewZoomVideoPreparing = false;
   let previewZoomThumbUrl: string | null = null;
-  let videoTranscodeJobs: Array<{ id: string; path: string; name: string; format: string }> = [];
+  let videoTranscodeJobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }> = [];
+  let videoPreparePollTimer: number | null = null;
+  let previewVideoMode: VideoPlaybackMode = "auto";
+  let previewVideoProfiles: Array<{ id: string; available: boolean; recommended?: boolean; strategy?: string }> = [];
+  let previewVideoPreparePath = "";
+  let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
+  let videoTranscodeMaxHeight = 1080;
+  let videoTranscodeHw: "auto" | "off" = "auto";
+  let videoTranscodePresetBackup: "turbo" | "fast" | "quality" = "fast";
+  let videoTranscodeMaxHeightBackup = 1080;
+  let videoTranscodeHwBackup: "auto" | "off" = "auto";
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
@@ -392,16 +412,24 @@
         label: orgDetail ? `${t("pager.processOrganizer")}: ${orgDetail}` : t("pager.processOrganizer"),
       });
     }
-    for (const job of videoTranscodeJobs) {
+    for (const job of videoTranscodeJobs.filter(isActiveTranscodeJob)) {
+      const pct =
+        job.status === "running" && job.progress && job.progress !== "100" ? ` · ${job.progress}%` : "";
+      const queued = job.status === "queued" ? ` (${t("pager.processQueued")})` : "";
+      const base =
+        job.format === "remux" ? t("pager.processVideoRemux") : t("pager.processVideoTranscode");
       list.push({
         id: `transcode-${job.id}`,
-        label: `${t("pager.processVideoTranscode")}: ${job.name}`,
+        label: `${base}${queued}: ${job.name}${pct}`,
       });
     }
     return list;
   })();
 
-  $: if (!previewZoomOpen) cancelZoomCarouselHydration();
+  $: if (!previewZoomOpen) {
+    cancelZoomCarouselHydration();
+    cancelZoomVideoWarm();
+  }
 
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
   let galleryActionBusy = false;
@@ -685,6 +713,19 @@
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
     gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
+    {
+      const vp = String(data.settings?.video_transcode_preset ?? "fast").toLowerCase();
+      videoTranscodePreset =
+        vp === "quality" ? "quality" : vp === "turbo" ? "turbo" : "fast";
+    }
+    {
+      const h = Number(data.settings?.video_transcode_max_height ?? 1080);
+      videoTranscodeMaxHeight = Number.isFinite(h) ? (h <= 0 ? 0 : Math.max(480, Math.min(2160, Math.round(h)))) : 1080;
+    }
+    {
+      const hw = String(data.settings?.video_transcode_hw ?? "auto").toLowerCase();
+      videoTranscodeHw = hw === "off" ? "off" : "auto";
+    }
     await syncDestinationsFromApi();
     await syncMarkersFromApi();
   };
@@ -1097,6 +1138,9 @@
     settingsThumbPresetIdx = bestIdx;
     destTreeSettingsDraft = cloneTree(destTree);
     markerTreeSettingsDraft = cloneTree(markerTree);
+    videoTranscodePresetBackup = videoTranscodePreset;
+    videoTranscodeMaxHeightBackup = videoTranscodeMaxHeight;
+    videoTranscodeHwBackup = videoTranscodeHw;
     settingsOpen = true;
   };
 
@@ -1112,6 +1156,9 @@
     keyboardShortcuts = { ...keyboardShortcutsBackup };
     destTreeSettingsDraft = cloneTree(destTree);
     markerTreeSettingsDraft = cloneTree(markerTree);
+    videoTranscodePreset = videoTranscodePresetBackup;
+    videoTranscodeMaxHeight = videoTranscodeMaxHeightBackup;
+    videoTranscodeHw = videoTranscodeHwBackup;
     settingsOpen = false;
   };
 
@@ -1158,7 +1205,16 @@
       web_thumb_image_radius_px: Math.round(thumbImageRadiusPx),
       web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx),
       web_shortcuts: { ...keyboardShortcuts },
+      video_transcode_preset: videoTranscodePreset,
+      video_transcode_max_height: Math.max(0, Math.min(2160, Math.round(Number(videoTranscodeMaxHeight) || 1080))),
+      video_transcode_hw: videoTranscodeHw,
     });
+    if (selectedPreview?.mediaType === "video" && selectedPreview.path) {
+      previewVideoMode = "auto";
+      void loadPreviewVideoProfiles(selectedPreview.path);
+      resetPreviewVideoPlaybackUi({ keepPath: true });
+      requestPreviewVideoPlay();
+    }
     await trackLoad(bridge.destinationsSaveTree(destTreeSettingsDraft));
     await trackLoad(bridge.markersSaveTree(markerTreeSettingsDraft));
     await syncDestinationsFromApi();
@@ -1250,11 +1306,13 @@
     if (isDataPlaybackUrl(url)) return "webm";
     const key = mediaUrlKey(url);
     if (key.startsWith("/om-webm/") || key.includes("format=webm")) return "webm";
+    if (key.startsWith("/om-transcode/") || key.includes("transcode=1")) return "transcode";
     const playback = previewVideoPlayback;
     if (!playback) return "unknown";
-    if (url && sameMediaUrl(url, playback.transcodeUrl)) return "webm";
+    if (url && sameMediaUrl(url, playback.transcodeUrl)) {
+      return playback.playbackFormat === "webm" ? "webm" : "transcode";
+    }
     if (url && sameMediaUrl(url, playback.fileUrl)) return "direct";
-    if (key.startsWith("/om-transcode/") || key.includes("transcode=1")) return "transcode";
     return "unknown";
   }
 
@@ -1362,17 +1420,34 @@
     return false;
   }
 
+  function resetPreviewVideoPlaybackUi(opts?: { keepPath?: boolean }) {
+    previewVideoPlayLocked = false;
+    previewVideoLaunching = false;
+    previewVideoArmed = false;
+    previewVideoPreparing = false;
+    previewVideoSrc = "";
+    if (!opts?.keepPath) previewVideoPreparePath = "";
+    stopVideoPreparePoll();
+  }
+
   function setSelectedPreviewFromPath(path: string | null | undefined) {
     const p = String(path ?? "").trim();
     if (!p) return;
     const row = getGalleryItems().find((x) => isGalleryMediaKind(x.kind) && x.path === p) as GalleryItem | undefined;
     if (!row) return;
+    const isSameVideo =
+      p === selectedPreview?.path &&
+      selectedPreview?.mediaType === "video" &&
+      row.kind === "video";
+    if (isSameVideo && (previewVideoPlayLocked || previewVideoLaunching || previewVideoPreparing)) {
+      return;
+    }
     const isVideo = row.kind === "video";
     const isSvg = row.path.toLowerCase().endsWith(".svg");
     const fallbackUrl = isVideo ? null : buildMediaFileUrl(row.path);
     const thumbPlaceholder = row.thumbDataUrl ?? null;
     previewVideoSession += 1;
-    previewVideoArmed = false;
+    resetPreviewVideoPlaybackUi();
     selectedPreview = {
       path: row.path,
       name: row.name,
@@ -1387,8 +1462,12 @@
     previewVideoTriedUrls = [];
     previewVideoSrc = isVideo ? "" : fallbackUrl ?? "";
     previewVideoPlayback = null;
-    previewVideoPreparing = false;
     previewVideoDiagLoading = false;
+    if (isVideo) {
+      previewVideoMode = "auto";
+      previewVideoProfiles = [];
+      void loadPreviewVideoProfiles(row.path);
+    }
     if (isSvg) {
       void resolveMediaPlaybackInfo(row.path)
         .then((info) => {
@@ -1420,46 +1499,137 @@
           .catch(() => undefined);
       });
     }
+    if (isVideo && !destinationsMode) {
+      requestPreviewVideoPlay();
+    }
   }
 
-  async function startPreviewVideoPlayback() {
+  function transcodeJobStatusLabel(job: (typeof videoTranscodeJobs)[number]): string {
+    const pct =
+      job.status === "running" && job.progress && job.progress !== "100" ? ` · ${job.progress}%` : "";
+    const queued = job.status === "queued" ? ` (${t("pager.processQueued")})` : "";
+    const base =
+      job.format === "remux" ? t("pager.processVideoRemux") : t("pager.processVideoTranscode");
+    return `${base}${queued}${pct}`;
+  }
+
+  function stopVideoPreparePoll() {
+    if (videoPreparePollTimer !== null) {
+      window.clearInterval(videoPreparePollTimer);
+      videoPreparePollTimer = null;
+    }
+  }
+
+  function startVideoPreparePoll() {
+    stopVideoPreparePoll();
+    void pollVideoTranscodeJobs();
+    videoPreparePollTimer = window.setInterval(() => {
+      void pollVideoTranscodeJobs();
+    }, 450);
+  }
+
+  async function loadPreviewVideoProfiles(path: string) {
+    try {
+      const out = await bridge.galleryVideoProfiles(normalizePathForApi(path));
+      if (selectedPreview?.path !== path) return;
+      previewVideoProfiles = out?.profiles ?? [];
+    } catch {
+      previewVideoProfiles = [];
+    }
+  }
+
+  async function setPreviewVideoMode(mode: string) {
+    const next = (mode || "auto") as VideoPlaybackMode;
+    if (next === previewVideoMode) return;
+    previewVideoMode = next;
     const path = String(selectedPreview?.path ?? "").trim();
     if (!path || selectedPreview?.mediaType !== "video") return;
-    const session = ++previewVideoSession;
+    resetPreviewVideoPlaybackUi({ keepPath: true });
+    requestPreviewVideoPlay();
+  }
+
+  function requestPreviewVideoPlay() {
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (!path || selectedPreview?.mediaType !== "video") return;
+    if (previewVideoPlayLocked && previewVideoPreparePath === path) return;
+    if (previewVideoArmed && previewVideoSrc && previewVideoPreparePath === path && !previewVideoError) return;
+
+    previewVideoPlayLocked = true;
+    previewVideoPreparePath = path;
+    previewVideoLaunching = true;
     previewVideoArmed = true;
     previewVideoPreparing = true;
+    previewVideoPrepareMsg = t("preview.videoStarting");
     previewVideoError = "";
     previewVideoErrorDetails = "";
+    previewVideoSrc = "";
+
+    void runPreviewVideoPlayback(path);
+  }
+
+  async function runPreviewVideoPlayback(pathAtStart: string) {
     try {
-      const info = await resolveMediaPlaybackInfo(path, { warm: true, tryBlob: true });
-      if (session !== previewVideoSession || selectedPreview?.path !== path) return;
-      previewVideoPlayback = info;
-      const url = pickInitialPlaybackUrl(info);
-      if (url) {
-        previewVideoSrc = url;
-        rememberPreviewVideoUrl(url);
+      const info = await resolveMediaPlaybackInfo(pathAtStart, {
+        warm: true,
+        tryBlob: false,
+        playbackMode: previewVideoMode,
+      });
+      if (selectedPreview?.path !== pathAtStart) {
+        previewVideoPlayLocked = false;
+        return;
       }
-      previewVideoPreparing = Boolean(
-        info.needsTranscode &&
-          info.transcodeUrl &&
-          url &&
-          sameMediaUrl(url, info.transcodeUrl) &&
-          !info.playbackViaBlob
-      );
-      selectedPreview = { ...selectedPreview, fileUrl: url ?? null };
+
+      previewVideoPrepareMsg = playbackPrepareMessage(info);
+      previewVideoPlayback = info;
+
+      if (!canTranscodeVideo(info)) {
+        resetPreviewVideoPlaybackUi({ keepPath: true });
+        previewVideoError = t("preview.videoFfmpegMissing");
+        void collectPreviewVideoDiagnostics(null, 4);
+        return;
+      }
+
+      const url = pickInitialPlaybackUrl(info);
+      if (!url) {
+        resetPreviewVideoPlaybackUi({ keepPath: true });
+        previewVideoError = t("preview.videoPlaybackError");
+        return;
+      }
+
+      previewVideoLaunching = false;
+      previewVideoSrc = url;
+      rememberPreviewVideoUrl(url);
+      previewVideoPreparing = Boolean(info.needsTranscode && !info.transcodeCached);
+      selectedPreview = { ...selectedPreview, fileUrl: url };
+
+      void pollVideoTranscodeJobs();
+      if (previewVideoPreparing) startVideoPreparePoll();
+      else {
+        stopVideoPreparePoll();
+        previewVideoPlayLocked = false;
+      }
+      void tick().then(() => tryAutoplayVideo(previewVideoEl));
     } catch {
-      if (session !== previewVideoSession) return;
-      previewVideoPreparing = false;
+      if (selectedPreview?.path !== pathAtStart) return;
+      resetPreviewVideoPlaybackUi({ keepPath: true });
       previewVideoError = t("preview.videoPlaybackError");
     }
+  }
+
+  function isActiveTranscodeJob(job: (typeof videoTranscodeJobs)[number]): boolean {
+    const st = String(job.status ?? "running").toLowerCase();
+    return st === "queued" || st === "running";
   }
 
   async function pollVideoTranscodeJobs() {
     try {
       const out = await bridge.galleryTranscodeActive();
-      videoTranscodeJobs = out?.jobs ?? [];
+      const jobs = (out?.jobs ?? []).filter(isActiveTranscodeJob);
+      videoTranscodeJobs = jobs;
+      if (jobs.length === 0) stopVideoPreparePoll();
     } catch {
       videoTranscodeJobs = [];
+      stopVideoPreparePoll();
     }
   }
 
@@ -1494,6 +1664,7 @@
     if ((code === 4 || code === 3) && tryAlternatePreviewVideoUrl()) return;
     if ((code === 4 || code === 3 || code === 2) && (await tryBlobPreviewVideoUrl())) return;
     previewVideoPreparing = false;
+    previewVideoPlayLocked = false;
     previewVideoError = previewVideoErrorSummary(code, String(el?.error?.message ?? ""));
     previewVideoErrorDetails = "";
     status = `${previewVideoError} · ${mediaErrorLabel(code)}`;
@@ -1502,10 +1673,14 @@
 
   function onPreviewVideoCanPlay() {
     previewVideoPreparing = false;
+    previewVideoPlayLocked = false;
+    previewVideoLaunching = false;
     previewVideoError = "";
     previewVideoErrorDetails = "";
     previewVideoLastErrorDetail = "";
     previewVideoDiagLoading = false;
+    stopVideoPreparePoll();
+    tryAutoplayVideo(previewVideoEl);
   }
 
   function onPreviewVideoLoadStart() {
@@ -2127,6 +2302,8 @@
       it.kind === "video" ? "video" : it.path.toLowerCase().endsWith(".svg") ? "svg" : "image";
     previewZoomThumbUrl = it.thumbDataUrl ?? null;
     previewZoomVideoArmed = false;
+    previewZoomVideoLaunching = false;
+    previewZoomVideoPlayLocked = false;
     previewZoomVideoPreparing = false;
     previewZoomVideoSession += 1;
     const zoomFallbackUrl = buildMediaFileUrl(it.path);
@@ -2195,26 +2372,75 @@
         })
         .catch(() => undefined);
     }
+    scheduleNextZoomVideoWarm(zoomNavItems, it.path);
+    if (previewZoomMediaType === "video" && !destinationsMode && !previewZoomDestMode) {
+      requestZoomVideoPlay();
+    }
   }
 
-  async function startZoomVideoPlayback() {
+  function requestZoomVideoPlay() {
     const path = String(previewZoomPath ?? "").trim();
-    if (!path || previewZoomMediaType !== "video") return;
-    const session = ++previewZoomVideoSession;
+    if (!path || previewZoomMediaType !== "video" || !previewZoomOpen) return;
+    if (previewZoomVideoPlayLocked && previewZoomPath === path) return;
+    if (previewZoomVideoArmed && previewZoomFileUrl) return;
+
+    previewZoomVideoPlayLocked = true;
+    previewZoomVideoLaunching = true;
     previewZoomVideoArmed = true;
     previewZoomVideoPreparing = true;
+    previewZoomVideoStatus = t("preview.videoStarting");
+    previewZoomFileUrl = null;
+
+    void runZoomVideoPlayback(path);
+  }
+
+  async function runZoomVideoPlayback(pathAtStart: string) {
     try {
-      const info = await resolveMediaPlaybackInfo(path, { warm: true, tryBlob: true });
-      if (session !== previewZoomVideoSession || previewZoomPath !== path || !previewZoomOpen) return;
-      previewZoomPlayback = info;
+      const info = await resolveMediaPlaybackInfo(pathAtStart, { warm: true, tryBlob: false });
+      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+
+      if (!canTranscodeVideo(info)) {
+        previewZoomVideoPlayLocked = false;
+        previewZoomVideoLaunching = false;
+        previewZoomVideoArmed = false;
+        previewZoomVideoPreparing = false;
+        status = t("preview.videoFfmpegMissing");
+        return;
+      }
+
       const url = pickInitialPlaybackUrl(info);
-      if (url) previewZoomFileUrl = url;
+      if (!url) {
+        previewZoomVideoPlayLocked = false;
+        previewZoomVideoLaunching = false;
+        previewZoomVideoArmed = false;
+        previewZoomVideoPreparing = false;
+        return;
+      }
+
+      previewZoomVideoLaunching = false;
+      previewZoomPlayback = info;
+      previewZoomFileUrl = url;
+      previewZoomVideoStatus = playbackPrepareMessage(info);
+      previewZoomVideoPreparing = Boolean(info.needsTranscode && !info.transcodeCached);
+      void pollVideoTranscodeJobs();
+      if (previewZoomVideoPreparing) startVideoPreparePoll();
+      else previewZoomVideoPlayLocked = false;
+      void tick().then(() => tryAutoplayVideo(zoomVideoEl));
     } catch {
-      if (session !== previewZoomVideoSession) return;
-      previewZoomFileUrl = buildMediaFileUrl(path);
-    } finally {
-      if (session === previewZoomVideoSession) previewZoomVideoPreparing = false;
+      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+      previewZoomVideoPlayLocked = false;
+      previewZoomVideoLaunching = false;
+      previewZoomVideoArmed = false;
+      previewZoomFileUrl = null;
+      previewZoomVideoPreparing = false;
     }
+  }
+
+  function onZoomVideoCanPlay() {
+    previewZoomVideoPreparing = false;
+    previewZoomVideoPlayLocked = false;
+    stopVideoPreparePoll();
+    tryAutoplayVideo(zoomVideoEl);
   }
 
   function applyGalleryRefreshFromMove(out: GalleryMutationResponse) {
@@ -3638,6 +3864,7 @@
     cancelPendingGalleryThumbFlush();
     if (thumbScaleDebounce) clearTimeout(thumbScaleDebounce);
     if (zoomHudTimer) clearTimeout(zoomHudTimer);
+    stopVideoPreparePoll();
     if (pollTimer !== null) {
       window.clearInterval(pollTimer);
       pollTimer = null;
@@ -3975,61 +4202,77 @@
 
           <aside class="preview om-panel app-chrome app-chrome--preview">
             {#if selectedPreview?.mediaType === "video"}
-              {#if previewVideoArmed && (previewVideoSrc || selectedPreview?.fileUrl)}
-                <!-- svelte-ignore a11y_media_has_caption -->
-                {#key mediaUrlKey(previewVideoSrc || selectedPreview?.fileUrl || "")}
-                  <video
-                    class="preview__img preview__video"
-                    src={previewVideoSrc || selectedPreview.fileUrl}
-                    controls
-                    playsinline
-                    preload="metadata"
-                    on:loadstart={onPreviewVideoLoadStart}
-                    on:error={onPreviewVideoError}
-                    on:canplay={onPreviewVideoCanPlay}
-                  ></video>
-                {/key}
-              {:else}
-                <PreviewVideoIdle
-                  posterUrl={selectedPreview.placeholderUrl ?? null}
-                  name={selectedPreview.name}
-                  preparing={previewVideoPreparing}
-                  onPlay={() => void startPreviewVideoPlayback()}
-                />
-              {/if}
-              {#if previewVideoPreparing || previewVideoError}
-                <div
-                  class="preview__video-error"
-                  class:preview__video-status={previewVideoPreparing}
-                >
+              <PreviewVideoProfiles
+                profiles={previewVideoProfiles}
+                activeMode={previewVideoMode}
+                disabled={previewVideoPlayLocked && previewVideoLaunching}
+                on:change={(e) => void setPreviewVideoMode(e.detail)}
+              />
+              {#if previewVideoArmed || previewVideoLaunching || previewVideoPlayLocked}
+                <div class="preview__video-shell">
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  {#key mediaUrlKey(previewVideoSrc || selectedPreview?.fileUrl || "pending")}
+                    <video
+                      bind:this={previewVideoEl}
+                      class="preview__img preview__video"
+                      src={previewVideoSrc || selectedPreview?.fileUrl || undefined}
+                      poster={selectedPreview.placeholderUrl ?? undefined}
+                      controls={Boolean(previewVideoSrc || selectedPreview?.fileUrl)}
+                      playsinline
+                      preload="auto"
+                      on:loadstart={onPreviewVideoLoadStart}
+                      on:error={onPreviewVideoError}
+                      on:canplay={onPreviewVideoCanPlay}
+                    ></video>
+                  {/key}
                   {#if previewVideoPreparing}
-                    <p>{t("preview.videoTranscoding")}</p>
-                  {:else}
-                    <p>{previewVideoError}</p>
-                    {#if previewVideoErrorDetails}
-                      <pre class="preview__video-diag" class:preview__video-diag--loading={previewVideoDiagLoading}>{previewVideoErrorDetails}</pre>
-                    {/if}
-                    <div class="preview__video-actions">
-                      {#if previewVideoError || previewVideoErrorDetails || previewVideoLastErrorDetail}
-                        <button
-                          type="button"
-                          class="om-btn preview__video-copy"
-                          on:click={() => void copyPreviewVideoError()}
-                        >
-                          {t("preview.videoCopyError")}
-                        </button>
-                      {/if}
-                      {#if selectedPreview?.path}
-                        <button
-                          type="button"
-                          class="om-btn preview__video-external"
-                          on:click={() => void openGalleryVideoExternal()}
-                        >
-                          {t("preview.videoOpenExternal")}
-                        </button>
-                      {/if}
+                    <div class="preview__video-busy" aria-live="polite">
+                      <div class="preview__video-busy__spinner" aria-hidden="true"></div>
+                      <p>{previewVideoPrepareMsg || t("preview.videoStarting")}</p>
+                      {#each videoTranscodeJobs.filter((j) => isActiveTranscodeJob(j) && normalizePathForApi(j.path) === normalizePathForApi(selectedPreview?.path ?? "")) as job (job.id)}
+                        <p class="preview__video-busy__hint">{transcodeJobStatusLabel(job)}</p>
+                      {/each}
                     </div>
                   {/if}
+                </div>
+              {:else}
+                {#key selectedPreview.path}
+                  <PreviewVideoIdle
+                    posterUrl={selectedPreview.placeholderUrl ?? null}
+                    name={selectedPreview.name}
+                    playLocked={previewVideoPlayLocked}
+                    preparing={previewVideoPreparing || previewVideoLaunching}
+                    statusMessage={previewVideoPrepareMsg}
+                    onPlay={requestPreviewVideoPlay}
+                  />
+                {/key}
+              {/if}
+              {#if previewVideoError}
+                <div class="preview__video-error">
+                  <p>{previewVideoError}</p>
+                  {#if previewVideoErrorDetails}
+                    <pre class="preview__video-diag" class:preview__video-diag--loading={previewVideoDiagLoading}>{previewVideoErrorDetails}</pre>
+                  {/if}
+                  <div class="preview__video-actions">
+                    {#if previewVideoError || previewVideoErrorDetails || previewVideoLastErrorDetail}
+                      <button
+                        type="button"
+                        class="om-btn preview__video-copy"
+                        on:click={() => void copyPreviewVideoError()}
+                      >
+                        {t("preview.videoCopyError")}
+                      </button>
+                    {/if}
+                    {#if selectedPreview?.path}
+                      <button
+                        type="button"
+                        class="om-btn preview__video-external"
+                        on:click={() => void openGalleryVideoExternal()}
+                      >
+                        {t("preview.videoOpenExternal")}
+                      </button>
+                    {/if}
+                  </div>
                 </div>
               {/if}
             {:else if selectedPreview?.mediaType === "svg" && selectedPreview?.fileUrl}
@@ -4530,6 +4773,9 @@
   {#if settingsOpen}
     <SettingsModal
       bind:thumbsPerPage
+      bind:videoTranscodePreset
+      bind:videoTranscodeMaxHeight
+      bind:videoTranscodeHw
       bind:settingsThumbPresetIdx
       bind:settingsThumbScaleDraft
       bind:thumbGapPx
@@ -4650,6 +4896,7 @@
     {onZoomImageClick}
     {onZoomVideoMeta}
     {onZoomVideoError}
+    onZoomVideoCanPlay={onZoomVideoCanPlay}
     {onZoomImageLoad}
     {onCropPointerDown}
     {onCropPointerMove}
@@ -4663,9 +4910,12 @@
     {onDestDrop}
     {openPreviewZoom}
     previewZoomVideoArmed={previewZoomVideoArmed}
+    previewZoomVideoLaunching={previewZoomVideoLaunching}
+    previewZoomVideoPlayLocked={previewZoomVideoPlayLocked}
     previewZoomThumbUrl={previewZoomThumbUrl}
     previewZoomVideoPreparing={previewZoomVideoPreparing}
-    onZoomVideoPlay={() => void startZoomVideoPlayback()}
+    previewZoomVideoStatus={previewZoomVideoStatus}
+    onZoomVideoPlay={requestZoomVideoPlay}
   />
 </main>
 

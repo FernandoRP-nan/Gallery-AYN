@@ -7,7 +7,10 @@ import json
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
+
+from .video_playback_mode import PlaybackMode, normalize_playback_mode, resolve_transcode_plan, transcode_cache_suffix
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -16,26 +19,68 @@ _WARM_TOKENS: set[str] = set()
 _WARM_GUARD = threading.Lock()
 _ACTIVE_JOBS: dict[str, dict[str, str]] = {}
 _ACTIVE_GUARD = threading.Lock()
+_RUNNING: dict[str, threading.Thread] = {}
+_RUNNING_GUARD = threading.Lock()
+_PARTIAL_MIN_BYTES = 196_608
+_PROGRESSIVE_MOVFLAGS = ["-movflags", "frag_keyframe+empty_moov+default_base_moof"]
 
 
 def list_active_transcode_jobs() -> list[dict[str, str]]:
     with _ACTIVE_GUARD:
-        return list(_ACTIVE_JOBS.values())
+        return [j for j in _ACTIVE_JOBS.values() if j.get("status") in ("queued", "running")]
 
 
 def _set_active_job(token: str, source: Path, fmt: str) -> None:
+    _register_transcode_job(token, source, fmt, status="running")
+
+
+def _update_job_progress(token: str, progress: int) -> None:
     with _ACTIVE_GUARD:
-        _ACTIVE_JOBS[token] = {
-            "id": token,
-            "path": str(source),
-            "name": source.name,
-            "format": fmt,
-        }
+        job = _ACTIVE_JOBS.get(token)
+        if job is not None:
+            job["progress"] = str(min(99, max(0, int(progress))))
 
 
 def _clear_active_job(token: str) -> None:
     with _ACTIVE_GUARD:
         _ACTIVE_JOBS.pop(token, None)
+
+
+
+def _register_transcode_job(token: str, source: Path, fmt: str, *, status: str = "queued") -> None:
+    with _ACTIVE_GUARD:
+        prev = _ACTIVE_JOBS.get(token)
+        if prev and prev.get("status") in ("running", "done"):
+            return
+        _ACTIVE_JOBS[token] = {
+            "id": token,
+            "path": str(source),
+            "name": source.name,
+            "format": fmt,
+            "progress": prev.get("progress", "0") if prev else "0",
+            "status": status,
+        }
+
+
+def _mark_job_running(token: str) -> None:
+    with _ACTIVE_GUARD:
+        job = _ACTIVE_JOBS.get(token)
+        if job is not None:
+            job["status"] = "running"
+
+
+def _fail_active_job(token: str) -> None:
+    _clear_active_job(token)
+
+
+def _finish_active_job(token: str) -> None:
+    _clear_active_job(token)
+
+
+def _mp4_job_format(source: Path) -> str:
+    video, audio = _ffprobe_streams(source.resolve())
+    mode = mp4_playback_mode(video, audio)
+    return "remux" if mode in ("copy_all", "copy_video_aac") else "mp4"
 
 
 def transcode_cache_dir() -> Path:
@@ -52,17 +97,46 @@ def _media_token(source: Path, *, suffix: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:20]
 
 
-def transcode_output_path(source: Path) -> Path:
-    return transcode_cache_dir() / f"{_media_token(source, suffix='transcode-h264')}.mp4"
+def transcode_output_path(source: Path, *, playback_mode: str = "auto") -> Path:
+    mode = normalize_playback_mode(playback_mode)
+    suffix = transcode_cache_suffix(mode, source.resolve())
+    return transcode_cache_dir() / f"{_media_token(source, suffix=suffix)}.mp4"
+
+
+def transcode_partial_path(out: Path) -> Path:
+    return out.with_suffix(".part.mp4")
 
 
 def transcode_webm_output_path(source: Path) -> Path:
-    return transcode_cache_dir() / f"{_media_token(source, suffix='transcode-webm')}.webm"
+    from .video_transcode_options import get_transcode_max_height, get_transcode_max_width
+
+    suffix = f"webm-{get_transcode_max_height()}-{get_transcode_max_width()}"
+    return transcode_cache_dir() / f"{_media_token(source, suffix=suffix)}.webm"
 
 
-def _remember_transcode_source(source: Path) -> None:
+def invalidate_transcode_cache() -> int:
+    """Elimina la caché de transcodificación (p. ej. al cambiar ajustes globales)."""
+    from .video_transcode_options import reset_hw_encoder_cache
+
+    reset_hw_encoder_cache()
+    removed = 0
+    cache = transcode_cache_dir()
+    for entry in cache.iterdir():
+        if not entry.is_file():
+            continue
+        try:
+            entry.unlink()
+            removed += 1
+        except OSError:
+            pass
+    with _RUNNING_GUARD:
+        _RUNNING.clear()
+    return removed
+
+
+def _remember_transcode_source(source: Path, *, playback_mode: str = "auto") -> None:
     """Registra el origen en caché (symlink o fichero .path) para rutas legacy /om-transcode."""
-    name = f"{_media_token(source, suffix='transcode-h264')}.mp4"
+    name = transcode_output_path(source, playback_mode=playback_mode).name
     link = transcode_cache_dir() / f"{name}.link"
     path_file = transcode_cache_dir() / f"{name}.path"
     resolved = source.resolve()
@@ -90,9 +164,14 @@ def _lock_for(token: str) -> threading.Lock:
 
 
 def _ffprobe_streams(path: Path) -> tuple[dict | None, dict | None]:
+    from .video_tools import resolve_ffprobe
+
+    ffprobe = resolve_ffprobe()
+    if not ffprobe:
+        return None, None
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)],
+            [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -108,9 +187,29 @@ def _ffprobe_streams(path: Path) -> tuple[dict | None, dict | None]:
         return None, None
 
 
+_H264_COMPAT_PIX = frozenset({"yuv420p", "yuvj420p"})
+
+
+def mp4_playback_mode(video: dict | None, audio: dict | None) -> str:
+    """Estrategia MP4: copy_all (remux), copy_video_aac (solo audio) o full_encode."""
+    if not video:
+        return "full_encode"
+    if (video.get("codec_name") or "").lower() != "h264":
+        return "full_encode"
+    pix = (video.get("pix_fmt") or "").lower()
+    if pix and pix not in _H264_COMPAT_PIX:
+        return "full_encode"
+    if not audio:
+        return "copy_all"
+    acodec = (audio.get("codec_name") or "").lower()
+    if acodec in ("aac", "mp3"):
+        return "copy_all"
+    return "copy_video_aac"
+
+
 def is_browser_playable(path: Path) -> bool:
-    """True si el MP4 ya es H.264/AAC y suele reproducirse en WebView."""
-    if path.suffix.lower() != ".mp4":
+    """True si el MP4/M4V ya es H.264/AAC y suele reproducirse en WebView."""
+    if path.suffix.lower() not in (".mp4", ".m4v"):
         return False
     video, audio = _ffprobe_streams(path)
     if not video:
@@ -141,7 +240,7 @@ def is_webm_playable(path: Path) -> bool:
 
 
 def _remember_webm_source(source: Path) -> None:
-    name = f"{_media_token(source, suffix='transcode-webm')}.webm"
+    name = transcode_webm_output_path(source).name
     link = transcode_cache_dir() / f"{name}.link"
     path_file = transcode_cache_dir() / f"{name}.path"
     resolved = source.resolve()
@@ -161,9 +260,65 @@ def _remember_webm_source(source: Path) -> None:
         path_file.unlink(missing_ok=True)
 
 
-def _run_ffmpeg(args: list[str], *, timeout: int = 7200) -> None:
+def _parse_duration_us(video: dict | None) -> int | None:
+    if not video:
+        return None
+    raw = video.get("duration")
+    if raw is None:
+        return None
+    try:
+        return max(1, int(float(raw) * 1_000_000))
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_ffmpeg(
+    args: list[str],
+    *,
+    token: str | None = None,
+    duration_us: int | None = None,
+    timeout: int = 7200,
+) -> None:
+    from .video_tools import resolve_ffmpeg
+
+    ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg no está instalado o no está en el PATH. "
+            "En Windows, instala ffmpeg o coloca ffmpeg.exe en tools/ffmpeg/ junto al programa."
+        )
+    if token and duration_us and duration_us > 0:
+        cmd = [ffmpeg, "-hide_banner", "-nostats", "-progress", "pipe:1", "-loglevel", "error", *args]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.strip()
+                if line.startswith("out_time_ms="):
+                    try:
+                        out_us = int(line.split("=", 1)[1] or "0")
+                        pct = int(out_us * 100 / duration_us)
+                        _update_job_progress(token, pct)
+                    except ValueError:
+                        pass
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            raise RuntimeError("ffmpeg excedió el tiempo límite") from exc
+        if proc.returncode != 0:
+            err = (proc.stderr.read() if proc.stderr else "") or "ffmpeg falló"
+            raise RuntimeError(err.strip() or "ffmpeg falló")
+        return
+
     result = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", *args],
+        [ffmpeg, "-hide_banner", "-loglevel", "error", *args],
         capture_output=True,
         timeout=timeout,
         check=False,
@@ -173,19 +328,28 @@ def _run_ffmpeg(args: list[str], *, timeout: int = 7200) -> None:
         raise RuntimeError(err or "ffmpeg falló")
 
 
-def _transcode_to_mp4(source: Path, out: Path) -> None:
-    tmp = out.with_suffix(".part.mp4")
+def _transcode_to_mp4(
+    source: Path,
+    out: Path,
+    *,
+    token: str | None = None,
+    playback_mode: str = "auto",
+    progressive: bool = True,
+) -> None:
+    from .video_tools import resolve_ffmpeg
+    from .video_transcode_options import PresetId, build_mp4_encode_options
+
+    tmp = transcode_partial_path(out)
     if tmp.exists():
         tmp.unlink(missing_ok=True)
     video, audio = _ffprobe_streams(source)
-    vcodec = (video or {}).get("codec_name", "").lower()
-    acodec = (audio or {}).get("codec_name", "").lower() if audio else ""
-    can_remux = (
-        source.suffix.lower() == ".mp4"
-        and vcodec == "h264"
-        and (not audio or acodec in ("aac", "mp3"))
-    )
-    if can_remux:
+    duration_us = _parse_duration_us(video)
+    plan, preset_raw = resolve_transcode_plan(source, normalize_playback_mode(playback_mode))
+    preset_override: PresetId | None = preset_raw if preset_raw in ("turbo", "fast", "quality") else None
+    ffmpeg = resolve_ffmpeg() or "ffmpeg"
+    movflags = _PROGRESSIVE_MOVFLAGS if progressive else ["-movflags", "+faststart"]
+
+    if plan == "copy_all":
         _run_ffmpeg(
             [
                 "-y",
@@ -197,12 +361,13 @@ def _transcode_to_mp4(source: Path, out: Path) -> None:
                 "0:a:0?",
                 "-c",
                 "copy",
-                "-movflags",
-                "+faststart",
+                *movflags,
                 str(tmp),
-            ]
+            ],
+            token=token,
+            duration_us=duration_us,
         )
-    else:
+    elif plan == "copy_video_aac":
         _run_ffmpeg(
             [
                 "-y",
@@ -213,21 +378,37 @@ def _transcode_to_mp4(source: Path, out: Path) -> None:
                 "-map",
                 "0:a:0?",
                 "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "23",
-                "-pix_fmt",
-                "yuv420p",
+                "copy",
                 "-c:a",
                 "aac",
                 "-b:a",
                 "128k",
-                "-movflags",
-                "+faststart",
+                *movflags,
                 str(tmp),
-            ]
+            ],
+            token=token,
+            duration_us=duration_us,
+        )
+    else:
+        enc = build_mp4_encode_options(ffmpeg, preset_override=preset_override)
+        _run_ffmpeg(
+            [
+                "-y",
+                "-i",
+                str(source),
+                "-map",
+                "0:v:0?",
+                "-map",
+                "0:a:0?",
+                "-c:v",
+                enc.video_codec,
+                *enc.video_args,
+                *enc.audio_args,
+                *movflags,
+                str(tmp),
+            ],
+            token=token,
+            duration_us=duration_us,
         )
     if not tmp.is_file() or tmp.stat().st_size < 512:
         tmp.unlink(missing_ok=True)
@@ -235,19 +416,28 @@ def _transcode_to_mp4(source: Path, out: Path) -> None:
     tmp.replace(out)
 
 
-def _transcode_to_webm(source: Path, out: Path) -> None:
+def _transcode_to_webm(source: Path, out: Path, *, token: str | None = None) -> None:
+    from .video_transcode_options import build_scale_filter, get_transcode_max_height, get_transcode_max_width
+
     tmp = out.with_suffix(".part.webm")
     if tmp.exists():
         tmp.unlink(missing_ok=True)
-    _run_ffmpeg(
+    video, _audio = _ffprobe_streams(source)
+    duration_us = _parse_duration_us(video)
+    vf = build_scale_filter(get_transcode_max_width(), get_transcode_max_height())
+    args = [
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0?",
+        "-map",
+        "0:a:0?",
+    ]
+    if vf:
+        args.extend(["-vf", vf])
+    args.extend(
         [
-            "-y",
-            "-i",
-            str(source),
-            "-map",
-            "0:v:0?",
-            "-map",
-            "0:a:0?",
             "-c:v",
             "libvpx",
             "-b:v",
@@ -265,6 +455,7 @@ def _transcode_to_webm(source: Path, out: Path) -> None:
             str(tmp),
         ]
     )
+    _run_ffmpeg(args, token=token, duration_us=duration_us)
     if not tmp.is_file() or tmp.stat().st_size < 512:
         tmp.unlink(missing_ok=True)
         raise RuntimeError("La transcodificación WebM no generó un archivo válido")
@@ -281,19 +472,25 @@ def _webm_cache_valid(out: Path) -> bool:
 
 def ensure_transcoded_webm(source: Path) -> Path:
     """Devuelve WebM en caché para visores sin H.264 (Qt en Fedora)."""
-    out = transcode_webm_output_path(source)
-    if _webm_cache_valid(out):
-        return out
+    resolved = source.resolve()
+    out = transcode_webm_output_path(resolved)
     token = out.stem
+    if _webm_cache_valid(out):
+        _clear_active_job(token)
+        return out
+    _register_transcode_job(token, resolved, "webm", status="queued")
     with _TRANSCODE_SEM:
+        _mark_job_running(token)
         with _lock_for(token):
             if _webm_cache_valid(out):
+                _finish_active_job(token)
                 return out
-            _set_active_job(token, source.resolve(), "webm")
             try:
-                _transcode_to_webm(source.resolve(), out)
-            finally:
-                _clear_active_job(token)
+                _transcode_to_webm(resolved, out, token=token)
+                _finish_active_job(token)
+            except Exception:
+                _fail_active_job(token)
+                raise
     return out
 
 
@@ -325,10 +522,93 @@ def publish_webm_playback_name(source: Path) -> str:
     return transcode_webm_output_path(source).name
 
 
-def publish_mp4_playback_name(source: Path) -> str:
+def publish_mp4_playback_name(source: Path, *, playback_mode: str = "auto") -> str:
     """Registra el origen y devuelve el nombre para /om-transcode/…."""
-    _remember_transcode_source(source.resolve())
-    return transcode_output_path(source).name
+    _remember_transcode_source(source.resolve(), playback_mode=playback_mode)
+    return transcode_output_path(source, playback_mode=playback_mode).name
+
+
+def _mp4_cache_valid(out: Path) -> bool:
+    return out.is_file() and out.stat().st_size > 512 and is_browser_playable(out)
+
+
+def _start_mp4_transcode_async(source: Path, *, playback_mode: str = "auto") -> None:
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    out = transcode_output_path(resolved, playback_mode=mode)
+    token = out.stem
+    if _mp4_cache_valid(out):
+        _clear_active_job(token)
+        return
+
+    with _RUNNING_GUARD:
+        thread = _RUNNING.get(token)
+        if thread is not None and thread.is_alive():
+            return
+
+        _remember_transcode_source(resolved, playback_mode=mode)
+        _register_transcode_job(token, resolved, _mp4_job_format(resolved), status="queued")
+
+        def _worker() -> None:
+            try:
+                with _TRANSCODE_SEM:
+                    _mark_job_running(token)
+                    with _lock_for(token):
+                        if _mp4_cache_valid(out):
+                            _finish_active_job(token)
+                            return
+                        try:
+                            _transcode_to_mp4(
+                                resolved,
+                                out,
+                                token=token,
+                                playback_mode=mode,
+                                progressive=True,
+                            )
+                            _finish_active_job(token)
+                        except Exception:
+                            _fail_active_job(token)
+                            partial = transcode_partial_path(out)
+                            partial.unlink(missing_ok=True)
+                            raise
+            finally:
+                with _RUNNING_GUARD:
+                    _RUNNING.pop(token, None)
+
+        t = threading.Thread(target=_worker, daemon=True, name=f"om-transcode-{token[:8]}")
+        _RUNNING[token] = t
+        t.start()
+
+
+def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait_partial: bool = True) -> Path:
+    """Ruta servible por HTTP (final o parcial en curso)."""
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    out = transcode_output_path(resolved, playback_mode=mode)
+    partial = transcode_partial_path(out)
+
+    if _mp4_cache_valid(out):
+        _clear_active_job(out.stem)
+        return out
+
+    _start_mp4_transcode_async(resolved, playback_mode=mode)
+
+    if not wait_partial:
+        if partial.is_file() and partial.stat().st_size >= _PARTIAL_MIN_BYTES:
+            return partial
+        if out.is_file():
+            return out
+        raise FileNotFoundError("Transcodificación aún no iniciada")
+
+    deadline = time.time() + 60.0
+    while time.time() < deadline:
+        if _mp4_cache_valid(out):
+            return out
+        if partial.is_file() and partial.stat().st_size >= _PARTIAL_MIN_BYTES:
+            return partial
+        time.sleep(0.12)
+
+    raise TimeoutError("Tiempo de espera agotado para iniciar reproducción progresiva")
 
 
 def warm_webm_transcode_async(source: Path) -> None:
@@ -342,34 +622,50 @@ def warm_webm_transcode_async(source: Path) -> None:
         if token in _WARM_TOKENS:
             return
         _WARM_TOKENS.add(token)
+    _register_transcode_job(token, resolved, "webm", status="queued")
 
     def _worker() -> None:
+        token = out.stem
         try:
             ensure_transcoded_webm(resolved)
         except Exception:
-            pass
+            _fail_active_job(token)
         finally:
+            _clear_active_job(token)
             with _WARM_GUARD:
                 _WARM_TOKENS.discard(token)
 
     threading.Thread(target=_worker, daemon=True, name="om-transcode-webm-warm").start()
 
 
-def ensure_transcoded_mp4(source: Path) -> Path:
-    """Devuelve el MP4 en caché; transcodifica la primera vez si hace falta."""
-    out = transcode_output_path(source)
-    if out.is_file() and out.stat().st_size > 512:
-        return out
+def ensure_transcoded_mp4(source: Path, *, playback_mode: str = "auto") -> Path:
+    """Devuelve el MP4 en caché; transcodifica la primera vez si hace falta (bloqueante)."""
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    out = transcode_output_path(resolved, playback_mode=mode)
     token = out.stem
+    if _mp4_cache_valid(out):
+        _clear_active_job(token)
+        return out
+    _register_transcode_job(token, resolved, _mp4_job_format(resolved), status="queued")
     with _TRANSCODE_SEM:
+        _mark_job_running(token)
         with _lock_for(token):
-            if out.is_file() and out.stat().st_size > 512:
+            if _mp4_cache_valid(out):
+                _finish_active_job(token)
                 return out
-            _set_active_job(token, source.resolve(), "mp4")
             try:
-                _transcode_to_mp4(source.resolve(), out)
-            finally:
-                _clear_active_job(token)
+                _transcode_to_mp4(
+                    resolved,
+                    out,
+                    token=token,
+                    playback_mode=mode,
+                    progressive=False,
+                )
+                _finish_active_job(token)
+            except Exception:
+                _fail_active_job(token)
+                raise
     return out
 
 
@@ -395,12 +691,13 @@ def resolve_transcode_source(filename: str) -> Path | None:
     return None
 
 
-def warm_transcode_async(source: Path) -> None:
+def warm_transcode_async(source: Path, *, playback_mode: str = "auto") -> None:
     """Precalienta la caché de transcodificación sin bloquear la UI."""
     resolved = source.resolve()
-    _remember_transcode_source(resolved)
-    out = transcode_output_path(resolved)
-    if out.is_file() and out.stat().st_size > 512:
+    mode = normalize_playback_mode(playback_mode)
+    _remember_transcode_source(resolved, playback_mode=mode)
+    out = transcode_output_path(resolved, playback_mode=mode)
+    if _mp4_cache_valid(out):
         return
     token = out.stem
     with _WARM_GUARD:
@@ -410,9 +707,7 @@ def warm_transcode_async(source: Path) -> None:
 
     def _worker() -> None:
         try:
-            ensure_transcoded_mp4(resolved)
-        except Exception:
-            pass
+            _start_mp4_transcode_async(resolved, playback_mode=mode)
         finally:
             with _WARM_GUARD:
                 _WARM_TOKENS.discard(token)

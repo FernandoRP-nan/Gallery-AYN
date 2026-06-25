@@ -64,6 +64,7 @@
   export let onZoomImageClick: (e: MouseEvent) => void;
   export let onZoomVideoMeta: () => void;
   export let onZoomVideoError: (e: Event) => void;
+  export let onZoomVideoCanPlay: () => void = () => undefined;
   export let onZoomImageLoad: () => void;
   export let onCropPointerDown: (e: PointerEvent) => void;
   export let onCropPointerMove: (e: PointerEvent) => void;
@@ -77,8 +78,11 @@
   export let onDestDrop: (e: DragEvent, path: string, idx: number) => void;
   export let openPreviewZoom: (it: any, opts: any) => void;
   export let previewZoomVideoArmed = false;
+  export let previewZoomVideoLaunching = false;
+  export let previewZoomVideoPlayLocked = false;
   export let previewZoomThumbUrl: string | null = null;
   export let previewZoomVideoPreparing = false;
+  export let previewZoomVideoStatus = "";
   export let onZoomVideoPlay: () => void;
 
   $: previewZoomImageSrc =
@@ -236,29 +240,41 @@
             on:pointercancel={endPan}
             on:click={onZoomStageClick}
           >
-            {#if previewZoomMediaType === "video" && !previewZoomVideoArmed}
+            {#if previewZoomMediaType === "video" && !previewZoomVideoArmed && !previewZoomVideoLaunching && !previewZoomVideoPlayLocked}
               <PreviewVideoIdle
                 posterUrl={previewZoomThumbUrl}
                 name={previewZoomName}
-                preparing={previewZoomVideoPreparing}
+                playLocked={previewZoomVideoPlayLocked}
+                preparing={previewZoomVideoPreparing || previewZoomVideoLaunching}
+                statusMessage={previewZoomVideoStatus}
                 compact={true}
                 onPlay={onZoomVideoPlay}
               />
-            {:else if previewZoomMediaType === "video" && previewZoomFileUrl}
-              <!-- svelte-ignore a11y_media_has_caption -->
-              <video
-                class="zoom-modal__img"
-                class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
-                class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
-                class:zoom-modal__img--interacting={previewPanDrag}
-                bind:this={zoomVideoEl}
-                src={previewZoomFileUrl}
-                controls
-                playsinline
-                preload="metadata"
-                on:loadedmetadata={onZoomVideoMeta}
-                on:error={onZoomVideoError}
-              ></video>
+            {:else if previewZoomMediaType === "video" && (previewZoomVideoArmed || previewZoomVideoLaunching || previewZoomVideoPlayLocked)}
+              <div class="zoom-modal__video-shell">
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video
+                  class="zoom-modal__img"
+                  class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
+                  class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                  class:zoom-modal__img--interacting={previewPanDrag}
+                  bind:this={zoomVideoEl}
+                  src={previewZoomFileUrl || undefined}
+                  poster={previewZoomThumbUrl ?? undefined}
+                  controls={Boolean(previewZoomFileUrl)}
+                  playsinline
+                  preload="auto"
+                  on:loadedmetadata={onZoomVideoMeta}
+                  on:canplay={onZoomVideoCanPlay}
+                  on:error={onZoomVideoError}
+                ></video>
+                {#if previewZoomVideoPreparing}
+                  <div class="zoom-modal__video-busy" aria-live="polite">
+                    <div class="zoom-modal__video-busy__spinner" aria-hidden="true"></div>
+                    <p>{previewZoomVideoStatus || t("preview.videoStarting")}</p>
+                  </div>
+                {/if}
+              </div>
             {:else if previewZoomMediaType === "svg" && previewZoomFileUrl}
               <img
                 class="zoom-modal__img"
@@ -676,5 +692,52 @@
     border-radius: 4px;
     background: rgb(124 140 255 / 0.12);
     box-sizing: border-box;
+  }
+
+  .zoom-modal__video-shell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .zoom-modal__video-busy {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    padding: 1rem;
+    background: rgb(0 0 0 / 0.52);
+    pointer-events: all;
+    z-index: 3;
+  }
+
+  .zoom-modal__video-busy p {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    text-align: center;
+    color: var(--om-text-muted);
+    max-width: 20rem;
+  }
+
+  .zoom-modal__video-busy__spinner {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 999px;
+    border: 3px solid rgb(255 255 255 / 0.22);
+    border-top-color: var(--om-accent, #60a5fa);
+    animation: zoom-video-spin 0.75s linear infinite;
+  }
+
+  @keyframes zoom-video-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

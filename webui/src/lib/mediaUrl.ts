@@ -1,4 +1,5 @@
 import { bridge } from "./api";
+import { t } from "./i18n";
 import { normalizePathForApi } from "./pathUtils";
 
 /** Convierte /om-media/… en URL absoluta del origen actual. */
@@ -21,11 +22,19 @@ export function isDataPlaybackUrl(url: string | null | undefined): boolean {
   return String(url ?? "").startsWith("data:");
 }
 
+export type VideoPlaybackMode = "auto" | "direct" | "remux" | "turbo" | "fast" | "quality";
+
 export type MediaPlaybackInfo = {
   fileUrl: string;
   transcodeUrl: string;
   needsTranscode: boolean;
+  playbackMode?: VideoPlaybackMode;
+  playbackStrategy?: "direct" | "remux" | "encode";
   playbackViaBlob?: boolean;
+  ffmpegAvailable?: boolean;
+  ffprobeAvailable?: boolean;
+  transcodeCached?: boolean;
+  playbackFormat?: string;
 };
 
 function pywebviewActive(): boolean {
@@ -46,9 +55,10 @@ async function resolveBlobPlaybackUrl(path: string, streamUrl: string): Promise<
 
 export async function resolveMediaPlaybackInfo(
   path: string,
-  opts?: { warm?: boolean; tryBlob?: boolean }
+  opts?: { warm?: boolean; tryBlob?: boolean; playbackMode?: VideoPlaybackMode }
 ): Promise<MediaPlaybackInfo> {
-  const out = await bridge.galleryMediaUrl(normalizePathForApi(path), Boolean(opts?.warm));
+  const mode = opts?.playbackMode ?? "auto";
+  const out = await bridge.galleryMediaUrl(normalizePathForApi(path), Boolean(opts?.warm), mode);
   const fileUrl = absolutizeMediaUrl(String(out?.fileUrl ?? ""));
   let transcodeUrl = absolutizeMediaUrl(String(out?.transcodeUrl ?? ""));
   const needsTranscode = Boolean(out?.needsTranscode);
@@ -62,11 +72,33 @@ export async function resolveMediaPlaybackInfo(
     }
   }
 
-  return { fileUrl, transcodeUrl, needsTranscode, playbackViaBlob };
+  return {
+    fileUrl,
+    transcodeUrl,
+    needsTranscode,
+    playbackMode: (out?.playbackMode as VideoPlaybackMode) ?? mode,
+    playbackStrategy: (out?.playbackStrategy as MediaPlaybackInfo["playbackStrategy"]) ?? undefined,
+    playbackViaBlob,
+    ffmpegAvailable: Boolean(out?.ffmpegAvailable),
+    ffprobeAvailable: Boolean(out?.ffprobeAvailable),
+    transcodeCached: Boolean(out?.transcodeCached),
+    playbackFormat: String(out?.playbackFormat ?? ""),
+  };
+}
+
+/** Texto de estado mientras se prepara la reproducción. */
+export function playbackPrepareMessage(
+  info: Pick<MediaPlaybackInfo, "playbackStrategy" | "needsTranscode" | "transcodeCached">
+): string {
+  if (!info.needsTranscode || info.playbackStrategy === "direct") return t("preview.videoLoadingDirect");
+  if (info.transcodeCached) return t("preview.videoLoadingDirect");
+  if (info.playbackStrategy === "remux") return t("preview.videoRemuxing");
+  return t("preview.videoTranscodingProgressive");
 }
 
 /** URL inicial según compatibilidad detectada por ffprobe en el backend. */
 export function pickInitialPlaybackUrl(info: MediaPlaybackInfo): string {
+  if (info.playbackMode === "direct") return info.fileUrl || info.transcodeUrl;
   if (info.needsTranscode) return info.transcodeUrl || info.fileUrl;
   return info.fileUrl || info.transcodeUrl;
 }

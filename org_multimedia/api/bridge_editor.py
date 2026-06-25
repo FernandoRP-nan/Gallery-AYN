@@ -180,6 +180,12 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
     """Miniatura del primer fotograma de un video usando ffmpeg."""
     import subprocess
 
+    from ..core.video_tools import resolve_ffmpeg
+
+    ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        return None
+
     # MJPEG en ffmpeg exige dimensiones pares (p. ej. 125 → error -22).
     thumb = max(48, int(size))
     if thumb % 2:
@@ -187,7 +193,7 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
+                ffmpeg, "-y",
                 "-ss", "0.5",
                 "-i", str(path),
                 "-vframes", "1",
@@ -208,9 +214,10 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
         return None
 
 class EditorBridgeMixin:
-    def gallery_media_url(self, path: str, warm: bool = False) -> dict:
+    def gallery_media_url(self, path: str, warm: bool = False, playback_mode: str = "auto") -> dict:
         """URL de streaming para vídeo/SVG (ruta corta /om-media/…)."""
         from ..core.fs_path import resolve_file_path
+        from ..core.video_playback_mode import normalize_playback_mode
 
         try:
             p = resolve_file_path(path)
@@ -218,18 +225,30 @@ class EditorBridgeMixin:
             return {"path": path, "fileUrl": None, "mimeType": None}
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
-            if warm:
-                warm_viewer_playback_async(p)
-            cache = viewer_playback_cache_status(p)
+            mode = normalize_playback_mode(playback_mode)
+            if warm and mode != "direct":
+                warm_viewer_playback_async(p, playback_mode=mode)
+            cache = viewer_playback_cache_status(p, playback_mode=mode)
+            from ..core.video_tools import ffmpeg_available, ffprobe_available
+
+            from ..core.viewer_playback import viewer_playback_strategy
+
+            needs = needs_viewer_transcode(p, playback_mode=mode)
+            strategy = viewer_playback_strategy(p, playback_mode=mode)
             return {
                 "path": str(p),
                 "fileUrl": publish_media_url(p),
-                "transcodeUrl": publish_viewer_playback_url(p),
-                "needsTranscode": needs_viewer_transcode(p),
+                "transcodeUrl": publish_viewer_playback_url(p, playback_mode=mode) if needs else None,
+                "needsTranscode": needs,
+                "playbackMode": mode,
+                "playbackStrategy": strategy,
                 "playbackMime": cache["playbackMime"],
                 "playbackFormat": cache["playbackFormat"],
                 "viewerEngine": viewer_engine_label(),
                 "mimeType": mime_for_path(p),
+                "ffmpegAvailable": ffmpeg_available(),
+                "ffprobeAvailable": ffprobe_available(),
+                "transcodeCached": cache["transcodeCached"],
             }
         if ext == ".svg":
             return {
@@ -246,6 +265,22 @@ class EditorBridgeMixin:
 
         jobs = list_active_transcode_jobs()
         return {"jobs": jobs, "count": len(jobs)}
+
+    def gallery_video_profiles(self, path: str) -> dict:
+        from ..core.fs_path import resolve_file_path
+        from ..core.viewer_playback import video_playback_profiles, viewer_playback_strategy
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"path": path, "profiles": [], "error": str(exc)}
+        profiles = video_playback_profiles(p)
+        return {
+            "path": str(p),
+            "profiles": profiles,
+            "defaultMode": "auto",
+            "strategy": viewer_playback_strategy(p, playback_mode="auto"),
+        }
 
     def gallery_video_diagnostics(self, path: str, test_transcode: bool = False) -> dict:
         """Diagnóstico detallado cuando falla la reproducción en el visor integrado."""

@@ -172,31 +172,32 @@ def _folder_preview_thumbs(
     count: int,
     thumb_px: int,
 ) -> list[str | None]:
-    """Devuelve hasta `count` data-URLs LQ de imágenes del primer nivel de la carpeta.
+    """Devuelve hasta `count` data-URLs LQ del primer nivel (imágenes y vídeos)."""
+    from .bridge_editor import _video_thumb_jpeg_data_url_square
 
-    Solo busca en el nivel inmediato (no recursivo), ignora videos y SVGs ya que
-    su miniatura sería None o lenta. El resultado puede tener menos de `count`
-    elementos si la carpeta tiene pocas imágenes o está vacía.
-    """
     if Image is None:
         return []
-    thumb_cell = max(32, thumb_px // 2)  # cada celda del mosaico es pequeña
+    thumb_cell = max(32, thumb_px // 2)
     candidates: list[Path] = []
     try:
         for p in folder.iterdir():
             if not p.is_file():
                 continue
             ext = p.suffix.lower()
-            # Solo imágenes rasterizadas (no SVG ni vídeos)
             if ext in MediaOrganizer.IMAGE_EXTENSIONS and ext != ".svg":
+                candidates.append(p)
+            elif ext in MediaOrganizer.VIDEO_EXTENSIONS:
                 candidates.append(p)
     except OSError:
         return []
     candidates.sort(key=lambda x: str(x).lower())
-    chosen = candidates[:count]
     urls: list[str | None] = []
-    for p in chosen:
-        url = _thumb_jpeg_data_url_square(p, thumb_cell, quality=40)
+    for p in candidates[:count]:
+        ext = p.suffix.lower()
+        if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+            url = _video_thumb_jpeg_data_url_square(p, thumb_cell, quality=40)
+        else:
+            url = _thumb_jpeg_data_url_square(p, thumb_cell, quality=40)
         urls.append(url)
     return urls
 

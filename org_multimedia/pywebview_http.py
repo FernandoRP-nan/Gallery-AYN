@@ -11,6 +11,7 @@ import bottle
 from webview.http import BottleServer, SSLWSGIRefServer, ThreadedAdapter, _get_random_port
 from webview.util import abspath, is_app, is_local_url
 
+from .bundle_paths import project_root
 from .media_server import register_media_routes
 
 logger = logging.getLogger("pywebview")
@@ -37,10 +38,17 @@ class OrganizadorBottleServer(BottleServer):
             common_path = "."
             register_media_routes(app)
         else:
-            local_urls = [u.split("#")[0] for u in urls if is_local_url(u)]
+            local_urls = [
+                u.split("#")[0].split("?")[0] for u in urls if is_local_url(u)
+            ]
             common_path = os.path.commonpath(local_urls) if len(local_urls) > 0 else None
             if common_path is not None and not os.path.isdir(abspath(common_path)):
                 common_path = os.path.dirname(common_path)
+            if common_path is None:
+                # file:// u otras URLs no locales: usar webui/dist empaquetado o del repo.
+                dist_dir = project_root() / "webui" / "dist"
+                if dist_dir.is_dir():
+                    common_path = str(dist_dir.resolve())
             logger.debug("Comon path for local URLs: %s" % common_path)
             server.root_path = abspath(common_path) if common_path is not None else None
             logger.debug("HTTP server root path: %s" % server.root_path)

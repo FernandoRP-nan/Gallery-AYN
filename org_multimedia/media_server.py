@@ -134,14 +134,14 @@ def publish_transcode_url(path: Path) -> str:
     return build_media_stream_url(path, transcode=True)
 
 
-def publish_viewer_playback_url(path: Path) -> str:
+def publish_viewer_playback_url(path: Path, *, playback_mode: str = "auto") -> str:
     """URL corta al caché transcodificado (evita query strings con rutas con espacios)."""
     from .core.video_transcode import publish_mp4_playback_name, publish_webm_playback_name
 
     resolved = path.resolve()
     if viewer_prefers_webm():
         return f"/om-webm/{publish_webm_playback_name(resolved)}"
-    return f"/om-transcode/{publish_mp4_playback_name(resolved)}"
+    return f"/om-transcode/{publish_mp4_playback_name(resolved, playback_mode=playback_mode)}"
 
 
 def build_media_file_url(path: Path) -> str:
@@ -199,24 +199,25 @@ def _serve_cached_media(filename: str) -> bottle.HTTPResponse | str:
 
 
 def _serve_transcoded_media(filename: str) -> bottle.HTTPResponse | str:
-    from .core.video_transcode import ensure_transcoded_mp4, resolve_transcode_source, transcode_cache_dir
+    from .core.video_transcode import resolve_mp4_playback_path, resolve_transcode_source, transcode_cache_dir
 
     name = _safe_cache_name(filename)
     if not name:
         return bottle.HTTPError(403, "Nombre inválido")
 
-    root = str(transcode_cache_dir())
     cached = transcode_cache_dir() / name
-    if not cached.is_file() or cached.stat().st_size <= 512:
-        source = resolve_transcode_source(name)
-        if source is None:
-            return bottle.HTTPError(404, "Archivo no encontrado")
-        try:
-            ensure_transcoded_mp4(source)
-        except Exception as exc:
-            return bottle.HTTPError(500, f"No se pudo preparar el vídeo: {exc}")
+    if cached.is_file() and cached.stat().st_size > 512:
+        return _stream_file_range(cached, "video/mp4")
 
-    return bottle.static_file(name, root=root, mimetype="video/mp4")
+    source = resolve_transcode_source(name)
+    if source is None:
+        return bottle.HTTPError(404, "Archivo no encontrado")
+    try:
+        playback = resolve_mp4_playback_path(source, wait_partial=True)
+    except Exception as exc:
+        return bottle.HTTPError(500, f"No se pudo preparar el vídeo: {exc}")
+
+    return _stream_file_range(playback, "video/mp4")
 
 
 def _serve_transcoded_webm(filename: str) -> bottle.HTTPResponse | str:
@@ -226,7 +227,6 @@ def _serve_transcoded_webm(filename: str) -> bottle.HTTPResponse | str:
     if not name:
         return bottle.HTTPError(403, "Nombre inválido")
 
-    root = str(transcode_cache_dir())
     cached = transcode_cache_dir() / name
     if not cached.is_file() or cached.stat().st_size <= 512:
         source = resolve_webm_source(name)
@@ -237,7 +237,7 @@ def _serve_transcoded_webm(filename: str) -> bottle.HTTPResponse | str:
         except Exception as exc:
             return bottle.HTTPError(500, f"No se pudo preparar el vídeo: {exc}")
 
-    return bottle.static_file(name, root=root, mimetype="video/webm")
+    return _stream_file_range(cached, "video/webm")
 
 
 def _apply_media_cors() -> None:

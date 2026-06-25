@@ -104,6 +104,10 @@ const devMockApi: WebApi = {
     transcodeUrl: null as string | null,
     needsTranscode: false,
     mimeType: null as string | null,
+    ffmpegAvailable: false,
+    ffprobeAvailable: false,
+    transcodeCached: false,
+    playbackFormat: "mp4",
   }),
   gallery_transcode_active: async () => ({ jobs: [] as Array<{ id: string; path: string; name: string; format: string }>, count: 0 }),
   gallery_video_playback_blob: async () => ({ ok: false, error: "mock" }),
@@ -239,9 +243,14 @@ export const bridge = {
   galleryInvertSelection: () => call<any>("gallery_invert_selection"),
   galleryPreview: (path: string, width: number, height: number) =>
     call<any>("gallery_preview", normalizePathForApi(path), width, height),
-  galleryMediaUrl: (path: string, warm = false) =>
-    call<any>("gallery_media_url", normalizePathForApi(path), warm),
-  galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string }>; count: number }>("gallery_transcode_active"),
+  galleryMediaUrl: (path: string, warm = false, playbackMode = "auto") =>
+    call<any>("gallery_media_url", normalizePathForApi(path), warm, playbackMode),
+  galleryVideoProfiles: (path: string) =>
+    call<{ profiles: Array<{ id: string; available: boolean; recommended?: boolean; strategy?: string }>; defaultMode?: string; strategy?: string }>(
+      "gallery_video_profiles",
+      normalizePathForApi(path)
+    ),
+  galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }>; count: number }>("gallery_transcode_active"),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
   galleryVideoPlaybackBlob: (path: string) =>

@@ -7,12 +7,16 @@
   import SettingsDestinationsSection from "./settings/SettingsDestinationsSection.svelte";
   import SettingsMarkersSection from "./settings/SettingsMarkersSection.svelte";
   import SettingsPerformanceSection from "./settings/SettingsPerformanceSection.svelte";
+  import SettingsVideoSection from "./settings/SettingsVideoSection.svelte";
   import SettingsShortcutsSection from "./settings/SettingsShortcutsSection.svelte";
   import SettingsThumbsSection from "./settings/SettingsThumbsSection.svelte";
 
   import type { TreeNode } from "../lib/itemTree";
 
   export let thumbsPerPage: number;
+  export let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
+  export let videoTranscodeMaxHeight = 1080;
+  export let videoTranscodeHw: "auto" | "off" = "auto";
   export let settingsThumbPresetIdx: number;
   export let settingsThumbScaleDraft: number;
   export let thumbGapPx: number;
@@ -60,6 +64,11 @@
     </header>
     <section class="settings-body">
       <SettingsPerformanceSection bind:thumbsPerPage />
+      <SettingsVideoSection
+        bind:videoTranscodePreset
+        bind:videoTranscodeMaxHeight
+        bind:videoTranscodeHw
+      />
       <SettingsThumbsSection
         bind:settingsThumbPresetIdx
         bind:settingsThumbScaleDraft

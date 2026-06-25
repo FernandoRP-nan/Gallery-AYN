@@ -23,15 +23,26 @@ from .viewer_playback import (
 )
 
 
+from .video_tools import ffmpeg_available, ffprobe_available, resolve_ffmpeg, resolve_ffprobe
+
+
 def _tool_path(name: str) -> tuple[bool, str]:
-    path = shutil.which(name) or ""
+    if name == "ffmpeg":
+        path = resolve_ffmpeg() or ""
+    elif name == "ffprobe":
+        path = resolve_ffprobe() or ""
+    else:
+        path = shutil.which(name) or ""
     return bool(path), path
 
 
 def _ffprobe_error(path: Path) -> str | None:
     try:
+        ffprobe = resolve_ffprobe()
+        if not ffprobe:
+            return "ffprobe no está instalado o no está en el PATH"
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)],
+            [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
             capture_output=True,
             text=True,
             timeout=30,

@@ -53,6 +53,10 @@ def load_app_settings() -> dict:
             "gallery_timeline_view": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
+            "video_transcode_preset": "fast",
+            "video_transcode_max_height": 1080,
+            "video_transcode_max_width": 1920,
+            "video_transcode_hw": "auto",
         }
     try:
         with path.open(encoding="utf-8") as f:
@@ -166,6 +170,30 @@ def load_app_settings() -> dict:
             data["web_prefer_qt_engine"] = True
         else:
             data["web_prefer_qt_engine"] = bool(data["web_prefer_qt_engine"])
+        if "video_transcode_preset" not in data:
+            data["video_transcode_preset"] = "fast"
+        elif str(data["video_transcode_preset"]).lower() not in ("turbo", "fast", "quality"):
+            data["video_transcode_preset"] = "fast"
+        if "video_transcode_max_height" not in data:
+            data["video_transcode_max_height"] = 1080
+        else:
+            try:
+                h = int(data["video_transcode_max_height"])
+                data["video_transcode_max_height"] = 0 if h <= 0 else max(480, min(2160, h))
+            except (TypeError, ValueError):
+                data["video_transcode_max_height"] = 1080
+        if "video_transcode_max_width" not in data:
+            data["video_transcode_max_width"] = 1920
+        else:
+            try:
+                w = int(data["video_transcode_max_width"])
+                data["video_transcode_max_width"] = 0 if w <= 0 else max(640, min(3840, w))
+            except (TypeError, ValueError):
+                data["video_transcode_max_width"] = 1920
+        if "video_transcode_hw" not in data:
+            data["video_transcode_hw"] = "auto"
+        elif str(data["video_transcode_hw"]).lower() not in ("auto", "off"):
+            data["video_transcode_hw"] = "auto"
         return data
     except (OSError, json.JSONDecodeError):
         return {
@@ -202,6 +230,10 @@ def load_app_settings() -> dict:
             "gallery_timeline_view": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
+            "video_transcode_preset": "fast",
+            "video_transcode_max_height": 1080,
+            "video_transcode_max_width": 1920,
+            "video_transcode_hw": "auto",
         }
 
 
