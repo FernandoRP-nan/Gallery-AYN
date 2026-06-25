@@ -102,6 +102,9 @@ def sort_image_paths(paths: list[Path], mode: str) -> list[Path]:
             # mtime por defecto es desc (más reciente primero)
             is_desc = direction != "asc"
             sort_keys.append(("mtime", is_desc))
+        elif m in ("ctime", "creacion", "creation", "created"):
+            is_desc = direction != "asc"
+            sort_keys.append(("ctime", is_desc))
         elif m in ("type", "tipo"):
             # type por defecto es asc
             is_desc = direction == "desc"
@@ -153,6 +156,11 @@ def sort_image_paths(paths: list[Path], mode: str) -> list[Path]:
                 try: return p.stat().st_mtime_ns
                 except OSError: return 0
             result.sort(key=get_mtime, reverse=is_desc)
+        elif sk == "ctime":
+            def get_ctime(p: Path):
+                try: return p.stat().st_ctime_ns
+                except OSError: return 0
+            result.sort(key=get_ctime, reverse=is_desc)
         elif sk == "type":
             def get_type(p: Path):
                 return 1 if p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS else 0

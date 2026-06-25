@@ -124,6 +124,7 @@
             <input
               type="checkbox"
               checked={sectionDominantColor}
+              disabled={!groupByFolder}
               on:change={(e) =>
                 void onSectionDominantColorChange((e.currentTarget as HTMLInputElement).checked)}
             />
@@ -137,82 +138,67 @@
             />
             <span>{t("view.timelineView")}</span>
           </label>
-          <fieldset class="view-menu__fieldset view-menu__fieldset--sort">
-            <div class="view-menu__legend">{t("view.sortLabel")}</div>
-            <p class="view-menu__sort-hint">{t("view.sortPendingHint")}</p>
-            <ol class="sort-priority-list">
-              {#each sortDraftParts as modeObj, index (modeObj.key)}
-                <li class="sort-priority-item">
-                  <span class="sort-priority-rank" aria-hidden="true">{index + 1}</span>
-                  <div class="sort-priority-main">
-                    <span class="sort-priority-label">{t(sortPartLabelKey(modeObj.key))}</span>
-                    <span class="sort-priority-rank-label">{t("view.sortPriority").replace("{n}", String(index + 1))}</span>
-                  </div>
-                  <div class="sort-priority-actions">
-                    <button
-                      type="button"
-                      class="sort-priority-chip"
-                      class:sort-priority-chip--active={modeObj.dir === "asc"}
-                      title={t("view.sortAsc")}
-                      on:click={() => setSortDirection(index, "asc")}
-                    >
-                      {t("view.sortAsc")}
-                    </button>
-                    <button
-                      type="button"
-                      class="sort-priority-chip"
-                      class:sort-priority-chip--active={modeObj.dir === "desc"}
-                      title={t("view.sortDesc")}
-                      on:click={() => setSortDirection(index, "desc")}
-                    >
-                      {t("view.sortDesc")}
-                    </button>
-                    <div class="sort-priority-move">
-                      <button
-                        type="button"
-                        class="sort-priority-btn"
-                        disabled={index === 0}
-                        title="Subir prioridad"
-                        aria-label="Subir prioridad"
-                        on:click={() => moveSortPriority(index, -1)}
-                      >
-                        ▲
-                      </button>
-                      <button
-                        type="button"
-                        class="sort-priority-btn"
-                        disabled={index === sortDraftParts.length - 1}
-                        title="Bajar prioridad"
-                        aria-label="Bajar prioridad"
-                        on:click={() => moveSortPriority(index, 1)}
-                      >
-                        ▼
-                      </button>
-                    </div>
-                  </div>
-                </li>
-              {/each}
-            </ol>
-            <div class="sort-priority-footer">
-              <button
-                type="button"
-                class="om-btn om-btn--ghost om-btn--mini"
-                disabled={!sortDraftDirty}
-                on:click={discardSortDraft}
-              >
-                {t("view.sortCancel")}
-              </button>
-              <button
-                type="button"
-                class="om-btn om-btn--primary om-btn--mini"
-                disabled={!sortDraftDirty}
-                on:click={applySortDraft}
-              >
-                {t("view.sortApply")}
-              </button>
-            </div>
-          </fieldset>
-          <p class="view-menu__hint">{t("view.timelineHint")}</p>
+          <div class="view-menu__divider" aria-hidden="true"></div>
+          <div class="view-menu__sort-head">
+            <span class="view-menu__legend">{t("view.sortLabel")}</span>
+            {#if sortDraftDirty}
+              <span class="view-menu__sort-badge">{t("view.sortPendingHint")}</span>
+            {/if}
+          </div>
+          <ol class="sort-priority-list">
+            {#each sortDraftParts as modeObj, index (modeObj.key)}
+              <li class="sort-priority-item">
+                <span class="sort-priority-rank" aria-hidden="true">{index + 1}</span>
+                <span class="sort-priority-label">{t(sortPartLabelKey(modeObj.key))}</span>
+                <div class="sort-priority-actions">
+                  <button
+                    type="button"
+                    class="sort-priority-chip"
+                    class:sort-priority-chip--active={modeObj.dir === "asc"}
+                    title={t("view.sortAsc")}
+                    on:click={() => setSortDirection(index, "asc")}
+                  >↑</button>
+                  <button
+                    type="button"
+                    class="sort-priority-chip"
+                    class:sort-priority-chip--active={modeObj.dir === "desc"}
+                    title={t("view.sortDesc")}
+                    on:click={() => setSortDirection(index, "desc")}
+                  >↓</button>
+                  <button
+                    type="button"
+                    class="sort-priority-btn"
+                    disabled={index === 0}
+                    title="Subir prioridad"
+                    aria-label="Subir prioridad"
+                    on:click={() => moveSortPriority(index, -1)}
+                  >▲</button>
+                  <button
+                    type="button"
+                    class="sort-priority-btn"
+                    disabled={index === sortDraftParts.length - 1}
+                    title="Bajar prioridad"
+                    aria-label="Bajar prioridad"
+                    on:click={() => moveSortPriority(index, 1)}
+                  >▼</button>
+                </div>
+              </li>
+            {/each}
+          </ol>
+          <div class="sort-priority-footer">
+            <button
+              type="button"
+              class="om-btn om-btn--ghost om-btn--mini"
+              disabled={!sortDraftDirty}
+              on:click={discardSortDraft}
+            >{t("view.sortCancel")}</button>
+            <button
+              type="button"
+              class="om-btn om-btn--primary om-btn--mini"
+              disabled={!sortDraftDirty}
+              on:click={applySortDraft}
+            >{t("view.sortApply")}</button>
+          </div>
         </div>
       {/if}
     </div>
@@ -295,47 +281,49 @@
     top: calc(100% + 6px);
     left: 0;
     z-index: 90;
-    min-width: min(360px, calc(100vw - 24px));
-    padding: var(--om-space-3);
+    min-width: min(320px, calc(100vw - 24px));
+    padding: 10px 12px;
     display: flex;
     flex-direction: column;
-    gap: var(--om-space-3);
+    gap: 6px;
     box-shadow: var(--om-shadow-lg);
   }
 .view-menu__row {
     display: flex;
-    align-items: flex-start;
-    gap: var(--om-space-2);
-    font-size: 0.85rem;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
     color: var(--om-text-secondary);
     cursor: pointer;
+    min-height: 1.6rem;
+    padding: 2px 0;
   }
 .view-menu__row input:disabled + span {
-    opacity: 0.55;
+    opacity: 0.45;
   }
-.view-menu__fieldset {
-    border: 0;
-    padding: 0;
-    margin: 0;
+.view-menu__divider {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--om-border-default);
+    opacity: 0.65;
   }
-.view-menu__fieldset--sort {
-    padding: 10px;
-    border-radius: var(--om-radius-md, 8px);
-    background: color-mix(in oklab, var(--om-surface-2) 72%, transparent);
-    border: 1px solid var(--om-border-default);
+.view-menu__sort-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding-top: 2px;
   }
 .view-menu__legend {
     font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     color: var(--om-text-muted);
-    margin-bottom: var(--om-space-2);
   }
-.view-menu__sort-hint {
-    margin: 0 0 10px;
-    font-size: 0.72rem;
-    line-height: 1.35;
-    color: var(--om-text-muted);
+.view-menu__sort-badge {
+    font-size: 0.65rem;
+    color: var(--om-accent, #007acc);
+    opacity: 0.9;
   }
 .sort-priority-list {
     list-style: none;
@@ -343,112 +331,88 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 4px;
   }
 .sort-priority-item {
     display: grid;
     grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    background: var(--om-surface-1, #1a1a1a);
-    border: 1px solid var(--om-border-default);
-    border-radius: var(--om-radius-sm, 6px);
+    gap: 8px;
+    padding: 4px 2px;
+    border-bottom: 1px solid color-mix(in oklab, var(--om-border-default) 55%, transparent);
+  }
+.sort-priority-item:last-child {
+    border-bottom: 0;
   }
 .sort-priority-rank {
-    width: 1.6rem;
-    height: 1.6rem;
+    width: 1.25rem;
+    height: 1.25rem;
     border-radius: 999px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.78rem;
+    font-size: 0.68rem;
     font-weight: 600;
-    color: var(--om-accent, #007acc);
-    background: color-mix(in oklab, var(--om-accent, #007acc) 18%, transparent);
-    border: 1px solid color-mix(in oklab, var(--om-accent, #007acc) 35%, transparent);
-  }
-.sort-priority-main {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    color: var(--om-text-muted);
+    background: transparent;
+    border: 1px solid var(--om-border-default);
   }
 .sort-priority-label {
-    font-size: 0.88rem;
+    font-size: 0.82rem;
     color: var(--om-text-primary);
-    font-weight: 500;
-  }
-.sort-priority-rank-label {
-    font-size: 0.68rem;
-    color: var(--om-text-muted);
-  }
+    min-width: 0;
+}
 .sort-priority-actions {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    gap: 3px;
   }
 .sort-priority-chip {
-    min-height: 1.7rem;
-    padding: 0 8px;
-    border-radius: 999px;
-    border: 1px solid var(--om-border-default);
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid transparent;
     background: transparent;
-    color: var(--om-text-secondary);
-    font-size: 0.68rem;
+    color: var(--om-text-muted);
+    font-size: 0.75rem;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    transition: color 0.12s ease, background 0.12s ease;
   }
 .sort-priority-chip--active {
-    background: color-mix(in oklab, var(--om-accent, #007acc) 22%, transparent);
-    border-color: color-mix(in oklab, var(--om-accent, #007acc) 45%, transparent);
+    background: color-mix(in oklab, var(--om-accent, #007acc) 18%, transparent);
+    border-color: color-mix(in oklab, var(--om-accent, #007acc) 35%, transparent);
     color: var(--om-text-primary);
   }
-.sort-priority-move {
-    display: inline-flex;
-    gap: 4px;
-    margin-left: 2px;
-  }
 .sort-priority-btn {
-    width: 24px;
-    height: 24px;
+    width: 1.35rem;
+    height: 1.35rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: var(--om-surface-3, #2a2a2a);
-    border: 1px solid var(--om-border-default);
-    border-radius: 4px;
-    color: var(--om-text-secondary);
-    font-size: 0.75rem;
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    color: var(--om-text-muted);
+    font-size: 0.62rem;
     cursor: pointer;
     padding: 0;
-    transition: all 0.15s ease;
   }
 .sort-priority-btn:hover:not(:disabled) {
-    background: var(--om-accent, #007acc);
-    color: #fff;
-    border-color: var(--om-accent);
+    color: var(--om-text-primary);
+    background: color-mix(in oklab, var(--om-surface-3) 80%, transparent);
   }
 .sort-priority-btn:disabled {
-    opacity: 0.35;
+    opacity: 0.25;
     cursor: not-allowed;
   }
 .sort-priority-footer {
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 1px solid var(--om-border-default);
-  }
-.view-menu__hint {
-    margin: 0;
-    font-size: 0.72rem;
-    line-height: 1.35;
-    color: var(--om-text-muted);
-  }
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 6px;
+}
 .tabs__nav {
     display: flex;
     flex-wrap: wrap;

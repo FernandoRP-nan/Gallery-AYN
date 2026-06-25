@@ -35,7 +35,15 @@
     type GalleryMutationResponse,
     type GalleryState,
   } from "./lib/galleryRuntime";
-  import { bumpGalleryThumbHydrationToken, disposeGalleryThumbs } from "./lib/galleryThumbs";
+  import { bumpGalleryThumbHydrationToken, disposeGalleryThumbs, galleryThumbHydrating } from "./lib/galleryThumbs";
+  import { cancelZoomCarouselHydration, hydrateZoomCarouselThumbs } from "./lib/zoomCarouselThumbs";
+  import {
+    formatGallerySortMode,
+    isTimelineDateSortKey,
+    parseGallerySortMode,
+    primaryGallerySortKey,
+  } from "./lib/gallerySort";
+  import type { ActiveProcess } from "./components/PagerBar.svelte";
   import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems } from "./lib/galleryThumbHqCache";
   import {
     bumpGalleryNavigationGeneration,
@@ -112,6 +120,7 @@
   let galleryMoveWorkerRunning = false;
   let galleryDeleteQueue: GalleryDeleteJob[] = [];
   let galleryDeleteWorkerRunning = false;
+  let galleryLoadingMore = false;
   let zoomHudVisible = false;
   let zoomHudTimer: ReturnType<typeof setTimeout> | null = null;
   let zoomStageEl: HTMLDivElement | null = null;
@@ -291,6 +300,49 @@
       }
     });
   }
+
+  $: activeProcesses = (() => {
+    const list: ActiveProcess[] = [];
+    if (loadCount > 0) {
+      list.push({
+        id: "load",
+        label: uiLoadingMessage ? `${t("pager.processLoading")}: ${uiLoadingMessage}` : t("pager.processLoading"),
+      });
+    }
+    if ($galleryThumbHydrating) {
+      list.push({ id: "thumbs-hq", label: t("pager.processThumbsHq") });
+    }
+    if (galleryLoadingMore) {
+      list.push({ id: "load-more", label: t("pager.processLoadMore") });
+    }
+    if (galleryMoveWorkerRunning || galleryMoveQueue.length > 0) {
+      list.push({
+        id: "move",
+        label: t("pager.processMoveQueue").replace("{n}", String(galleryMoveQueue.length)),
+      });
+    }
+    if (galleryDeleteWorkerRunning || galleryDeleteQueue.length > 0) {
+      list.push({
+        id: "delete",
+        label: t("pager.processDeleteQueue").replace("{n}", String(galleryDeleteQueue.length)),
+      });
+    }
+    if (zoomMoveWorkerRunning || zoomMoveQueue.length > 0) {
+      list.push({
+        id: "zoom-move",
+        label: t("pager.processZoomMove").replace("{n}", String(zoomMoveQueue.length)),
+      });
+    }
+    if (orgRunning) {
+      list.push({
+        id: "organizer",
+        label: orgDetail ? `${t("pager.processOrganizer")}: ${orgDetail}` : t("pager.processOrganizer"),
+      });
+    }
+    return list;
+  })();
+
+  $: if (!previewZoomOpen) cancelZoomCarouselHydration();
 
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
   let galleryActionBusy = false;
@@ -546,19 +598,22 @@
     timelineView = checked;
     if (checked) {
       groupByFolder = false;
-      // La línea de tiempo requiere que la fecha (mtime) sea la prioridad más alta.
-      // Reordenamos para colocar 'mtime' al inicio.
-      const currentParts = gallerySortMode.split(",").map(p => p.trim());
-      const filtered = currentParts.filter(p => p !== "mtime");
-      gallerySortMode = ["mtime", ...filtered].join(",");
+      const parts = parseGallerySortMode(gallerySortMode);
+      const datePart = parts.find((p) => isTimelineDateSortKey(p.key));
+      if (datePart) {
+        const rest = parts.filter((p) => p.key !== datePart.key);
+        gallerySortMode = formatGallerySortMode([datePart, ...rest]);
+      } else {
+        gallerySortMode = formatGallerySortMode([{ key: "mtime", dir: "desc" }, ...parts]);
+      }
     }
     await persistViewAndReload();
   }
 
   async function onGallerySortApply(mode: string) {
     gallerySortMode = mode;
-    const primarySort = mode.split(",")[0]?.trim().split(":")[0];
-    if (primarySort !== "mtime" && timelineView) {
+    const primary = primaryGallerySortKey(mode);
+    if (!isTimelineDateSortKey(primary) && timelineView) {
       timelineView = false;
     }
     viewMenuOpen = false;
@@ -1902,6 +1957,11 @@
     zoomCropMode = false;
     zoomCropDrag = false;
     previewZoomOpen = true;
+    void hydrateZoomCarouselThumbs(zoomNavItems, thumbScale, it.path, (path, thumbDataUrl) => {
+      zoomNavItems = zoomNavItems.map((z) =>
+        z.path === path ? { ...z, thumbDataUrl, thumbQuality: "hq" as const } : z
+      );
+    });
     bridge
       .galleryPreview(it.path, 2200, 1600)
       .then((pr) => {
@@ -2664,7 +2724,7 @@
   let destCtxMenu: { x: number; y: number; idx: number; source: "gallery" | "fullscreen" } | null = null;
   /** Menú contextual (clic derecho) en marcador anclado del modal de rutas. */
   let pinnedCtxMenu: { x: number; y: number; path: string } | null = null;
-  /** Menú contextual en miniaturas de la galería (imagen / vídeo). */
+  /** Menú contextual en miniaturas de la galería (imagen / vídeo / carpeta). */
   let galleryItemCtxMenu: {
     x: number;
     y: number;
@@ -2674,6 +2734,11 @@
     thumbDataUrl?: string | null;
     submenuLeft: boolean;
   } | null = null;
+  let renameModalOpen = false;
+  let renameModalPath = "";
+  let renameModalKind: "file" | "folder" = "file";
+  let renameModalDraft = "";
+  let renameModalTitle = "";
   let galleryFileInfoModal: {
     path: string;
     name: string;
@@ -2863,20 +2928,20 @@
   }
 
   function onGalleryItemContextMenu(e: MouseEvent, it: GalleryItem) {
-    if (!isGalleryMediaKind(it.kind)) return;
+    if (it.kind !== "image" && it.kind !== "video" && it.kind !== "folder") return;
     e.preventDefault();
     e.stopPropagation();
     const pad = 8;
     const menuW = 220;
     const submenuW = 200;
-    const menuH = 280;
+    const menuH = it.kind === "folder" ? 120 : 320;
     let x = e.clientX;
     let y = e.clientY;
     x = Math.min(x, window.innerWidth - menuW - pad);
     y = Math.min(y, window.innerHeight - menuH - pad);
     x = Math.max(pad, x);
     y = Math.max(pad, y);
-    const submenuLeft = x + menuW + submenuW > window.innerWidth - pad;
+    const submenuLeft = it.kind !== "folder" && x + menuW + submenuW > window.innerWidth - pad;
     closeDestCtxMenu();
     closePinnedCtxMenu();
     galleryItemCtxMenu = {
@@ -2888,6 +2953,75 @@
       thumbDataUrl: it.thumbDataUrl ?? null,
       submenuLeft,
     };
+  }
+
+  function openRenameFromCtx() {
+    if (!galleryItemCtxMenu) return;
+    renameModalPath = galleryItemCtxMenu.path;
+    renameModalKind = galleryItemCtxMenu.kind === "folder" ? "folder" : "file";
+    renameModalDraft = galleryItemCtxMenu.name;
+    renameModalTitle =
+      renameModalKind === "folder" ? t("contextGallery.renameFolderTitle") : t("contextGallery.renameFileTitle");
+    closeGalleryItemCtxMenu();
+    renameModalOpen = true;
+  }
+
+  function closeRenameModal() {
+    renameModalOpen = false;
+    renameModalPath = "";
+    renameModalDraft = "";
+  }
+
+  async function saveRenameModal() {
+    const path = renameModalPath.trim();
+    const newName = renameModalDraft.trim();
+    if (!path || !newName) return;
+    try {
+      const out = await trackLoad(bridge.galleryRenamePath(path, newName));
+      setGalleryPayload(out.state, out.items);
+      await afterGalleryDataLoaded();
+      const newPath = String(out.renameResult?.newPath ?? "").trim();
+      const finalName = String(out.renameResult?.newName ?? newName).trim();
+      if (previewZoomOpen && previewZoomPath === path && newPath) {
+        previewZoomPath = newPath;
+        previewZoomName = finalName;
+      }
+      if (newPath) {
+        zoomNavItems = zoomNavItems.map((z) =>
+          z.path === path ? { ...z, path: newPath, name: finalName } : z
+        );
+      }
+      status = t("contextGallery.renameOk");
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("contextGallery.renameError");
+    } finally {
+      closeRenameModal();
+    }
+  }
+
+  function askDeleteFolderFromCtx() {
+    if (!galleryItemCtxMenu || galleryItemCtxMenu.kind !== "folder") return;
+    const p = galleryItemCtxMenu.path;
+    const label = galleryItemCtxMenu.name;
+    closeGalleryItemCtxMenu();
+    openConfirmDelete(
+      t("contextFolder.deleteTitle"),
+      t("contextFolder.deleteDetail").replace("{name}", label),
+      async () => {
+        try {
+          const out = await trackLoad(bridge.galleryDeleteFolder(p));
+          setGalleryPayload(out.state, out.items);
+          await afterGalleryDataLoaded();
+          status = t("status.deleteBatchLine")
+            .replace("{deleted}", "1")
+            .replace("{errPart}", "")
+            .replace("{queue}", "0");
+        } catch (e: unknown) {
+          status = e instanceof Error ? e.message : t("contextGallery.renameError");
+        }
+      },
+      { confirmLabel: t("contextGallery.confirmDeleteBtn") }
+    );
   }
 
   async function copyGalleryCtxPath() {
@@ -3378,6 +3512,7 @@
     }
     if (pinnedCtxMenu) closePinnedCtxMenu();
     else if (galleryItemCtxMenu) closeGalleryItemCtxMenu();
+    else if (renameModalOpen) closeRenameModal();
     else if (galleryFileInfoModal) galleryFileInfoModal = null;
     else if (destCtxMenu) closeDestCtxMenu();
     else if (destFormOpen) closeDestForm();
@@ -3460,6 +3595,7 @@
         <GalleryWorkspace
           bind:this={galleryWorkspace}
           bind:galleryScrollEl
+          bind:galleryLoadingMore
           bind:galleryRangeSelecting
           bind:galleryRangeSuppressClick
           bind:galleryCursorPath
@@ -3582,6 +3718,7 @@
     {previewVisible}
     {previewRatio}
     bind:thumbScale
+    {activeProcesses}
     {goPage}
     {jumpToPageDraft}
     {togglePreviewVisible}
@@ -3820,11 +3957,22 @@
       class="dest-ctx-menu gallery-item-ctx-menu om-panel om-panel--lift"
       role="menu"
       tabindex="-1"
-      aria-label={t("menus.galleryFileAria")}
+      aria-label={galleryItemCtxMenu.kind === "folder" ? t("menus.galleryFolderAria") : t("menus.galleryFileAria")}
       style={`left:${galleryItemCtxMenu.x}px;top:${galleryItemCtxMenu.y}px`}
       on:click|stopPropagation
       on:keydown|stopPropagation
     >
+      {#if galleryItemCtxMenu.kind === "folder"}
+        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openRenameFromCtx}
+          >{t("contextFolder.rename")}</button
+        >
+        <button
+          type="button"
+          class="dest-ctx-menu__item dest-ctx-menu__item--danger"
+          role="menuitem"
+          on:click={askDeleteFolderFromCtx}>{t("contextFolder.delete")}</button
+        >
+      {:else}
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
         >{t("contextGallery.copyPath")}</button
       >
@@ -3875,6 +4023,9 @@
           >{t("contextGallery.openExternal")}</button
         >
       {/if}
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openRenameFromCtx}
+        >{t("contextGallery.rename")}</button
+      >
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void openGalleryFileInfoFromCtx()}
         >{t("contextGallery.properties")}</button
       >
@@ -3884,6 +4035,47 @@
         role="menuitem"
         on:click={askDeleteGalleryItemFromCtx}>{t("contextGallery.delete")}</button
       >
+      {/if}
+    </div>
+  {/if}
+
+  {#if renameModalOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim overlay--confirm" role="presentation" on:click|self={closeRenameModal}>
+      <div
+        class="modal modal--confirm om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rename-modal-title"
+        tabindex="-1"
+        on:click|stopPropagation
+      >
+        <header class="modal__head">
+          <strong id="rename-modal-title">{renameModalTitle}</strong>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            on:click={closeRenameModal}>✕</button
+          >
+        </header>
+        <label class="field-label" for="rename-modal-input">{t("contextGallery.renamePlaceholder")}</label>
+        <input
+          id="rename-modal-input"
+          class="om-input"
+          type="text"
+          bind:value={renameModalDraft}
+          on:keydown={(e) => {
+            if (e.key === "Enter") void saveRenameModal();
+            if (e.key === "Escape") closeRenameModal();
+          }}
+        />
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--ghost" on:click={closeRenameModal}>{t("common.cancel")}</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={() => void saveRenameModal()}>{t("common.save")}</button>
+        </div>
+      </div>
     </div>
   {/if}
 

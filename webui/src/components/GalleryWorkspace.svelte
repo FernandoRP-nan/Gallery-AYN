@@ -78,7 +78,7 @@
 
   let galleryScrolling = false;
   let galleryScrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
-  let galleryLoadingMore = false;
+  export let galleryLoadingMore = false;
   let galleryAutoLoadRunId = 0;
   let galleryActionBusy = false;
 

@@ -289,32 +289,57 @@ class GalleryBridgeMixin:
         return s, e
 
     @staticmethod
-    def _path_mtime_iso(p: Path) -> str:
+    def _path_date_ts(p: Path, field: str = "mtime") -> float:
         try:
-            ts = p.stat().st_mtime
+            st = p.stat()
+            return float(st.st_ctime if field == "ctime" else st.st_mtime)
+        except OSError:
+            return 0.0
+
+    @staticmethod
+    def _path_date_iso(p: Path, field: str = "mtime") -> str:
+        try:
+            ts = GalleryBridgeMixin._path_date_ts(p, field)
             return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
         except OSError:
             return ""
 
     @staticmethod
-    def _path_year_month(p: Path) -> tuple[int, int]:
+    def _path_year_month(p: Path, field: str = "mtime") -> tuple[int, int]:
         try:
-            ts = p.stat().st_mtime
+            ts = GalleryBridgeMixin._path_date_ts(p, field)
             dt = datetime.datetime.fromtimestamp(ts)
             return (dt.year, dt.month)
         except OSError:
             return (1970, 1)
 
+    def _timeline_date_field(self) -> str:
+        """Campo de fecha para línea de tiempo según el criterio primario de orden."""
+        mode = str(self.settings.get("gallery_sort_mode", "mtime:desc"))
+        primary = mode.split(",")[0].strip().split(":")[0].lower()
+        if primary in ("ctime", "creacion", "creation", "created"):
+            return "ctime"
+        return "mtime"
+
+    def _timeline_sort_mode(self) -> str:
+        """Modo de orden para timeline; fuerza mtime/ctime si el primario no es fecha."""
+        mode = str(self.settings.get("gallery_sort_mode", "mtime:desc"))
+        primary = mode.split(",")[0].strip().split(":")[0].lower()
+        if primary in ("mtime", "date", "fecha", "ctime", "creacion", "creation", "created"):
+            return mode
+        return "mtime:desc,name:asc"
+
     def _compute_timeline_spans(self, ordered: list[Path]) -> list[tuple[int, int, str, str]]:
-        """Rangos por (año, mes) sobre una lista ya ordenada por fecha de modificación."""
+        """Rangos por (año, mes) sobre una lista ya ordenada por fecha."""
         if not ordered:
             return []
+        date_field = self._timeline_date_field()
         spans: list[tuple[int, int, str, str]] = []
         i = 0
         while i < len(ordered):
-            y, m = self._path_year_month(ordered[i])
+            y, m = self._path_year_month(ordered[i], date_field)
             j = i + 1
-            while j < len(ordered) and self._path_year_month(ordered[j]) == (y, m):
+            while j < len(ordered) and self._path_year_month(ordered[j], date_field) == (y, m):
                 j += 1
             key = f"{y}-{m:02d}"
             label = f"{_MONTH_NAMES_ES[m]} {y}"
@@ -329,6 +354,7 @@ class GalleryBridgeMixin:
         selected_frozenset: frozenset[Path],
         *,
         timeline_meta: bool = False,
+        timeline_date_field: str = "mtime",
     ) -> list[dict]:
         def _one_image_item(p: Path) -> dict:
             ext = p.suffix.lower()
@@ -342,7 +368,7 @@ class GalleryBridgeMixin:
                 "thumbQuality": "hq" if is_video else "lq",
             }
             if timeline_meta:
-                d["mtimeIso"] = self._path_mtime_iso(p)
+                d["mtimeIso"] = self._path_date_iso(p, timeline_date_field)
             return d
 
         if not slice_paths:
@@ -379,7 +405,7 @@ class GalleryBridgeMixin:
         if self._is_timeline_mode():
             include = bool(self.settings.get("gallery_include_subfolders", False))
             raw = scan_media_recursive(folder) if include else scan_media_flat(folder)
-            ordered = sort_image_paths(raw, "mtime")
+            ordered = sort_image_paths(raw, self._timeline_sort_mode())
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
             return ordered
         include = bool(self.settings.get("gallery_include_subfolders", False))
@@ -474,13 +500,43 @@ class GalleryBridgeMixin:
                 )
             slice_paths = self.ordered_paths[clip_start:clip_end]
             items.extend(
-                self._build_image_items(slice_paths, thumb_px, selected_frozenset, timeline_meta=True)
+                self._build_image_items(
+                    slice_paths,
+                    thumb_px,
+                    selected_frozenset,
+                    timeline_meta=True,
+                    timeline_date_field=self._timeline_date_field(),
+                )
             )
         return items
 
+    def _build_folder_items(self, thumb_px: int) -> list[dict]:
+        """Tiles de subcarpetas inmediatas (navegación)."""
+        if not self.subfolders:
+            return []
+
+        def _folder_item(sub: Path) -> dict:
+            preview_urls = _folder_preview_thumbs(sub, _FOLDER_PREVIEW_COUNT, thumb_px)
+            return {
+                "kind": "folder",
+                "name": sub.name,
+                "path": str(sub),
+                "thumbDataUrl": None,
+                "folderPreviewUrls": preview_urls,
+            }
+
+        max_w = min(8, max(1, len(self.subfolders)))
+        with ThreadPoolExecutor(max_workers=max_w) as pool:
+            return list(pool.map(_folder_item, self.subfolders))
+
     def _build_gallery_items_timeline(self) -> list[dict]:
         s, e = self._slice()
-        return self._build_timeline_items_for_range(s, e)
+        thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+        items: list[dict] = []
+        if s == 0 and self.gallery_folder is not None:
+            items.extend(self._build_folder_items(thumb_px))
+        items.extend(self._build_timeline_items_for_range(s, e))
+        return items
 
     def _build_gallery_items(self) -> list[dict]:
         if self._is_grouped_mode():
@@ -493,22 +549,7 @@ class GalleryBridgeMixin:
             thumb_px = _thumb_px_from_gallery_scale(
                 float(self.settings.get("gallery_thumb_scale", 1.0))
             )
-            # Genera las miniaturas de todas las subcarpetas en paralelo.
-            def _folder_item(sub: Path) -> dict:
-                preview_urls = _folder_preview_thumbs(
-                    sub, _FOLDER_PREVIEW_COUNT, thumb_px
-                )
-                return {
-                    "kind": "folder",
-                    "name": sub.name,
-                    "path": str(sub),
-                    "thumbDataUrl": None,
-                    "folderPreviewUrls": preview_urls,
-                }
-            max_w = min(8, max(1, len(self.subfolders)))
-            with ThreadPoolExecutor(max_workers=max_w) as pool:
-                folder_items = list(pool.map(_folder_item, self.subfolders))
-            items.extend(folder_items)
+            items.extend(self._build_folder_items(thumb_px))
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         slice_paths = self.ordered_paths[s:e]
         selected_frozenset = frozenset(self.selected)

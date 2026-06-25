@@ -3,12 +3,15 @@
   import { frozenPagerState } from "../lib/chromeRemember";
   import { formatBytes, googlePageItems } from "../lib/pagerUtils";
 
+  export type ActiveProcess = { id: string; label: string };
+
   export let thumbsPerPage: number;
   export let pageJumpDraft: number;
   export let status: string;
   export let previewVisible: boolean;
   export let previewRatio: number;
   export let thumbScale: number;
+  export let activeProcesses: ActiveProcess[] = [];
 
   export let goPage: (page: number) => void | Promise<void>;
   export let jumpToPageDraft: () => void | Promise<void>;
@@ -16,8 +19,29 @@
   export let scheduleThumbScaleReload: () => void;
   export let flushThumbScaleOnRelease: () => void;
 
+  let processPanelOpen = false;
+  let processToggleEl: HTMLButtonElement | null = null;
+  let processPanelStyle = "";
+
+  function updateProcessPanelPosition() {
+    if (!processToggleEl) return;
+    const r = processToggleEl.getBoundingClientRect();
+    const panelW = Math.min(360, Math.max(280, window.innerWidth * 0.72));
+    const left = Math.min(Math.max(8, r.right - panelW), window.innerWidth - panelW - 8);
+    const bottom = window.innerHeight - r.top + 8;
+    processPanelStyle = `left:${left}px;bottom:${bottom}px;width:${panelW}px;`;
+  }
+
+  function toggleProcessPanel() {
+    processPanelOpen = !processPanelOpen;
+    if (processPanelOpen) {
+      updateProcessPanelPosition();
+    }
+  }
+
   $: pager = $frozenPagerState;
   $: pageLinks = googlePageItems(Number(pager.page) || 1, Number(pager.totalPages) || 1);
+  $: processCount = activeProcesses.length;
 
   function mediaCountLabel(state: typeof pager): string {
     const total = Number(state?.total ?? 0);
@@ -88,6 +112,40 @@
     </span>
   {/if}
   <div class="grow"></div>
+  <div class="pager__process-wrap">
+    <button
+      type="button"
+      class="om-btn om-btn--ghost om-btn--compact pager__process-toggle"
+      class:pager__process-toggle--active={processCount > 0}
+      bind:this={processToggleEl}
+      aria-expanded={processPanelOpen}
+      title={processPanelOpen ? t("pager.processToggleHide") : t("pager.processToggle")}
+      on:click={toggleProcessPanel}
+    >
+      <span class="pager__process-dot" class:pager__process-dot--on={processCount > 0} aria-hidden="true"></span>
+      {t("pager.processToggle")}{processCount > 0 ? ` (${processCount})` : ""}
+    </button>
+    {#if processPanelOpen}
+      <!-- svelte-ignore a11y-click-events-have-key-events -->
+      <div class="pager__process-backdrop" role="presentation" on:click={() => (processPanelOpen = false)}></div>
+      <div
+        class="pager__process-panel om-panel om-panel--lift"
+        role="status"
+        aria-live="polite"
+        style={processPanelStyle}
+      >
+        {#if activeProcesses.length === 0}
+          <p class="pager__process-empty">{t("pager.processEmpty")}</p>
+        {:else}
+          <ul class="pager__process-list">
+            {#each activeProcesses as proc (proc.id)}
+              <li class="pager__process-item">{proc.label}</li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+  </div>
   <span class="status-line">{status}</span>
   <span class="webui-build-tag" title={t("pager.buildTagTitle")}>{__WEBUI_BUILD__.slice(0, 10)}</span>
   <button
@@ -114,3 +172,74 @@
     on:change={flushThumbScaleOnRelease}
   />
 </footer>
+
+<style>
+  .pager__process-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    z-index: 1;
+  }
+  .pager__process-toggle {
+    gap: 6px;
+    min-height: 1.75rem;
+  }
+  .pager__process-toggle--active {
+    color: var(--om-accent, #007acc);
+  }
+  .pager__process-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--om-text-muted);
+    opacity: 0.45;
+    flex-shrink: 0;
+  }
+  .pager__process-dot--on {
+    background: var(--om-accent, #007acc);
+    opacity: 1;
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--om-accent, #007acc) 30%, transparent);
+    animation: process-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes process-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .pager__process-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 198;
+    background: transparent;
+  }
+  .pager__process-panel {
+    position: fixed;
+    z-index: 200;
+    min-width: min(280px, 72vw);
+    max-width: 360px;
+    max-height: min(220px, 40vh);
+    overflow: auto;
+    padding: 8px 10px;
+    box-shadow: var(--om-shadow-lg);
+  }
+  .pager__process-empty {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--om-text-muted);
+  }
+  .pager__process-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .pager__process-item {
+    font-size: 0.78rem;
+    color: var(--om-text-secondary);
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--om-surface-2) 70%, transparent);
+    line-height: 1.35;
+  }
+</style>

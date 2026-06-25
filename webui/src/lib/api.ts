@@ -157,6 +157,14 @@ const devMockApi: WebApi = {
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
   }),
+  gallery_rename_path: async () => ({
+    ...mockGalleryPayload(),
+    renameResult: { previousPath: "", newPath: "", newName: "" },
+  }),
+  gallery_delete_folder: async () => ({
+    ...mockGalleryPayload(),
+    deleteResult: { deleted: 0, errors: 0 },
+  }),
   gallery_image_rotate: async () => mockGalleryPayload(),
   gallery_image_crop_normalized: async () => mockGalleryPayload(),
   gallery_thumb_hq: async (path: string) => ({ path, thumbDataUrl: null }),

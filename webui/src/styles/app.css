@@ -37,6 +37,9 @@
 
 .app-chrome--footer.pager.pager--bar {
     z-index: 75;
+    /* Sin paint: el panel de procesos desborda hacia arriba (igual que el menú Vista). */
+    contain: layout style;
+    overflow: visible;
   }
 
 .app-chrome--preview {
