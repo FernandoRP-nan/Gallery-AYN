@@ -53,6 +53,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/GaleriaAYN/tools/ffmpeg | Out-Null
           Copy-Item -Force tools/ffmpeg/ffmpeg.exe dist/GaleriaAYN/tools/ffmpeg/
           Copy-Item -Force tools/ffmpeg/ffprobe.exe dist/GaleriaAYN/tools/ffmpeg/
+          if (Test-Path tools/ffmpeg/licenses) {
+            Copy-Item -Force -Recurse tools/ffmpeg/licenses dist/GaleriaAYN/tools/ffmpeg/
+          }
+          ./scripts/copy-portable-legal.ps1 -PortableDir dist/GaleriaAYN
 
       - name: Zip portable folder
         run: |

@@ -36,4 +36,19 @@ if (-not $BinDir) {
 Copy-Item -Force (Join-Path $BinDir.FullName "ffmpeg.exe") (Join-Path $OutDir "ffmpeg.exe")
 Copy-Item -Force (Join-Path $BinDir.FullName "ffprobe.exe") (Join-Path $OutDir "ffprobe.exe")
 
+# Licencias LGPL del build (obligatorio si redistribuyes los .exe)
+$BuildRoot = $BinDir.Parent
+$LegalDest = Join-Path $OutDir "licenses"
+New-Item -ItemType Directory -Force -Path $LegalDest | Out-Null
+foreach ($name in @("LICENSE", "COPYING.LGPLv2.1", "COPYING.LGPLv3", "COPYING.GPLv2", "COPYING.GPLv3")) {
+    $src = Join-Path $BuildRoot.FullName $name
+    if (Test-Path $src) {
+        Copy-Item -Force $src (Join-Path $LegalDest $name)
+    }
+}
+$NestedLicenses = Join-Path $BuildRoot.FullName "licenses"
+if (Test-Path $NestedLicenses) {
+    Copy-Item -Force -Recurse (Join-Path $NestedLicenses "*") $LegalDest -ErrorAction SilentlyContinue
+}
+
 Write-Host "ffmpeg listo en: $OutDir" -ForegroundColor Green

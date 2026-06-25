@@ -31,6 +31,21 @@ El objetivo es una **carpeta** `dist/GaleriaAYN/` con `GaleriaAYN.exe` y DLLs, q
 3. Salida: carpeta **`dist\GaleriaAYN\`**. Dentro está **`GaleriaAYN.exe`**.
 4. **Comprime toda la carpeta** `GaleriaAYN` en un `.zip` y compártela. Los amigos **no** deben borrar DLLs ni mover solo el `.exe` fuera de esa carpeta (modo *onedir*).
 
+### Avisos legales (obligatorio al distribuir el zip)
+
+El script de build copia automáticamente en `dist\GaleriaAYN\`:
+
+| Archivo | Contenido |
+|---------|-----------|
+| `LICENSE.txt` | Licencia MIT de Galería AYN |
+| `LEGAL-THIRD_PARTY.md` | Componentes de terceros (Python, PyWebView, ffmpeg, etc.) |
+| `COPYING.LGPLv2.1.txt` | Resumen y enlace a LGPL (ffmpeg) |
+| `tools\ffmpeg\licenses\` | Textos de licencia del build de ffmpeg |
+
+**No elimines** estos archivos del zip. Si publicas en GitHub Releases, enlaza también el repositorio como fuente del código de la aplicación.
+
+Detalle completo: **[docs/THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**.
+
 ## Qué necesitan tus amigos (solo quien recibe el zip)
 
 - **Windows 10/11** de 64 bits.

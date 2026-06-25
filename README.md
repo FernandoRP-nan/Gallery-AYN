@@ -183,7 +183,18 @@ scripts/                    # Instalación en KDE, lanzadores
 - [Integración Fedora KDE](docs/desktop-fedora-kde.md)
 - [Roadmap de funcionalidades](docs/ROADMAP-FEATURES.md)
 - [Build portable Windows](docs/windows-portable.md)
+- [Avisos legales y terceros](docs/THIRD_PARTY_NOTICES.md)
 
 ## Licencia
 
-Revisa el repositorio para la licencia aplicable. Si aún no hay archivo `LICENSE`, añádelo antes de publicar como proyecto abierto.
+Este proyecto se distribuye bajo la licencia **MIT**. Ver [LICENSE](LICENSE).
+
+### Distribución del .exe portable (Windows)
+
+Si compartes el zip de `dist\GaleriaAYN\`, incluye los archivos legales que genera el build (`LICENSE.txt`, `LEGAL-THIRD_PARTY.md`, licencias de ffmpeg). Guía completa: **[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)** y **[docs/windows-portable.md](docs/windows-portable.md)**.
+
+### Dependencias y binarios de terceros
+
+- **Python / npm**: Pillow, pywebview, Svelte, Vite, etc. tienen sus propias licencias (MIT, Apache-2.0, BSD…).
+- **PyQt6** (opcional, extra `[qt]`): licencia **GPL v3** de Qt — si enlazas o distribuyes con Qt, aplica la GPL a tu distribución.
+- **ffmpeg** (opcional / portable Windows): licencia **LGPL v2.1+** (según build). Incluye aviso y enlace al código fuente si redistribuyes el binario; ver [docs/windows-portable.md](docs/windows-portable.md).

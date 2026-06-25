@@ -33,6 +33,13 @@ $DestFfmpeg = Join-Path $Root "dist\GaleriaAYN\tools\ffmpeg"
 New-Item -ItemType Directory -Force -Path $DestFfmpeg | Out-Null
 Copy-Item -Force (Join-Path $Root "tools\ffmpeg\ffmpeg.exe") (Join-Path $DestFfmpeg "ffmpeg.exe")
 Copy-Item -Force (Join-Path $Root "tools\ffmpeg\ffprobe.exe") (Join-Path $DestFfmpeg "ffprobe.exe")
+$SrcLicenses = Join-Path $Root "tools\ffmpeg\licenses"
+if (Test-Path $SrcLicenses) {
+    Copy-Item -Force -Recurse $SrcLicenses (Join-Path $DestFfmpeg "licenses")
+}
+
+Write-Host "== Avisos legales ==" -ForegroundColor Cyan
+& "$Root\scripts\copy-portable-legal.ps1" -PortableDir (Join-Path $Root "dist\GaleriaAYN")
 
 Write-Host ""
 Write-Host "Listo: $Root\dist\GaleriaAYN\GaleriaAYN.exe" -ForegroundColor Green
