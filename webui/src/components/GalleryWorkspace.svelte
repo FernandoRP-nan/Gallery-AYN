@@ -450,6 +450,7 @@
 
   async function endGalleryRangeSelection() {
     if (!galleryRangeSelecting) return;
+    const previewPath = galleryRangeCurrentPath ?? galleryRangeAnchorPath;
     const draft = new Set(galleryRangeDraftSelectedPaths ?? galleryRangeBaseSelectedPaths);
     const base = new Set(galleryRangeBaseSelectedPaths);
     const addPaths = [...draft].filter((p) => !base.has(p));
@@ -463,17 +464,9 @@
       patchGallerySelection((items) =>
         items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: draft.has(x.path) } : x))
       );
-      if (destinationsMode) {
-        const items = getGalleryItems();
-        const preferred = [...addPaths].reverse().find((p) =>
-          items.some((x) => isGalleryMediaKind(x.kind) && x.path === p && Boolean(x.selected))
-        );
-        const fallback = [...items]
-          .reverse()
-          .find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))?.path;
-        const path = preferred ?? fallback;
-        if (path) emitPreview(path);
-      }
+    }
+    if (destinationsMode && previewPath) {
+      emitPreview(previewPath);
     }
 
     galleryRangeSelecting = false;

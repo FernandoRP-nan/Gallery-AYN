@@ -204,6 +204,8 @@
   let previewVideoLaunching = false;
   let previewVideoPlayLocked = false;
   let previewVideoSession = 0;
+  /** Evita que respuestas tardías de galleryPreview sobrescriban otro elemento. */
+  let previewLoadGeneration = 0;
   let previewZoomVideoArmed = false;
   let previewZoomVideoLaunching = false;
   let previewZoomVideoPlayLocked = false;
@@ -1534,12 +1536,14 @@
     const isSvg = row.path.toLowerCase().endsWith(".svg");
     const fallbackUrl = isVideo ? null : buildMediaFileUrl(row.path);
     const thumbPlaceholder = row.thumbDataUrl ?? null;
+    previewLoadGeneration += 1;
+    const loadGeneration = previewLoadGeneration;
     previewVideoSession += 1;
     resetPreviewVideoPlaybackUi();
     selectedPreview = {
       path: row.path,
       name: row.name,
-      dataUrl: isVideo ? null : thumbPlaceholder,
+      dataUrl: null,
       placeholderUrl: thumbPlaceholder,
       mediaType: isVideo ? "video" : isSvg ? "svg" : "image",
       fileUrl: isVideo ? null : fallbackUrl,
@@ -1559,7 +1563,7 @@
     if (isSvg) {
       void resolveMediaPlaybackInfo(row.path)
         .then((info) => {
-          if (!selectedPreview || selectedPreview.path !== row.path) return;
+          if (loadGeneration !== previewLoadGeneration || !selectedPreview || selectedPreview.path !== row.path) return;
           previewVideoPlayback = info;
           const url = pickInitialPlaybackUrl(info);
           if (!url) return;
@@ -1572,7 +1576,7 @@
           };
         })
         .catch(() => {
-          if (!selectedPreview || selectedPreview.path !== row.path || !fallbackUrl) return;
+          if (loadGeneration !== previewLoadGeneration || !selectedPreview || selectedPreview.path !== row.path || !fallbackUrl) return;
           previewVideoSrc = fallbackUrl;
           selectedPreview = { ...selectedPreview, fileUrl: fallbackUrl };
         });
@@ -1582,6 +1586,7 @@
         bridge
           .galleryPreview(row.path, 1200, 900)
           .then((pr) => {
+            if (loadGeneration !== previewLoadGeneration || selectedPreview?.path !== row.path) return;
             selectedPreview = mergePreviewApiResult(selectedPreview ?? {}, pr, row.path, row.kind);
           })
           .catch(() => undefined);
@@ -4479,13 +4484,15 @@
                 alt={selectedPreview.name}
               />
             {:else if selectedPreview?.dataUrl || selectedPreview?.fileUrl || selectedPreview?.placeholderUrl}
-              <PreviewZoomPanel
-                path={selectedPreview.path}
-                name={selectedPreview.name}
-                fileUrl={selectedPreview.fileUrl ?? null}
-                dataUrl={selectedPreview.dataUrl ?? null}
-                placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl ?? null}
-              />
+              {#key selectedPreview.path}
+                <PreviewZoomPanel
+                  path={selectedPreview.path}
+                  name={selectedPreview.name}
+                  fileUrl={selectedPreview.fileUrl ?? null}
+                  dataUrl={selectedPreview.dataUrl ?? null}
+                  placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl ?? null}
+                />
+              {/key}
             {:else}
               <div class="preview__empty">{t("preview.emptySelect")}</div>
             {/if}
