@@ -96,6 +96,9 @@
   export let destToolbarCanGoBack = false;
   export let onDestToolbarBack: () => void;
   export let onDestToolbarOpenFolder: (folderId: string) => void;
+  export let destTree: import("../lib/itemTree").TreeNode[] = [];
+  export let destTreeHasTargets = false;
+  export let onMoveSectionFolderToDest: (folderPath: string, destPath: string, sectionLabel: string) => void = () => {};
 
   export let galleryScrollEl: HTMLDivElement | null = null;
   export let galleryGridEl: HTMLDivElement | null = null;
@@ -997,6 +1000,9 @@
     galleryTargetFolder={galleryFolder}
     messSuggestionsMasonry={messSuggestionsMasonry}
     onMessSuggestionMoved={() => void onMessSuggestionMoved()}
+    {destTree}
+    {destTreeHasTargets}
+    {onMoveSectionFolderToDest}
   />
 </div>
 

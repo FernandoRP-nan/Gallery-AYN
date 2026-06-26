@@ -184,6 +184,36 @@ export function shiftGalleryMediaIndicesAfterRemoval(
   });
 }
 
+/** Etiqueta de sección agrupada: nombre hoja + ruta padre (para distinguir carpetas hijas). */
+export function groupedSectionDisplay(label: string): { title: string; hint: string | null } {
+  const text = String(label ?? "").trim();
+  if (!text || text === "(esta carpeta)") {
+    return { title: text || "(esta carpeta)", hint: null };
+  }
+  const norm = text.replace(/\\/g, "/");
+  const parts = norm.split("/").filter(Boolean);
+  if (parts.length <= 1) return { title: text, hint: null };
+  return {
+    title: parts[parts.length - 1],
+    hint: parts.slice(0, -1).join("/"),
+  };
+}
+
+/** Ruta completa truncada mostrando el final (sufijo distinguible). */
+export function formatPathTail(fullPath: string, maxLen = 52): string {
+  const p = String(fullPath ?? "").replace(/\\/g, "/").trim();
+  if (p.length <= maxLen) return p;
+  return `…${p.slice(-(maxLen - 1))}`;
+}
+
+/** Etiqueta compacta para el rail lateral (prioriza el final / nombre hoja). */
+export function formatFolderRailLabel(label: string, maxLen = 14): string {
+  const { title } = groupedSectionDisplay(label);
+  const text = String(title ?? "").trim() || String(label ?? "").trim();
+  if (text.length <= maxLen) return text;
+  return `…${text.slice(-(maxLen - 1))}`;
+}
+
 export function collectRemovedMediaIndices(items: GalleryItem[], removedPaths: Set<string>): number[] {
   const out: number[] = [];
   for (const it of items) {

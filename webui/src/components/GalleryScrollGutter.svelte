@@ -7,6 +7,7 @@
     scrollMarkerAtContentY,
     type GalleryScrollRailLabel,
   } from "../lib/galleryScrollRail";
+  import { formatFolderRailLabel, formatPathTail } from "../lib/galleryUtils";
   import type { GalleryScrollMarker } from "../lib/galleryFullVirtualLayout";
 
   export let markers: GalleryScrollMarker[] = [];
@@ -72,6 +73,11 @@
     if (totalHeight <= 0) return 0;
     return Math.round((top / totalHeight) * 1000) / 10;
   }
+  function railHintLabel(marker: GalleryScrollMarker): string {
+    if (marker.kind === "folder") return formatFolderRailLabel(marker.label, 48);
+    if (marker.label.length > 48) return formatPathTail(marker.label, 48);
+    return marker.label;
+  }
 </script>
 
 <div
@@ -96,7 +102,7 @@
 
   {#if gutterHover && hoverMarker && hoverPercent >= 0}
     <div class="gallery-scroll-gutter__hint" style={`top:${hoverPercent}%`}>
-      {hoverMarker.label}
+      {railHintLabel(hoverMarker)}
     </div>
   {/if}
 </div>
@@ -108,7 +114,7 @@
     top: var(--om-space-2);
     right: 14px;
     bottom: 0;
-    width: 52px;
+    width: 72px;
     z-index: 4;
     pointer-events: none;
     overflow: visible;
@@ -117,6 +123,7 @@
   .gallery-scroll-gutter__label {
     position: absolute;
     right: 0;
+    max-width: 100%;
     margin: 0;
     padding: 2px 5px;
     border: 1px solid rgb(255 255 255 / 0.1);
@@ -133,7 +140,10 @@
     text-shadow: 0 1px 2px rgb(0 0 0 / 0.55);
     text-align: right;
     white-space: nowrap;
-    overflow: visible;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: rtl;
+    unicode-bidi: plaintext;
     cursor: pointer;
     pointer-events: auto;
     transition:

@@ -239,6 +239,41 @@ class DestinationsBridgeMixin:
         data["moveResult"] = {"moved": moved, "errors": errors}
         return data
 
+    def destination_move_folder(self, src_folder_path: str, dest_path: str) -> dict:
+        """Mueve una carpeta completa a un destino configurado."""
+        moved = 0
+        errors = 0
+        src = Path(str(src_folder_path or "").strip()).expanduser().resolve()
+        dest_dir = Path(str(dest_path or "").strip()).expanduser().resolve()
+        src_res: Path | None = None
+        with self.lock:
+            try:
+                if not src.is_dir():
+                    errors = 1
+                else:
+                    src_res = src.resolve()
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    target = ensure_unique_destination(dest_dir / src.name)
+                    if src_res != target.resolve():
+                        shutil.move(str(src), str(target))
+                        moved = 1
+                    kept: set[Path] = set()
+                    for p in self.selected:
+                        try:
+                            pr = p.resolve()
+                        except OSError:
+                            continue
+                        if pr == src_res or src_res in pr.parents:
+                            continue
+                        if pr.exists():
+                            kept.add(p)
+                    self.selected = kept
+            except Exception:
+                errors = 1
+        data = self.gallery_reload(clear_thumb_cache=False)
+        data["moveResult"] = {"moved": moved, "errors": errors}
+        return data
+
     def destination_preview(self, dest_path: str, scale: float, width: int) -> dict:
         """Lista archivos del destino sin generar miniaturas (rápido; LQ/HQ las pide el cliente)."""
         folder = Path(dest_path).expanduser().resolve()

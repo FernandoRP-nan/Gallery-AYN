@@ -26,6 +26,37 @@ def list_subdirs(root: Path) -> list[Path]:
     return out
 
 
+def list_subdirs_recursive(root: Path) -> list[Path]:
+    """Subcarpetas en cualquier profundidad bajo root (excluye ocultas tipo .thumbnails)."""
+    base = root.resolve()
+    out: list[Path] = []
+    try:
+        for p in base.rglob("*"):
+            if not p.is_dir():
+                continue
+            try:
+                rel = p.relative_to(base)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            out.append(p)
+    except OSError:
+        pass
+    out.sort(key=lambda x: str(x.relative_to(base)).lower())
+    return out
+
+
+def grouped_section_label(root: Path, folder: Path) -> str:
+    """Etiqueta de sección: ruta relativa (p. ej. Otaku/Waifus) o nombre si es hijo directo."""
+    try:
+        rel = folder.resolve().relative_to(root.resolve())
+    except ValueError:
+        return folder.name
+    text = rel.as_posix()
+    return text if text else folder.name
+
+
 def scan_images_flat(root: Path, image_extensions: frozenset[str] | None = None) -> list[Path]:
     # Solo archivos en esta carpeta (no recursivo).
     exts = image_extensions if image_extensions is not None else MediaOrganizer.IMAGE_EXTENSIONS

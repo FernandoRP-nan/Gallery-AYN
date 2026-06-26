@@ -38,6 +38,7 @@
   import MessPanel from "./components/MessPanel.svelte";
   import DestMoveCtxTree from "./components/DestMoveCtxTree.svelte";
   import DestMoveFlyoutPortals from "./components/DestMoveFlyoutPortals.svelte";
+  import { sectionDestMoveActive, sectionDestMoveCtx } from "./lib/sectionDestMoveState";
   import {
     cancelMoveMenuClose,
     moveDestPanelOpen,
@@ -2248,6 +2249,51 @@
       },
       { confirmLabel: t("common.move") }
     );
+  }
+
+  function sectionFolderMoveLabel(folderPath: string): string {
+    const fp = normalizePathForApi(folderPath);
+    const parts = fp.split("/").filter(Boolean);
+    return parts[parts.length - 1] || fp;
+  }
+
+  function formatSectionMoveConfirmLabel(sectionLabel: string, folderPath: string): string {
+    const rel = String(sectionLabel ?? "").trim();
+    if (rel && rel !== "(esta carpeta)") return rel;
+    return sectionFolderMoveLabel(folderPath);
+  }
+
+  function askConfirmMoveSectionFolder(folderPath: string, destPath: string, sectionLabel = "") {
+    const fp = normalizePathForApi(folderPath);
+    if (!fp) return;
+    openConfirmDelete(
+      t("confirm.moveFolderTitle"),
+      t("confirm.moveFolderDetail").replace("{folder}", formatSectionMoveConfirmLabel(sectionLabel, fp)),
+      async () => {
+        await moveSectionFolderToDest(fp, destPath);
+      },
+      { confirmLabel: t("common.move") }
+    );
+  }
+
+  async function moveSectionFolderToDest(folderPath: string, destPath: string) {
+    try {
+      const navGen = beginGalleryRefresh(true);
+      const out = await trackLoad(bridge.destinationMoveFolder(folderPath, destPath));
+      if (!isGalleryNavigationCurrent(navGen)) return;
+      const moved = Number(out.moveResult?.moved ?? 0);
+      if (moved > 0 && out.state) {
+        clearMasonryHeightCache();
+        setGalleryPayload(out.state, out.items ?? []);
+        await afterGalleryDataLoaded();
+        status = t("status.moveFolderOk");
+        return;
+      }
+      applyGalleryMutationResponse(out);
+      status = t("status.moveFolderError");
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("status.moveFolderError");
+    }
   }
 
   const moveToDest = async (path: string) => {
@@ -4643,6 +4689,9 @@
           onDestToolbarOpenFolder={(id) => void navigateDestToolbarFolder(id)}
           onMessSuggestionMoved={onMessSuggestionMoved}
           on:preview={(e) => setSelectedPreviewFromPath(e.detail.path)}
+          {destTree}
+          {destTreeHasTargets}
+          onMoveSectionFolderToDest={askConfirmMoveSectionFolder}
         />
 
         {#if previewVisible}
@@ -5132,11 +5181,18 @@
     </div>
   {/if}
 
-  {#if galleryItemCtxMenu || destPreviewCtxMenu}
+  {#if galleryItemCtxMenu || destPreviewCtxMenu || $sectionDestMoveActive}
     <DestMoveFlyoutPortals
       excludePath={destPreviewCtxMenu ? previewDestPath : ""}
-      onPick={(p) =>
-        destPreviewCtxMenu ? void moveDestPreviewCtxToDest(p) : void moveGalleryItemFromCtxTo(p)}
+      onPick={(p) => {
+        const sectionCtx = $sectionDestMoveCtx;
+        if (sectionCtx) {
+          sectionCtx.onPick(p);
+          return;
+        }
+        if (destPreviewCtxMenu) void moveDestPreviewCtxToDest(p);
+        else void moveGalleryItemFromCtxTo(p);
+      }}
     />
   {/if}
 

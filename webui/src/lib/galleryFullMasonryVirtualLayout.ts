@@ -112,13 +112,20 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
     return pick;
   };
 
-  const pushSection = (label: string, path: string, kind: GalleryLayoutSpan["kind"], startIndex: number) => {
+  const pushSection = (
+    label: string,
+    path: string,
+    kind: GalleryLayoutSpan["kind"],
+    startIndex: number,
+    sectionFolder = "",
+  ) => {
     const top = colMaxTop();
     syncColsTo(top);
     const sectionItem: GalleryItem = {
       kind: "section",
       name: label,
       path,
+      sectionFolder: sectionFolder || undefined,
       thumbDataUrl: null,
     };
     const height = sectionHeightPx(sectionItem);
@@ -155,11 +162,18 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
     end: number,
     sectionPath?: string,
     sectionLabel?: string,
+    sectionFolder = "",
   ) => {
     if (railOnlyTimeline && sectionLabel) {
       pushTimelineMarker(sectionLabel, start);
     } else if (sectionLabel && sectionPath) {
-      pushSection(sectionLabel, sectionPath, layoutMode === "grouped" ? "folder" : layoutMode, start);
+      pushSection(
+        sectionLabel,
+        sectionPath,
+        layoutMode === "grouped" ? "folder" : layoutMode,
+        start,
+        sectionFolder,
+      );
     }
     for (let mediaIndex = start; mediaIndex < end; mediaIndex += 1) {
       const item = mediaByIndex.get(mediaIndex) ?? placeholderItem(mediaIndex);
@@ -190,6 +204,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
         Math.min(span.end, totalMediaCount),
         railOnlyTimeline ? undefined : sectionPath,
         span.label,
+        span.kind === "folder" ? String(span.key ?? "") : "",
       );
     }
   } else {

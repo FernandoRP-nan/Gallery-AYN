@@ -14,6 +14,8 @@ export const es = {
     bypassMoveFullscreen: "No volver a preguntar en esta sesión de fullscreen",
     moveSelectionTitle: "Mover selección",
     moveSelectionDetail: "¿Mover {count} imágenes al destino seleccionado?",
+    moveFolderTitle: "Mover carpeta",
+    moveFolderDetail: "¿Mover la carpeta «{folder}» al destino seleccionado? Se moverá con todo su contenido.",
     moveImageTitle: "Mover imagen",
     moveImageDetail: "¿Mover la imagen actual al destino seleccionado?",
     deleteImageTitle: "Eliminar imagen",
@@ -299,6 +301,8 @@ export const es = {
     deleteImageQueued: "Imagen en cola de eliminación",
     moveBatchLine: "Movidas {moved} · errores {errors} · cola {queue}",
     moveQueueError: "Error al procesar cola de movimientos",
+    moveFolderOk: "Carpeta movida al destino",
+    moveFolderError: "No se pudo mover la carpeta",
     noImagesToMove: "No hay imágenes seleccionadas para mover",
     imagesEnqueued: "Encoladas {n} imágenes · cola {queue}",
     imagesMoving: "Moviendo {n} archivos · cola {queue}",
@@ -561,6 +565,10 @@ export const es = {
     moveHere: "Mover aquí",
     moveHereTitle: "Mover a {folder}",
     movedOk: "Foto movida desde desorden",
+  },
+  gallery: {
+    sectionMoveTo: "Mover",
+    sectionMoveToAria: "Mover carpeta a destino",
   },
   view: {
     title: "Vista",

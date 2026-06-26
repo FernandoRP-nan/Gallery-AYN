@@ -1,7 +1,16 @@
 <script lang="ts">
   import { t } from "../lib/i18n";
-  import { videoFormatLabel, isGalleryMediaKind, isGallerySelectableKind } from "../lib/galleryUtils";
+  import {
+    videoFormatLabel,
+    isGalleryMediaKind,
+    isGallerySelectableKind,
+    groupedSectionDisplay,
+    formatPathTail,
+  } from "../lib/galleryUtils";
+  import { normalizePathForApi } from "../lib/pathUtils";
+  import type { TreeNode } from "../lib/itemTree";
   import ThumbImage from "./ThumbImage.svelte";
+  import SectionFolderDestMove from "./SectionFolderDestMove.svelte";
 
   export let it: any;
   export let style = "";
@@ -17,9 +26,14 @@
   export let showThumbLabels: boolean;
   export let galleryScrolling: boolean;
   export let galleryBusy: boolean;
+  export let groupByFolder = false;
+  export let galleryRootFolder = "";
+  export let destTree: TreeNode[] = [];
+  export let destTreeHasTargets = false;
 
   export let navigateToFolder: (path: string, opts: any) => void;
   export let onSectionFolderDrop: (e: DragEvent, folder: string) => void;
+  export let onMoveSectionFolderToDest: (folderPath: string, destPath: string, sectionLabel: string) => void = () => {};
   export let onGalleryTilePointerDown: (e: PointerEvent, it: any) => void;
   export let onGalleryTilePointerEnter: (path: string) => void;
   export let onTileDragStart: (e: DragEvent, it: any) => void;
@@ -27,6 +41,22 @@
   export let openZoomFromGallery: (it: any) => void;
   export let onGalleryItemContextMenu: (e: MouseEvent, it: any) => void;
 
+  $: sectionDisplay = groupedSectionDisplay(String(it.name ?? ""));
+  $: sectionFolderPath = resolveSectionFolderPath(it, groupByFolder);
+  $: sectionPathTail = sectionFolderPath ? formatPathTail(sectionFolderPath) : "";
+  $: showSectionMove =
+    groupByFolder &&
+    Boolean(sectionFolderPath) &&
+    normalizePathForApi(sectionFolderPath) !== normalizePathForApi(galleryRootFolder);
+
+  function resolveSectionFolderPath(item: { sectionFolder?: string; path?: string }, grouped: boolean): string {
+    const direct = String(item.sectionFolder ?? "").trim();
+    if (direct) return direct;
+    if (!grouped) return "";
+    const p = String(item.path ?? "");
+    if (!p.startsWith("section:") || p.includes("section:timeline:")) return "";
+    return p.slice("section:".length).trim();
+  }
 </script>
 
 {#if it.kind === "section"}
@@ -36,27 +66,41 @@
     class:gallery-masonry-span={masonrySpan}
     class:gallery-section-head--timeline={it.path.includes("section:timeline:")}
     class:gallery-section-head--tinted={Boolean(it.sectionTintHex) && !it.path.includes("section:timeline:")}
-    class:gallery-section-head--drop={Boolean(it.sectionFolder) && dragOverSectionPath === it.sectionFolder}
+    class:gallery-section-head--drop={Boolean(sectionFolderPath) && dragOverSectionPath === sectionFolderPath}
     role="separator"
-    data-section-folder={it.sectionFolder ?? ""}
+    data-section-folder={sectionFolderPath}
     data-item-path={it.path}
     style={it.sectionTintHex && !it.path.includes("section:timeline:") ? `${style};--section-tint: ${it.sectionTintHex}` : style}
     on:dragover|preventDefault={(e) => {
       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     }}
-    on:drop={(e) => onSectionFolderDrop(e, it.sectionFolder ?? "")}
+    on:drop={(e) => onSectionFolderDrop(e, sectionFolderPath)}
     on:dblclick|stopPropagation={() => {
-      const p = String(it.sectionFolder ?? "").trim();
+      const p = sectionFolderPath;
       if (p) void navigateToFolder(p, { pushHistory: true });
     }}
   >
     {#if it.path.includes("section:timeline:")}
       <h3 class="gallery-section-head__title gallery-section-head__title--timeline">{it.name}</h3>
     {:else}
-      <span class="gallery-section-head__title">{it.name}</span>
-      {#if it.sectionFolder}
-        <span class="gallery-section-head__path">{it.sectionFolder}</span>
-      {/if}
+      <div class="gallery-section-head__row">
+        <div class="gallery-section-head__label-wrap">
+          <span class="gallery-section-head__title" title={it.name}>{sectionDisplay.title}</span>
+          {#if sectionDisplay.hint}
+            <span class="gallery-section-head__parent" title={it.name}>{sectionDisplay.hint}</span>
+          {/if}
+          {#if sectionFolderPath}
+            <span class="gallery-section-head__path" title={sectionFolderPath}>{sectionPathTail}</span>
+          {/if}
+        </div>
+        {#if showSectionMove}
+          <SectionFolderDestMove
+            {destTree}
+            disabled={!destTreeHasTargets}
+            onPickDest={(destPath) => onMoveSectionFolderToDest(sectionFolderPath, destPath, String(it.name ?? ""))}
+          />
+        {/if}
+      </div>
     {/if}
   </div>
 {:else if it.kind === "day_break"}

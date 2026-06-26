@@ -150,7 +150,13 @@ export function buildGalleryFullVirtualLayout(opts: {
     });
   };
 
-  const pushSection = (label: string, path: string, kind: GalleryLayoutSpan["kind"], startIndex: number) => {
+  const pushSection = (
+    label: string,
+    path: string,
+    kind: GalleryLayoutSpan["kind"],
+    startIndex: number,
+    sectionFolder = "",
+  ) => {
     if (col > 0) {
       y = rowStartY + cellSize + gapPx;
       col = 0;
@@ -160,6 +166,7 @@ export function buildGalleryFullVirtualLayout(opts: {
       kind: "section",
       name: label,
       path: path,
+      sectionFolder: sectionFolder || undefined,
       thumbDataUrl: null,
     };
     const height = sectionHeightPx(sectionItem);
@@ -203,11 +210,23 @@ export function buildGalleryFullVirtualLayout(opts: {
     y = next.y;
   }
 
-  const emitMediaRange = (start: number, end: number, sectionPath?: string, sectionLabel?: string) => {
+  const emitMediaRange = (
+    start: number,
+    end: number,
+    sectionPath?: string,
+    sectionLabel?: string,
+    sectionFolder = "",
+  ) => {
     if (railOnlyTimeline && sectionLabel) {
       pushTimelineMarker(sectionLabel, start);
     } else if (sectionLabel && sectionPath) {
-      pushSection(sectionLabel, sectionPath, layoutMode === "grouped" ? "folder" : layoutMode, start);
+      pushSection(
+        sectionLabel,
+        sectionPath,
+        layoutMode === "grouped" ? "folder" : layoutMode,
+        start,
+        sectionFolder,
+      );
     }
     for (let mediaIndex = start; mediaIndex < end; mediaIndex += 1) {
       const item = mediaByIndex.get(mediaIndex) ?? placeholderItem(mediaIndex);
@@ -241,6 +260,7 @@ export function buildGalleryFullVirtualLayout(opts: {
         Math.min(span.end, totalMediaCount),
         railOnlyTimeline ? undefined : sectionPath,
         span.label,
+        span.kind === "folder" ? String(span.key ?? "") : "",
       );
     }
   } else {

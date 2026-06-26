@@ -70,6 +70,7 @@ export function isMoveMenuElement(el: EventTarget | null): boolean {
     el.closest(".dest-move-flyout-fixed") ||
       el.closest(".ctx-menu__submenu--dest-tree") ||
       el.closest(".ctx-menu__submenu-wrap") ||
+      el.closest(".section-dest-move__menu") ||
       el.closest(".dest-move-tree__folder-row")
   );
 }

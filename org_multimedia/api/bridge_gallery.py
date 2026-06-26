@@ -26,7 +26,9 @@ from ..core.fs_utils import ensure_unique_destination
 from ..core.gallery_images import make_thumbnail_photoimage
 
 from ..core.gallery_paths import (
+    grouped_section_label,
     list_subdirs,
+    list_subdirs_recursive,
     scan_images_flat,
     scan_media_flat,
     scan_media_recursive,
@@ -587,7 +589,7 @@ class GalleryBridgeMixin:
             return list(pool.map(_one_image_item, enumerate(slice_paths)))
 
     def _compute_grouped_paths(self, root: Path) -> tuple[list[Path], list[tuple[int, int, str, str]]]:
-        """Una sección por la carpeta actual (archivos directos) y por cada subcarpeta inmediata."""
+        """Sección por archivos en la raíz y por cada subcarpeta (incluye nietas y más profundo)."""
         mode = str(self.settings.get("gallery_sort_mode", "name"))
         ordered: list[Path] = []
         spans: list[tuple[int, int, str, str]] = []
@@ -596,9 +598,12 @@ class GalleryBridgeMixin:
         spans.append((idx, idx + len(root_files), str(root), "(esta carpeta)"))
         ordered.extend(root_files)
         idx += len(root_files)
-        for sub in list_subdirs(root):
+        for sub in list_subdirs_recursive(root):
             files = sort_image_paths(scan_media_flat(sub), mode)
-            spans.append((idx, idx + len(files), str(sub), sub.name))
+            if not files:
+                continue
+            label = grouped_section_label(root, sub)
+            spans.append((idx, idx + len(files), str(sub), label))
             ordered.extend(files)
             idx += len(files)
         return ordered, spans

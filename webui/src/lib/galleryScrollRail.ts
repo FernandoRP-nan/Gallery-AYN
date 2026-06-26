@@ -1,4 +1,5 @@
 import type { GalleryScrollMarker } from "./galleryFullVirtualLayout";
+import { formatFolderRailLabel, formatPathTail } from "./galleryUtils";
 
 export type GalleryScrollRailLabel = {
   top: number;
@@ -133,8 +134,20 @@ export function buildScrollRailLabels(
     return labels;
   }
 
+  if (kind === "folder") {
+    const labels = markers.map((m) => markerToLabel(m, formatFolderRailLabel(m.label)));
+    return decimateByRailScreenGap(labels, totalHeight, railHeightPx);
+  }
+
+  if (kind === "alpha") {
+    const labels = markers.map((m) =>
+      markerToLabel(m, m.label.length > 10 ? formatPathTail(m.label, 10) : m.label),
+    );
+    return decimateByRailScreenGap(labels, totalHeight, railHeightPx);
+  }
+
   const generic = markers.map((m) =>
-    markerToLabel(m, m.label.length > 10 ? `${m.label.slice(0, 9)}…` : m.label),
+    markerToLabel(m, m.label.length > 10 ? formatPathTail(m.label, 10) : m.label),
   );
   return decimateByRailScreenGap(generic, totalHeight, railHeightPx);
 }

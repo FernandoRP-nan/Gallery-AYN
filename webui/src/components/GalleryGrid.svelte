@@ -92,6 +92,9 @@
   export let messSuggestionsEnabled = false;
   export let messFolder = "";
   export let galleryTargetFolder = "";
+  export let destTree: import("../lib/itemTree").TreeNode[] = [];
+  export let destTreeHasTargets = false;
+  export let onMoveSectionFolderToDest: (folderPath: string, destPath: string, sectionLabel: string) => void = () => {};
   export let messSuggestionsMasonry = true;
   export let galleryMasonryView = false;
   export let galleryMasonryTightSpacing = false;
@@ -915,6 +918,11 @@
               {galleryBusy}
               {navigateToFolder}
               {onSectionFolderDrop}
+              groupByFolder={layoutMode === "grouped"}
+              galleryRootFolder={galleryTargetFolder}
+              {destTree}
+              {destTreeHasTargets}
+              {onMoveSectionFolderToDest}
               {isGalleryMediaKind}
               {onGalleryTilePointerDown}
               {onGalleryTilePointerEnter}
@@ -944,6 +952,11 @@
                 {galleryBusy}
                 {navigateToFolder}
                 {onSectionFolderDrop}
+                groupByFolder={layoutMode === "grouped"}
+                galleryRootFolder={galleryTargetFolder}
+                {destTree}
+                {destTreeHasTargets}
+                {onMoveSectionFolderToDest}
                 {isGalleryMediaKind}
                 {onGalleryTilePointerDown}
                 {onGalleryTilePointerEnter}
@@ -973,6 +986,11 @@
                         {galleryBusy}
                         {navigateToFolder}
                         {onSectionFolderDrop}
+                        groupByFolder={layoutMode === "grouped"}
+                        galleryRootFolder={galleryTargetFolder}
+                        {destTree}
+                        {destTreeHasTargets}
+                        {onMoveSectionFolderToDest}
                         {isGalleryMediaKind}
                         {onGalleryTilePointerDown}
                         {onGalleryTilePointerEnter}
@@ -1012,6 +1030,11 @@
             {galleryBusy}
             {navigateToFolder}
             {onSectionFolderDrop}
+            groupByFolder={layoutMode === "grouped"}
+            galleryRootFolder={galleryTargetFolder}
+            {destTree}
+            {destTreeHasTargets}
+            {onMoveSectionFolderToDest}
             {isGalleryMediaKind}
             {onGalleryTilePointerDown}
             {onGalleryTilePointerEnter}
