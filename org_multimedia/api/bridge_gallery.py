@@ -352,10 +352,7 @@ class GalleryBridgeMixin:
         self.gallery_page = max(0, min(self.gallery_page, tp - 1))
 
     def _slice(self) -> tuple[int, int]:
-        if self._is_grouped_mode():
-            total = len(self.ordered_paths)
-            return 0, total
-        if self._is_timeline_mode():
+        if self._is_grouped_mode() or self._is_timeline_mode():
             total = len(self.ordered_paths)
             if not self._is_unlimited_mode():
                 return 0, total
@@ -749,34 +746,67 @@ class GalleryBridgeMixin:
             "windowStart": int(getattr(self, "gallery_unlimited_window_start", 0) or 0),
         }
 
-    def _build_gallery_items_grouped(self) -> list[dict]:
+    def _build_grouped_items_for_range(
+        self,
+        range_start: int,
+        range_end: int,
+        *,
+        build_boost: bool = False,
+        jump_fast: bool = False,
+    ) -> list[dict]:
+        """Ítems agrupados por subcarpeta para un rango de índices en ordered_paths."""
         items: list[dict] = []
+        if range_start >= range_end:
+            return items
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
         use_tint = bool(self.settings.get("gallery_section_dominant_color", True))
         for start, end, folder_path, label in self._gallery_section_spans:
-            slice_paths = self.ordered_paths[start:end]
-            sec: dict = {
-                "kind": "section",
-                "name": label,
-                "path": f"section:{folder_path}",
-                "sectionFolder": folder_path,
-                "thumbDataUrl": None,
-            }
-            if use_tint and slice_paths:
-                img_only = [
-                    p
-                    for p in slice_paths
-                    if p.suffix.lower() in MediaOrganizer.IMAGE_EXTENSIONS and p.suffix.lower() != ".svg"
-                ]
-                th = accent_hex_from_paths(img_only, max_samples=3) if img_only else None
-                if th:
-                    sec["sectionTintHex"] = th
-            items.append(sec)
+            if end <= range_start:
+                continue
+            if start >= range_end:
+                break
+            clip_start = max(start, range_start)
+            clip_end = min(end, range_end)
+            if clip_start >= clip_end:
+                continue
+            if clip_start == start:
+                section_paths = self.ordered_paths[start:end]
+                sec: dict = {
+                    "kind": "section",
+                    "name": label,
+                    "path": f"section:{folder_path}",
+                    "sectionFolder": folder_path,
+                    "thumbDataUrl": None,
+                }
+                if use_tint and section_paths:
+                    img_only = [
+                        p
+                        for p in section_paths
+                        if p.suffix.lower() in MediaOrganizer.IMAGE_EXTENSIONS
+                        and p.suffix.lower() != ".svg"
+                    ]
+                    th = accent_hex_from_paths(img_only, max_samples=3) if img_only else None
+                    if th:
+                        sec["sectionTintHex"] = th
+                items.append(sec)
+            slice_paths = self.ordered_paths[clip_start:clip_end]
             items.extend(
-                self._build_image_items(slice_paths, thumb_px, selected_frozenset, base_index=start)
+                self._build_image_items(
+                    slice_paths,
+                    thumb_px,
+                    selected_frozenset,
+                    base_index=clip_start,
+                    jump_fast=jump_fast,
+                    build_boost=build_boost,
+                )
             )
         return items
+
+    def _build_gallery_items_grouped(self) -> list[dict]:
+        s, e = self._slice()
+        build_boost = self._is_unlimited_mode() and self.gallery_page == 0 and s == 0
+        return self._build_grouped_items_for_range(s, e, build_boost=build_boost)
 
     def _build_timeline_items_for_range(
         self,
@@ -894,6 +924,8 @@ class GalleryBridgeMixin:
             return []
         if self._is_timeline_mode():
             return self._build_timeline_items_for_range(start, end)
+        if self._is_grouped_mode():
+            return self._build_grouped_items_for_range(start, end, jump_fast=jump_fast)
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
         return self._build_image_items(
@@ -1080,8 +1112,6 @@ class GalleryBridgeMixin:
                 min(len(self.ordered_paths), self._unlimited_batch_size()) if self._is_unlimited_mode() else 0
             )
             self.gallery_unlimited_window_start = 0
-            if self._is_grouped_mode() and self._is_unlimited_mode():
-                self.gallery_unlimited_loaded = len(self.ordered_paths)
             t_build = time.perf_counter()
             items = self._build_gallery_items()
             build_ms = int((time.perf_counter() - t_build) * 1000)
@@ -1123,13 +1153,10 @@ class GalleryBridgeMixin:
         self._clamp_page()
         if self._is_unlimited_mode():
             total = len(self.ordered_paths)
-            if self._is_grouped_mode():
-                self.gallery_unlimited_loaded = total
-            else:
-                batch = self._unlimited_batch_size(total)
-                keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
-                self.gallery_unlimited_loaded = min(total, max(batch, keep))
-                self.gallery_unlimited_window_start = 0
+            batch = self._unlimited_batch_size(total)
+            keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
+            self.gallery_unlimited_loaded = min(total, max(batch, keep))
+            self.gallery_unlimited_window_start = 0
 
     def gallery_reindex_delta(self, removed_paths: list[str] | None = None) -> dict:
         """Reindexa metadatos tras quitar archivos; evita serializar toda la rejilla si no hace falta."""
@@ -1192,8 +1219,6 @@ class GalleryBridgeMixin:
         with self.lock:
             if not self.gallery_folder:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
-            if self._is_grouped_mode():
-                return {"state": self._gallery_state(), "items": [], "hasMore": False}
             if not self._is_unlimited_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
             total = len(self.ordered_paths)
@@ -1221,10 +1246,7 @@ class GalleryBridgeMixin:
                     "windowTrimmed": trimmed,
                 }
 
-            if self._is_timeline_mode():
-                batch_items = self._build_timeline_items_for_range(start, end)
-            else:
-                batch_items = self._gallery_items_for_range(start, end)
+            batch_items = self._gallery_items_for_range(start, end)
 
             self.gallery_unlimited_loaded = end
             has_more = end < total
@@ -1240,7 +1262,7 @@ class GalleryBridgeMixin:
         with self.lock:
             if not self.gallery_folder:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
-            if self._is_grouped_mode() or not self._is_unlimited_mode():
+            if not self._is_unlimited_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
             total = len(self.ordered_paths)
             if total <= 0:
