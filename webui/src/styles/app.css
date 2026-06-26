@@ -935,6 +935,36 @@
     padding: 0;
 }
 
+/* Autoreproducir apagado: borde tenue para distinguirlo del estado activo. */
+.preview__video-profile--autoplay.preview__video-profile--autoplay-off {
+    border-color: color-mix(in oklab, var(--om-accent, #5b8def) 22%, var(--om-border-default));
+    color: color-mix(in oklab, var(--om-text-secondary) 72%, var(--om-text-muted));
+    background: color-mix(in oklab, var(--om-surface-1) 55%, var(--om-surface-2));
+    opacity: 0.82;
+}
+
+.preview__video-profile--autoplay.preview__video-profile--autoplay-off.preview__video-profile--edit {
+    border-color: color-mix(in oklab, var(--om-warn, #f0ad4e) 24%, var(--om-border-default));
+    color: color-mix(in oklab, var(--om-warn, #f0ad4e) 42%, var(--om-text-secondary));
+}
+
+.preview__video-profile--autoplay.preview__video-profile--autoplay-off:hover:not(:disabled) {
+    opacity: 0.95;
+    border-color: color-mix(in oklab, var(--om-accent, #5b8def) 34%, var(--om-border-default));
+}
+
+.preview__video-profile--autoplay.preview__video-profile--autoplay-off.preview__video-profile--edit:hover:not(:disabled) {
+    border-color: color-mix(in oklab, var(--om-warn, #f0ad4e) 38%, var(--om-border-default));
+}
+
+.preview__video-profile--autoplay.preview__video-profile--active {
+    border-color: var(--om-accent, #5b8def);
+    color: var(--om-accent, #5b8def);
+    background: color-mix(in oklab, var(--om-accent-muted, var(--om-surface-3)) 72%, var(--om-surface-2));
+    opacity: 1;
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--om-accent, #5b8def) 28%, transparent);
+}
+
 .preview__video-autoplay-icon {
     width: 16px;
     height: 16px;
@@ -946,6 +976,8 @@
 .preview__video-profile--autoplay.preview__video-profile--edit.preview__video-profile--active {
     border-color: var(--om-warn, #f0ad4e);
     color: var(--om-warn, #f0ad4e);
+    background: color-mix(in oklab, var(--om-warn, #f0ad4e) 14%, var(--om-surface-2));
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--om-warn, #f0ad4e) 32%, transparent);
 }
 
 .preview__video-profile:hover:not(:disabled) {

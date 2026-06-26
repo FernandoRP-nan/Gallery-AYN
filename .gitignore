@@ -1,19 +1,29 @@
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
+.eggs/
 .venv/
 venv/
 .env
 .env.*
 
-# PyInstaller (solo carpeta en la raíz del repo)
+# PyInstaller (solo carpeta en la raíz del repo; no confundir con webui/dist)
 /dist/
 /build/
 
-# Frontend
+# Frontend (webui/dist se versiona a propósito para PyWebView / portable)
 webui/node_modules/
 webui/.vite/
+
+# Tests / linters
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # IDE / OS
 .idea/

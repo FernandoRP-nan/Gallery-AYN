@@ -19,6 +19,8 @@
 
   const dispatch = createEventDispatcher<{ change: string; autoplayToggle: void }>();
 
+  $: autoplayOff = !autoplayEnabled;
+
   function labelFor(id: string): string {
     const mapped: Record<string, string> = {
       auto: t("preview.videoModeAuto"),
@@ -57,6 +59,7 @@
     type="button"
     class="preview__video-profile preview__video-profile--autoplay"
     class:preview__video-profile--active={autoplayEnabled}
+    class:preview__video-profile--autoplay-off={autoplayOff}
     class:preview__video-profile--edit={autoplayEditMode}
     disabled={autoplayDisabled || disabled}
     title={autoplayEnabled ? t("preview.videoAutoplayOnHint") : t("preview.videoAutoplayOffHint")}

@@ -1791,6 +1791,10 @@
     return destinationsMode ? previewVideoAutoplayEdit : previewVideoAutoplay;
   }
 
+  /** Reactivo: el template no invalida bien llamadas a funciones locales. */
+  $: previewVideoAutoplayOn =
+    destinationsMode ? previewVideoAutoplayEdit : previewVideoAutoplay;
+
   function maybeAutoplayPreviewVideo(el: HTMLVideoElement | null | undefined) {
     if (!isPreviewVideoAutoplayEnabled()) return;
     tryAutoplayVideo(el);
@@ -4591,7 +4595,7 @@
                   profiles={previewVideoProfiles}
                   activeMode={previewVideoMode}
                   disabled={previewVideoPlayLocked && previewVideoLaunching}
-                  autoplayEnabled={isPreviewVideoAutoplayEnabled()}
+                  autoplayEnabled={previewVideoAutoplayOn}
                   autoplayEditMode={destinationsMode}
                   autoplayDisabled={previewVideoPlayLocked && previewVideoLaunching}
                   on:change={(e) => void setPreviewVideoMode(e.detail)}
