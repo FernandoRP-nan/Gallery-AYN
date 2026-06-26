@@ -16,14 +16,13 @@
   import type { TreeNode } from "../lib/itemTree";
 
   type SettingsTabId =
-    | "performance"
-    | "thumbs"
     | "appearance"
-    | "video"
-    | "shortcuts"
+    | "thumbs"
+    | "organization"
     | "mess"
-    | "destinations"
-    | "markers"
+    | "video"
+    | "performance"
+    | "shortcuts"
     | "debug";
 
   export let thumbsPerPage: number;
@@ -67,17 +66,17 @@
   export let onCancel: () => void;
   export let onSave: () => void;
 
-  let activeTab: SettingsTabId = "performance";
+  let activeTab: SettingsTabId = "appearance";
 
+  /** Orden UX: aspecto → galería → flujo de trabajo → multimedia → avanzado → depuración */
   const tabs: { id: SettingsTabId; labelKey: string }[] = [
-    { id: "performance", labelKey: "settings.tabPerformance" },
-    { id: "thumbs", labelKey: "settings.tabThumbs" },
     { id: "appearance", labelKey: "settings.tabAppearance" },
-    { id: "video", labelKey: "settings.tabVideo" },
-    { id: "shortcuts", labelKey: "settings.tabShortcuts" },
+    { id: "thumbs", labelKey: "settings.tabThumbs" },
+    { id: "organization", labelKey: "settings.tabOrganization" },
     { id: "mess", labelKey: "settings.tabMess" },
-    { id: "destinations", labelKey: "settings.tabDestinations" },
-    { id: "markers", labelKey: "settings.tabMarkers" },
+    { id: "video", labelKey: "settings.tabVideo" },
+    { id: "performance", labelKey: "settings.tabPerformance" },
+    { id: "shortcuts", labelKey: "settings.tabShortcuts" },
     { id: "debug", labelKey: "settings.tabDebug" },
   ];
 
@@ -105,22 +104,30 @@
       >
     </header>
 
-    <nav class="settings-tabs" aria-label={t("settings.tabsAria")}>
+    <nav class="settings-tabs" role="tablist" aria-label={t("settings.tabsAria")}>
       {#each tabs as tab (tab.id)}
         <button
           type="button"
+          role="tab"
+          id="settings-tab-{tab.id}"
           class="settings-tabs__btn"
           class:settings-tabs__btn--active={activeTab === tab.id}
           aria-selected={activeTab === tab.id}
+          aria-controls="settings-panel-{tab.id}"
+          tabindex={activeTab === tab.id ? 0 : -1}
           on:click={() => (activeTab = tab.id)}>{t(tab.labelKey)}</button
         >
       {/each}
     </nav>
 
-    <section class="settings-body">
+    <section
+      class="settings-body"
+      role="tabpanel"
+      id="settings-panel-{activeTab}"
+      aria-labelledby="settings-tab-{activeTab}"
+    >
       {#if activeTab === "performance"}
         <SettingsPerformanceSection
-          bind:thumbsPerPage
           bind:galleryUnlimitedBatchSize
           bind:galleryWindowOverscanBefore
           bind:galleryWindowOverscanAfter
@@ -134,6 +141,7 @@
         />
       {:else if activeTab === "thumbs"}
         <SettingsThumbsSection
+          bind:thumbsPerPage
           bind:settingsThumbPresetIdx
           bind:settingsThumbScaleDraft
           bind:galleryThumbQualityPreset
@@ -167,9 +175,9 @@
           bind:suggestionsMasonry={pinterestMasonry}
           bind:messScanMaxFiles
         />
-      {:else if activeTab === "destinations"}
+      {:else if activeTab === "organization"}
+        <p class="settings-lead">{t("settings.organizationLead")}</p>
         <SettingsDestinationsSection {destTree} {onDestTreeChange} {onPickDestFolder} />
-      {:else if activeTab === "markers"}
         <SettingsMarkersSection {markerTree} {onMarkerTreeChange} {onPickMarkerFolder} />
       {:else if activeTab === "debug"}
         <SettingsDebugSection bind:debugLogEnabled />

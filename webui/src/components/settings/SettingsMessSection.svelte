@@ -7,7 +7,7 @@
 </script>
 
 <div class="settings-group">
-  <h3 class="settings-group__title">{t("settings.sectionMess")}</h3>
+  <p class="settings-lead">{t("settings.messLead")}</p>
   <p class="settings-hint">{t("settings.messHint")}</p>
 
   <label class="check settings-check">

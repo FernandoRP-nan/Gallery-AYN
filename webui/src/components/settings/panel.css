@@ -82,6 +82,29 @@
   color: color-mix(in oklab, #ffbf66 78%, var(--om-text-primary));
 }
 
+.sm-dialog .settings-lead {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--om-text-secondary);
+  line-height: 1.45;
+}
+
+.sm-dialog .settings-body > .settings-lead {
+  flex-shrink: 0;
+}
+
+.sm-dialog .settings-group--nested {
+  margin-top: var(--om-space-1);
+}
+
+.sm-dialog .settings-group--nested + .settings-group--nested {
+  margin-top: var(--om-space-2);
+}
+
+.sm-dialog .settings-group--debug {
+  border-color: color-mix(in oklab, #ffbf66 22%, var(--om-border-default));
+}
+
 .sm-dialog .settings-preset-row {
   display: flex;
   flex-wrap: wrap;

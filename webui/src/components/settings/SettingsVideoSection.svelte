@@ -7,7 +7,7 @@
 </script>
 
 <div class="settings-group">
-  <h3 class="settings-group__title">{t("settings.sectionVideo")}</h3>
+  <p class="settings-lead">{t("settings.videoLead")}</p>
   <label class="field-label" for="set-video-preset">{t("settings.videoPresetLabel")}</label>
   <select id="set-video-preset" class="om-input" bind:value={videoTranscodePreset}>
     <option value="turbo">{t("settings.videoPresetTurbo")}</option>

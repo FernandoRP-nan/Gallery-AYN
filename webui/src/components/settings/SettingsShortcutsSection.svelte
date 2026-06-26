@@ -6,7 +6,7 @@
 </script>
 
 <div class="settings-group">
-  <h3 class="settings-group__title">{t("settings.sectionShortcuts")}</h3>
+  <p class="settings-lead">{t("settings.shortcutsLead")}</p>
   <p class="settings-hint">{t("settings.shortcutsHint")}</p>
   <label class="field-label" for="set-shortcut-toggle">{t("settings.shortcutToggle")}</label>
   <input id="set-shortcut-toggle" class="om-input" type="text" bind:value={keyboardShortcuts.toggleMode} />

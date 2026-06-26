@@ -4,8 +4,8 @@
   export let debugLogEnabled = false;
 </script>
 
-<div class="settings-group">
-  <h3 class="settings-group__title">{t("settings.sectionDebug")}</h3>
+<div class="settings-group settings-group--debug">
+  <p class="settings-lead">{t("settings.debugLead")}</p>
   <label class="check">
     <input type="checkbox" bind:checked={debugLogEnabled} />
     {t("settings.debugLogEnabled")}

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { t } from "../../lib/i18n";
 
-  export let thumbsPerPage: number;
   export let galleryUnlimitedBatchSize: number;
   export let galleryWindowOverscanBefore: number;
   export let galleryWindowOverscanAfter: number;
@@ -60,6 +59,7 @@
       galleryJumpCoreOverscanAfter = 48;
       gallerySlidingWindowEnabled = true;
       gallerySlidingWindowMaxItems = 896;
+      galleryThumbBuildWorkers = 8;
       galleryThumbHqWorkers = 4;
       galleryThumbHqVisibleSequential = 16;
     }
@@ -67,34 +67,7 @@
 </script>
 
 <div class="settings-group">
-  <h3 class="settings-group__title">{t("settings.sectionPerformance")}</h3>
-
-  <label class="field-label" for="set-thumbs-page">{t("settings.thumbsPerPageLabel")}</label>
-  <input
-    id="set-thumbs-page"
-    class="om-input"
-    type="number"
-    min="0"
-    placeholder={t("settings.thumbsPerPagePlaceholder")}
-    bind:value={thumbsPerPage}
-  />
-  <div class="settings-preset-row">
-    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 24)}
-      >{t("settings.presetHighPerf24")}</button
-    >
-    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 48)}
-      >{t("settings.presetPerf48")}</button
-    >
-    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 96)}
-      >{t("settings.presetBalanced96")}</button
-    >
-    <button type="button" class="om-btn om-btn--ghost om-btn--compact settings-preset-chip" on:click={() => (thumbsPerPage = 0)}
-      >{t("settings.presetUnlimited0")}</button
-    >
-  </div>
-  {#if Number(thumbsPerPage) === 0}
-    <p class="settings-hint settings-hint--warn">{t("settings.unlimitedWarn")}</p>
-  {/if}
+  <p class="settings-lead">{t("settings.perfAdvancedLead")}</p>
 
   <p class="settings-hint settings-hint--section">{t("settings.perfMemoryTitle")}</p>
   <div class="settings-preset-row">
@@ -114,7 +87,9 @@
 
   <label class="field-label" for="set-batch-size">{t("settings.unlimitedBatchLabel")}</label>
   <input id="set-batch-size" class="om-input" type="number" min="24" max="256" bind:value={galleryUnlimitedBatchSize} />
+  <p class="settings-hint">{t("settings.unlimitedBatchHint")}</p>
 
+  <p class="settings-hint settings-hint--section">{t("settings.perfOverscanTitle")}</p>
   <div class="settings-grid-2">
     <div>
       <label class="field-label" for="set-overscan-before">{t("settings.windowOverscanBefore")}</label>
@@ -126,7 +101,8 @@
     </div>
   </div>
 
-  <p class="settings-hint settings-hint--section">{t("settings.jumpCoreHint")}</p>
+  <p class="settings-hint settings-hint--section">{t("settings.jumpCoreTitle")}</p>
+  <p class="settings-hint">{t("settings.jumpCoreHint")}</p>
   <div class="settings-preset-row">
     <button
       type="button"
@@ -176,6 +152,7 @@
     <p class="settings-hint">{t("settings.slidingWindowHint")}</p>
   {/if}
 
+  <p class="settings-hint settings-hint--section">{t("settings.perfWorkersTitle")}</p>
   <div class="settings-grid-2">
     <div>
       <label class="field-label" for="set-build-workers">{t("settings.thumbBuildWorkers")}</label>
@@ -191,7 +168,6 @@
   <input id="set-hq-visible" class="om-input" type="number" min="4" max="32" bind:value={galleryThumbHqVisibleSequential} />
 
   <p class="settings-hint">{t("settings.perfMemoryHint")}</p>
-  <p class="settings-hint">{t("settings.perfHint")}</p>
 </div>
 
 <style>
