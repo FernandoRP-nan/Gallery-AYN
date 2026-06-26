@@ -71,6 +71,10 @@ def load_app_settings() -> dict:
             "gallery_unlimited_batch_size": 48,
             "gallery_window_overscan_before": 96,
             "gallery_window_overscan_after": 160,
+            "gallery_jump_core_overscan_before": 32,
+            "gallery_jump_core_overscan_after": 48,
+            "gallery_sliding_window_enabled": True,
+            "gallery_sliding_window_max_items": 896,
             "gallery_thumb_build_workers": 8,
             "gallery_thumb_hq_workers": 4,
             "gallery_thumb_hq_visible_sequential": 16,
@@ -281,6 +285,9 @@ def load_app_settings() -> dict:
         for key, default, lo, hi in (
             ("gallery_window_overscan_before", 96, 32, 512),
             ("gallery_window_overscan_after", 160, 32, 512),
+            ("gallery_jump_core_overscan_before", 32, 16, 128),
+            ("gallery_jump_core_overscan_after", 48, 24, 160),
+            ("gallery_sliding_window_max_items", 896, 320, 4096),
             ("gallery_thumb_build_workers", 8, 2, 16),
             ("gallery_thumb_hq_workers", 4, 1, 16),
             ("gallery_thumb_hq_visible_sequential", 16, 4, 32),
@@ -292,6 +299,26 @@ def load_app_settings() -> dict:
                     data[key] = max(lo, min(hi, int(data[key])))
                 except (TypeError, ValueError):
                     data[key] = default
+        # Migrar núcleo de salto antiguo (48+72) al preset agresivo (32+48).
+        if (
+            int(data.get("gallery_jump_core_overscan_before", 32)) == 48
+            and int(data.get("gallery_jump_core_overscan_after", 48)) == 72
+        ):
+            data["gallery_jump_core_overscan_before"] = 32
+            data["gallery_jump_core_overscan_after"] = 48
+        if "gallery_sliding_window_enabled" not in data:
+            data["gallery_sliding_window_enabled"] = True
+        else:
+            data["gallery_sliding_window_enabled"] = bool(data["gallery_sliding_window_enabled"])
+        if "gallery_sliding_window_max_items" not in data:
+            data["gallery_sliding_window_max_items"] = 896
+        else:
+            try:
+                data["gallery_sliding_window_max_items"] = max(
+                    320, min(4096, int(data["gallery_sliding_window_max_items"]))
+                )
+            except (TypeError, ValueError):
+                data["gallery_sliding_window_max_items"] = 896
         if "web_debug_log_enabled" not in data:
             data["web_debug_log_enabled"] = False
         else:
@@ -350,6 +377,10 @@ def load_app_settings() -> dict:
             "gallery_unlimited_batch_size": 48,
             "gallery_window_overscan_before": 96,
             "gallery_window_overscan_after": 160,
+            "gallery_jump_core_overscan_before": 32,
+            "gallery_jump_core_overscan_after": 48,
+            "gallery_sliding_window_enabled": True,
+            "gallery_sliding_window_max_items": 896,
             "gallery_thumb_build_workers": 8,
             "gallery_thumb_hq_workers": 4,
             "gallery_thumb_hq_visible_sequential": 16,

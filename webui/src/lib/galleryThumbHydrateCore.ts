@@ -2,7 +2,11 @@ import { get } from "svelte/store";
 import { bridge } from "./api";
 import type { GalleryItem } from "./api";
 import { setGalleryThumbHq } from "./galleryThumbHqCache";
-import { getGalleryNavigationGeneration, isGalleryNavigationCurrent } from "./gallerySession";
+import {
+  getGalleryNavigationGeneration,
+  isGalleryHqJumpGraceActive,
+  isGalleryNavigationCurrent,
+} from "./gallerySession";
 import { getGalleryItems } from "./galleryRuntime";
 import { galleryScrolling } from "./galleryScrollState";
 import { prioritizeThumbPaths, type ThumbPointerAnchor } from "./thumbPriority";
@@ -79,7 +83,7 @@ async function flushPendingGalleryThumbs(
     return;
   }
 
-  if (!force && get(galleryScrolling)) {
+  if (!force && get(galleryScrolling) && !isGalleryHqJumpGraceActive()) {
     scrollFlushDeferrals++;
     if (scrollFlushDeferrals < MAX_SCROLL_FLUSH_DEFERRALS) {
       scheduleGalleryThumbFlush(hydrationToken, THUMB_FLUSH_SCROLL_RETRY_MS);
@@ -274,59 +278,76 @@ export async function runGalleryThumbHydration(
   const allNeeding = listGalleryItemsNeedingHq(snapshot);
   if (allNeeding.length === 0) return 0;
 
-  const cap = hqBatchCapPerPass();
-  const base = allNeeding.slice(0, cap);
-
   const navGen = getGalleryNavigationGeneration();
-  const ordered = orderTargets(base, hydrateOpts);
+  const ordered = orderTargets(allNeeding, hydrateOpts);
   let { visible, rest } = splitTargetsByVisibility(ordered, hydrateOpts);
   const perf = getGalleryPerfConfig();
   const maxVisibleSeq = perf.thumbHqVisibleSequential;
   const hqWorkers = perf.thumbHqWorkers;
 
-  // Si el DOM aún no tiene tiles visibles (post-salto), priorizar el inicio de la cola.
+  // Sin tiles en DOM (post-salto): priorizar el frente de la cola como pseudo-visibles.
   if (visible.length === 0 && rest.length > 0) {
-    visible = rest.slice(0, maxVisibleSeq);
-    rest = rest.slice(maxVisibleSeq);
+    visible = ordered.slice(0, maxVisibleSeq);
+    rest = ordered.slice(maxVisibleSeq);
   }
 
   galleryDbg("load_hq", "inicio hidratación HQ", {
     pending: allNeeding.length,
-    batch: base.length,
     visible: visible.length,
     rest: rest.length,
     workers: hqWorkers,
     visibleSequential: maxVisibleSeq,
+    phase: "viewport",
   });
 
   galleryThumbFlushToken = hydrationToken;
 
-  // Visibles: secuencial con flush inmediato (viewport first); overflow + resto en paralelo.
-  const visibleBatch = visible.slice(0, maxVisibleSeq);
+  // Fase 1: solo viewport (secuencial + paralelo visible).
+  await fetchHqSequential(visible.slice(0, maxVisibleSeq), scale, hydrationToken, navGen, isActive);
   const visibleOverflow = visible.slice(maxVisibleSeq);
-  await fetchHqSequential(visibleBatch, scale, hydrationToken, navGen, isActive);
+  if (visibleOverflow.length > 0 && isActive() && isGalleryNavigationCurrent(navGen)) {
+    await fetchHqBatchParallel(
+      visibleOverflow,
+      scale,
+      hydrationToken,
+      navGen,
+      isActive,
+      Math.min(hqWorkers, 8),
+    );
+  }
+
+  if (galleryThumbFlushTimer !== null) {
+    clearTimeout(galleryThumbFlushTimer);
+    galleryThumbFlushTimer = null;
+  }
+  await drainPendingGalleryThumbs(hydrationToken);
 
   if (!isActive() || !isGalleryNavigationCurrent(navGen)) {
-    await drainPendingGalleryThumbs(hydrationToken);
     return listGalleryItemsNeedingHq(getGalleryItems()).length;
   }
 
-  const parallelTargets = [...visibleOverflow, ...rest];
-  if (parallelTargets.length > 0) {
-    galleryDbg("load_hq", "tanda HQ paralela", {
-      count: parallelTargets.length,
-      workers: hqWorkers,
-    });
+  // Fase 2: fuera de pantalla en background (diferida si hay scroll activo).
+  if (rest.length === 0) {
+    const remaining = listGalleryItemsNeedingHq(getGalleryItems()).length;
+    galleryDbg("load_hq", "fin hidratación HQ", { remaining, phase: "viewport" });
+    return remaining;
   }
 
-  await fetchHqBatchParallel(
-    parallelTargets,
-    scale,
-    hydrationToken,
-    navGen,
-    isActive,
-    hqWorkers
-  );
+  if (get(galleryScrolling) && !isGalleryHqJumpGraceActive()) {
+    const remaining = listGalleryItemsNeedingHq(getGalleryItems()).length;
+    galleryDbg("load_hq", "HQ fuera de pantalla diferida (scroll)", { rest: rest.length, remaining });
+    return remaining;
+  }
+
+  const graceBoost = isGalleryHqJumpGraceActive() && allNeeding.length <= 512;
+  const bgCap = graceBoost ? Math.min(allNeeding.length, 512) : hqBatchCapPerPass();
+  const bgBatch = rest.slice(0, bgCap);
+  galleryDbg("load_hq", "tanda HQ paralela (background)", {
+    count: bgBatch.length,
+    workers: hqWorkers,
+    graceBoost,
+  });
+  await fetchHqBatchParallel(bgBatch, scale, hydrationToken, navGen, isActive, hqWorkers);
 
   if (galleryThumbFlushTimer !== null) {
     clearTimeout(galleryThumbFlushTimer);
@@ -335,7 +356,7 @@ export async function runGalleryThumbHydration(
   await drainPendingGalleryThumbs(hydrationToken);
 
   const remaining = listGalleryItemsNeedingHq(getGalleryItems()).length;
-  galleryDbg("load_hq", "fin hidratación HQ", { remaining });
+  galleryDbg("load_hq", "fin hidratación HQ", { remaining, phase: "background" });
   return remaining;
 }
 

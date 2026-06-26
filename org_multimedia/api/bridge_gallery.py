@@ -100,8 +100,12 @@ def _thumb_px_from_dest_scale(scale: float) -> int:
 # Ventana de carga para scroll virtual (salto a fecha/letra lejana).
 _GALLERY_WINDOW_OVERSCAN_BEFORE = 96
 _GALLERY_WINDOW_OVERSCAN_AFTER = 160
+# Núcleo visible en salto (fase 1 rápida); fase 2 expande al overscan completo.
+_GALLERY_JUMP_CORE_OVERSCAN_BEFORE = 32
+_GALLERY_JUMP_CORE_OVERSCAN_AFTER = 48
 # Scroll leve por encima de la ventana: ampliar hacia atrás; más lejos: recentrar ventana.
 _GALLERY_WINDOW_JUMP_MARGIN = 128
+_GALLERY_LOAD_MAX_BATCHES = 2
 _GALLERY_SCAN_CACHE_TTL_S = 300.0
 _GALLERY_SCAN_CACHE_MAX = 8
 _GALLERY_EXTEND_MAX_BATCHES = 16
@@ -228,9 +232,68 @@ class GalleryBridgeMixin:
         n = int(self.settings.get("gallery_window_overscan_after", _GALLERY_WINDOW_OVERSCAN_AFTER))
         return max(32, min(512, n))
 
-    def _gallery_thumb_build_workers(self) -> int:
+    def _gallery_jump_core_overscan_before(self) -> int:
+        n = int(
+            self.settings.get(
+                "gallery_jump_core_overscan_before",
+                _GALLERY_JUMP_CORE_OVERSCAN_BEFORE,
+            )
+        )
+        return max(24, min(128, n))
+
+    def _gallery_jump_core_overscan_after(self) -> int:
+        n = int(
+            self.settings.get(
+                "gallery_jump_core_overscan_after",
+                _GALLERY_JUMP_CORE_OVERSCAN_AFTER,
+            )
+        )
+        return max(32, min(160, n))
+
+    def _gallery_thumb_build_workers(self, *, boost: bool = False) -> int:
         n = int(self.settings.get("gallery_thumb_build_workers", 8))
+        if boost:
+            n = min(16, max(n, 12))
         return max(2, min(16, n))
+
+    def _gallery_sliding_window_enabled(self) -> bool:
+        return bool(self.settings.get("gallery_sliding_window_enabled", False))
+
+    def _gallery_sliding_window_max_items(self) -> int:
+        n = int(self.settings.get("gallery_sliding_window_max_items", 896))
+        return max(320, min(4096, n))
+
+    def _maybe_trim_sliding_window(self) -> int:
+        """Recorta el inicio de la ventana deslizante si supera el máximo configurado."""
+        if not self._gallery_sliding_window_enabled():
+            return 0
+        ws = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        loaded = int(self.gallery_unlimited_loaded or 0)
+        if loaded <= ws:
+            return 0
+        max_items = self._gallery_sliding_window_max_items()
+        span = loaded - ws
+        if span <= max_items:
+            return 0
+        trim = span - max_items
+        self.gallery_unlimited_window_start = ws + trim
+        return trim
+
+    def _maybe_trim_sliding_window_from_end(self) -> int:
+        """Recorta el final de la ventana al prepend hacia atrás."""
+        if not self._gallery_sliding_window_enabled():
+            return 0
+        ws = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        loaded = int(self.gallery_unlimited_loaded or 0)
+        if loaded <= ws:
+            return 0
+        max_items = self._gallery_sliding_window_max_items()
+        span = loaded - ws
+        if span <= max_items:
+            return 0
+        trim = span - max_items
+        self.gallery_unlimited_loaded = loaded - trim
+        return trim
 
     def _thumbs_per_page(self) -> int:
         n = int(self.settings.get("gallery_thumbs_per_page", 48))
@@ -465,6 +528,7 @@ class GalleryBridgeMixin:
         base_index: int = 0,
         timeline_meta: bool = False,
         timeline_date_field: str = "mtime",
+        jump_fast: bool = False,
     ) -> list[dict]:
         def _one_image_item(entry: tuple[int, Path]) -> dict:
             i, p = entry
@@ -489,7 +553,11 @@ class GalleryBridgeMixin:
             }
             if timeline_meta:
                 d["mtimeIso"] = self._path_date_iso(p, timeline_date_field)
-            if self._is_masonry_view() and p.suffix.lower() not in (".svg",):
+            if (
+                self._is_masonry_view()
+                and not jump_fast
+                and p.suffix.lower() not in (".svg",)
+            ):
                 tw, th = self._masonry_display_size(p, thumb_px)
                 d["thumbW"] = int(tw)
                 d["thumbH"] = int(th)
@@ -500,7 +568,10 @@ class GalleryBridgeMixin:
 
         if not slice_paths:
             return []
-        max_workers = min(self._gallery_thumb_build_workers(), max(1, len(slice_paths)))
+        max_workers = min(
+            self._gallery_thumb_build_workers(boost=jump_fast),
+            max(1, len(slice_paths)),
+        )
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(_one_image_item, enumerate(slice_paths)))
 
@@ -778,7 +849,13 @@ class GalleryBridgeMixin:
         items.extend(self._build_image_items(slice_paths, thumb_px, selected_frozenset, base_index=s))
         return items
 
-    def _gallery_items_for_range(self, start: int, end: int) -> list[dict]:
+    def _gallery_items_for_range(
+        self,
+        start: int,
+        end: int,
+        *,
+        jump_fast: bool = False,
+    ) -> list[dict]:
         """Ítems de galería para un rango [start, end) de ordered_paths."""
         start = max(0, int(start))
         end = max(start, int(end))
@@ -789,10 +866,14 @@ class GalleryBridgeMixin:
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
         return self._build_image_items(
-            self.ordered_paths[start:end], thumb_px, selected_frozenset, base_index=start
+            self.ordered_paths[start:end],
+            thumb_px,
+            selected_frozenset,
+            base_index=start,
+            jump_fast=jump_fast,
         )
 
-    def _gallery_load_window(self, center_index: int) -> dict:
+    def _gallery_load_window(self, center_index: int, *, jump_core: bool = False) -> dict:
         """Carga solo una ventana alrededor del índice (salto o scroll fuera de rango)."""
         total = len(self.ordered_paths)
         if total <= 0:
@@ -805,15 +886,20 @@ class GalleryBridgeMixin:
                 "windowEnd": 0,
             }
         center = max(0, min(total - 1, int(center_index)))
-        before = self._gallery_window_overscan_before()
-        after = self._gallery_window_overscan_after()
+        if jump_core:
+            before = self._gallery_jump_core_overscan_before()
+            after = self._gallery_jump_core_overscan_after()
+        else:
+            before = self._gallery_window_overscan_before()
+            after = self._gallery_window_overscan_after()
         start = max(0, center - before)
         end = min(total, center + after)
         old_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
         old_end = int(self.gallery_unlimited_loaded or 0)
         # Ya cubierto: evita reconstruir la ventana al soltar el scroll en la misma zona.
         if (
-            old_end > old_start
+            not jump_core
+            and old_end > old_start
             and old_start <= center < old_end
             and start >= old_start
             and end <= old_end
@@ -824,9 +910,109 @@ class GalleryBridgeMixin:
                 "hasMore": old_end < total,
                 "replaceWindow": False,
             }
-        batch_items = self._gallery_items_for_range(start, end)
+        t_build = time.perf_counter()
+        batch_items = self._gallery_items_for_range(start, end, jump_fast=jump_core)
+        build_ms = int((time.perf_counter() - t_build) * 1000)
         self.gallery_unlimited_window_start = start
         self.gallery_unlimited_loaded = end
+        if jump_core:
+            self._jump_expand_center = center
+        payload: dict = {
+            "state": self._gallery_state(),
+            "items": batch_items,
+            "hasMore": end < total,
+            "replaceWindow": True,
+            "windowStart": start,
+            "windowEnd": end,
+            "windowPhase": "core" if jump_core else "full",
+            "timing": {"buildMs": build_ms, "itemCount": len(batch_items)},
+        }
+        if jump_core:
+            full_before = self._gallery_window_overscan_before()
+            full_after = self._gallery_window_overscan_after()
+            full_start = max(0, center - full_before)
+            full_end = min(total, center + full_after)
+            if full_start < start or full_end > end:
+                payload["windowExpandPending"] = True
+                payload["windowExpandCenter"] = center
+        return payload
+
+    def _gallery_expand_jump_window(self, center_index: int) -> dict:
+        """Fase 2 del salto: ampliar márgenes sin reconstruir el núcleo ya visible."""
+        total = len(self.ordered_paths)
+        if total <= 0:
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "hasMore": False,
+                "replaceWindow": False,
+                "windowPhase": "expand",
+            }
+        center = max(0, min(total - 1, int(center_index)))
+        before = self._gallery_window_overscan_before()
+        after = self._gallery_window_overscan_after()
+        start = max(0, center - before)
+        end = min(total, center + after)
+        cur_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        cur_end = int(self.gallery_unlimited_loaded or 0)
+        if cur_start <= start and cur_end >= end:
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "hasMore": end < total,
+                "replaceWindow": False,
+                "windowPhase": "expand",
+                "windowExpandPending": False,
+            }
+
+        prepend_items: list[dict] = []
+        append_items: list[dict] = []
+        need_prepend = cur_start > start
+        need_append = cur_end < end
+        can_incremental = cur_end > cur_start and (need_prepend or need_append)
+
+        t_build = time.perf_counter()
+        if can_incremental:
+            if need_prepend:
+                prepend_items = self._gallery_items_for_range(
+                    start, cur_start, jump_fast=False
+                )
+            if need_append:
+                append_items = self._gallery_items_for_range(
+                    cur_end, end, jump_fast=False
+                )
+            batch_items = prepend_items + append_items
+        else:
+            batch_items = self._gallery_items_for_range(start, end, jump_fast=False)
+
+        build_ms = int((time.perf_counter() - t_build) * 1000)
+        self.gallery_unlimited_window_start = start
+        self.gallery_unlimited_loaded = end
+        self._jump_expand_center = 0
+        trimmed = self._maybe_trim_sliding_window()
+
+        if can_incremental and batch_items:
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "prependItems": prepend_items,
+                "appendItems": append_items,
+                "hasMore": end < total,
+                "replaceWindow": False,
+                "windowExpandIncremental": True,
+                "windowStart": start,
+                "windowEnd": end,
+                "windowPhase": "expand",
+                "windowExpandPending": False,
+                "windowTrimmed": trimmed,
+                "timing": {
+                    "buildMs": build_ms,
+                    "itemCount": len(batch_items),
+                    "prependCount": len(prepend_items),
+                    "appendCount": len(append_items),
+                },
+            }
+
         return {
             "state": self._gallery_state(),
             "items": batch_items,
@@ -834,6 +1020,9 @@ class GalleryBridgeMixin:
             "replaceWindow": True,
             "windowStart": start,
             "windowEnd": end,
+            "windowPhase": "expand",
+            "windowExpandPending": False,
+            "timing": {"buildMs": build_ms, "itemCount": len(batch_items)},
         }
 
     def gallery_load_folder(self, raw_path: str) -> dict:
@@ -981,16 +1170,18 @@ class GalleryBridgeMixin:
 
             window_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
             if window_start > 0:
-                batch_items = self._gallery_items_for_range(window_start, end)
+                batch_items = self._gallery_items_for_range(start, end)
                 self.gallery_unlimited_loaded = end
+                trimmed = self._maybe_trim_sliding_window()
                 has_more = end < total
                 return {
                     "state": self._gallery_state(),
                     "items": batch_items,
                     "hasMore": has_more,
-                    "replaceWindow": True,
+                    "replaceWindow": False,
                     "windowStart": window_start,
                     "windowEnd": end,
+                    "windowTrimmed": trimmed,
                 }
 
             if self._is_timeline_mode():
@@ -1002,7 +1193,12 @@ class GalleryBridgeMixin:
             has_more = end < total
             return {"state": self._gallery_state(), "items": batch_items, "hasMore": has_more}
 
-    def gallery_load_until_index(self, target_index: int, jump: bool = False) -> dict:
+    def gallery_load_until_index(
+        self,
+        target_index: int,
+        jump: bool = False,
+        expand: bool = False,
+    ) -> dict:
         """Carga progresiva o ventana directa (salto a índice lejano)."""
         with self.lock:
             if not self.gallery_folder:
@@ -1014,15 +1210,21 @@ class GalleryBridgeMixin:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
             target = max(0, min(total, int(target_index)))
+            if expand:
+                center = int(getattr(self, "_jump_expand_center", 0) or target)
+                if center <= 0 or abs(center - target) > self._gallery_window_overscan_before() + 128:
+                    center = target
+                return self._gallery_expand_jump_window(center)
+
             window_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
             loaded = int(self.gallery_unlimited_loaded or 0)
             batch = self._unlimited_batch_size()
 
-            # Salto explícito (rail o scroll muy lejos): recentrar ventana.
+            # Salto explícito (rail o scroll muy lejos): núcleo rápido + expansión en segundo plano.
             if jump:
-                return self._gallery_load_window(target)
+                return self._gallery_load_window(target, jump_core=True)
 
-            # Scroll por encima del inicio cargado: ampliar hacia atrás o recentrar si es lejos.
+            # Scroll por encima del inicio cargado: prepend incremental (sin reemplazar ventana).
             if target < window_start:
                 margin = _GALLERY_WINDOW_JUMP_MARGIN
                 if target >= window_start - margin:
@@ -1035,15 +1237,36 @@ class GalleryBridgeMixin:
                             "hasMore": loaded < total,
                             "replaceWindow": False,
                         }
-                    batch_items = self._gallery_items_for_range(new_start, new_end)
+                    t_build = time.perf_counter()
+                    prepend_items = self._gallery_items_for_range(new_start, window_start)
+                    build_ms = int((time.perf_counter() - t_build) * 1000)
                     self.gallery_unlimited_window_start = new_start
+                    trimmed_end = self._maybe_trim_sliding_window_from_end()
+                    new_end = int(self.gallery_unlimited_loaded or new_end)
+                    if prepend_items:
+                        return {
+                            "state": self._gallery_state(),
+                            "items": [],
+                            "prependItems": prepend_items,
+                            "appendItems": [],
+                            "hasMore": new_end < total,
+                            "replaceWindow": False,
+                            "windowExpandIncremental": True,
+                            "windowStart": new_start,
+                            "windowEnd": new_end,
+                            "windowPhase": "scroll_prepend",
+                            "windowTrimmedEnd": trimmed_end,
+                            "timing": {
+                                "buildMs": build_ms,
+                                "prependCount": len(prepend_items),
+                                "itemCount": len(prepend_items),
+                            },
+                        }
                     return {
                         "state": self._gallery_state(),
-                        "items": batch_items,
+                        "items": [],
                         "hasMore": new_end < total,
-                        "replaceWindow": True,
-                        "windowStart": new_start,
-                        "windowEnd": new_end,
+                        "replaceWindow": False,
                     }
                 return self._gallery_load_window(target)
 
@@ -1055,7 +1278,7 @@ class GalleryBridgeMixin:
                     "replaceWindow": False,
                 }
 
-            # Tras un salto: ampliar la ventana hacia adelante sin perder el inicio.
+            # Tras un salto: extender solo el tramo nuevo hacia adelante (append).
             if window_start > 0 and loaded >= window_start:
                 gap = max(0, target - loaded)
                 extend_batches = self._extend_batch_count(gap, batch)
@@ -1068,15 +1291,21 @@ class GalleryBridgeMixin:
                         "hasMore": loaded < total,
                         "replaceWindow": False,
                     }
-                batch_items = self._gallery_items_for_range(window_start, new_end)
+                t_build = time.perf_counter()
+                batch_items = self._gallery_items_for_range(loaded, new_end)
+                build_ms = int((time.perf_counter() - t_build) * 1000)
                 self.gallery_unlimited_loaded = new_end
+                trimmed = self._maybe_trim_sliding_window()
                 return {
                     "state": self._gallery_state(),
                     "items": batch_items,
                     "hasMore": new_end < total,
-                    "replaceWindow": True,
+                    "replaceWindow": False,
                     "windowStart": window_start,
                     "windowEnd": new_end,
+                    "windowPhase": "scroll_append",
+                    "windowTrimmed": trimmed,
+                    "timing": {"buildMs": build_ms, "itemCount": len(batch_items)},
                 }
 
             # Modo append desde el inicio: extender sin reemplazar ítems ya cargados.

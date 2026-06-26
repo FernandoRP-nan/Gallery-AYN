@@ -3,6 +3,10 @@ export type GalleryPerfConfig = {
   unlimitedBatchSize: number;
   windowOverscanBefore: number;
   windowOverscanAfter: number;
+  jumpCoreOverscanBefore: number;
+  jumpCoreOverscanAfter: number;
+  slidingWindowEnabled: boolean;
+  slidingWindowMaxItems: number;
   thumbBuildWorkers: number;
   thumbHqWorkers: number;
   thumbHqVisibleSequential: number;
@@ -12,6 +16,10 @@ const DEFAULTS: GalleryPerfConfig = {
   unlimitedBatchSize: 48,
   windowOverscanBefore: 96,
   windowOverscanAfter: 160,
+  jumpCoreOverscanBefore: 32,
+  jumpCoreOverscanAfter: 48,
+  slidingWindowEnabled: true,
+  slidingWindowMaxItems: 896,
   thumbBuildWorkers: 8,
   thumbHqWorkers: 4,
   thumbHqVisibleSequential: 16,
@@ -44,6 +52,27 @@ export function applyGalleryPerfConfig(raw: Partial<GalleryPerfConfig>) {
       32,
       512,
     ),
+    jumpCoreOverscanBefore: clamp(
+      Number(raw.jumpCoreOverscanBefore ?? active.jumpCoreOverscanBefore) ||
+        DEFAULTS.jumpCoreOverscanBefore,
+      16,
+      128,
+    ),
+    jumpCoreOverscanAfter: clamp(
+      Number(raw.jumpCoreOverscanAfter ?? active.jumpCoreOverscanAfter) ||
+        DEFAULTS.jumpCoreOverscanAfter,
+      24,
+      160,
+    ),
+    slidingWindowEnabled: Boolean(
+      raw.slidingWindowEnabled ?? active.slidingWindowEnabled ?? DEFAULTS.slidingWindowEnabled,
+    ),
+    slidingWindowMaxItems: clamp(
+      Number(raw.slidingWindowMaxItems ?? active.slidingWindowMaxItems) ||
+        DEFAULTS.slidingWindowMaxItems,
+      320,
+      4096,
+    ),
     thumbBuildWorkers: clamp(
       Number(raw.thumbBuildWorkers ?? active.thumbBuildWorkers) || DEFAULTS.thumbBuildWorkers,
       2,
@@ -68,6 +97,18 @@ export function galleryPerfFromSettings(settings: Record<string, unknown> | unde
     unlimitedBatchSize: Number(settings?.gallery_unlimited_batch_size ?? DEFAULTS.unlimitedBatchSize),
     windowOverscanBefore: Number(settings?.gallery_window_overscan_before ?? DEFAULTS.windowOverscanBefore),
     windowOverscanAfter: Number(settings?.gallery_window_overscan_after ?? DEFAULTS.windowOverscanAfter),
+    jumpCoreOverscanBefore: Number(
+      settings?.gallery_jump_core_overscan_before ?? DEFAULTS.jumpCoreOverscanBefore,
+    ),
+    jumpCoreOverscanAfter: Number(
+      settings?.gallery_jump_core_overscan_after ?? DEFAULTS.jumpCoreOverscanAfter,
+    ),
+    slidingWindowEnabled: Boolean(
+      settings?.gallery_sliding_window_enabled ?? DEFAULTS.slidingWindowEnabled,
+    ),
+    slidingWindowMaxItems: Number(
+      settings?.gallery_sliding_window_max_items ?? DEFAULTS.slidingWindowMaxItems,
+    ),
     thumbBuildWorkers: Number(settings?.gallery_thumb_build_workers ?? DEFAULTS.thumbBuildWorkers),
     thumbHqWorkers: Number(settings?.gallery_thumb_hq_workers ?? DEFAULTS.thumbHqWorkers),
     thumbHqVisibleSequential: Number(

@@ -444,6 +444,15 @@ export const es = {
     unlimitedBatchLabel: "Tamaño de tanda (modo sin límite)",
     windowOverscanBefore: "Overscan hacia arriba (ítems)",
     windowOverscanAfter: "Overscan hacia abajo (ítems)",
+    jumpCoreOverscanBefore: "Core salto: overscan arriba (ítems)",
+    jumpCoreOverscanAfter: "Core salto: overscan abajo (ítems)",
+    perfPresetJumpCoreAggressive: "Salto rápido (core 32+48)",
+    jumpCoreHint:
+      "Primera tanda LQ al saltar por fecha. Valores bajos = destino visible antes; la expansión completa llega en segundo plano.",
+    slidingWindowEnabled: "Ventana deslizante (limitar ítems en RAM)",
+    slidingWindowMaxItems: "Máximo ítems en ventana",
+    slidingWindowHint:
+      "Al superar el máximo, se descartan miniaturas lejanas hacia arriba. Útil en scroll muy largo; al volver arriba se recargan solas.",
     thumbBuildWorkers: "Workers generación LQ",
     thumbHqWorkers: "Workers hidratación HQ",
     thumbHqVisibleSequential: "HQ visibles secuenciales",

@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable, get } from "svelte/store";
 import type { GalleryItem } from "./api";
 import {
   clearGalleryThumbHqCache,
@@ -10,6 +10,7 @@ import { stripHqFromGalleryItems } from "./galleryThumbHqCache";
 import { galleryScrolling } from "./galleryScrollState";
 import { galleryThumbPx } from "./thumbScale";
 import { listGalleryItemsNeedingHq } from "./galleryThumbNeeding";
+import { isGalleryHqJumpGraceActive } from "./gallerySession";
 import {
   cancelPendingGalleryThumbFlush as cancelPendingFlush,
   flushPendingThumbsOnScrollEnd,
@@ -22,14 +23,24 @@ export type { GalleryThumbHydrateOpts };
 export const galleryThumbHydrating = writable(false);
 
 let galleryLqLoading = false;
+let galleryExpandPending = false;
 
 /** Pausa hidratación HQ mientras hay cargas LQ en curso. */
 export function setGalleryLqLoading(active: boolean) {
   galleryLqLoading = Boolean(active);
 }
 
+/** Pausa HQ mientras la fase expand del salto está en curso. */
+export function setGalleryExpandPending(active: boolean) {
+  galleryExpandPending = Boolean(active);
+}
+
 function isGalleryLqLoading(): boolean {
   return galleryLqLoading;
+}
+
+function isGalleryExpandPending(): boolean {
+  return galleryExpandPending;
 }
 
 async function waitForLqIdle(token: number, maxMs = 120000): Promise<void> {
@@ -37,6 +48,35 @@ async function waitForLqIdle(token: number, maxMs = 120000): Promise<void> {
   while (isGalleryLqLoading() && isHydrationTokenActive(token)) {
     if (Date.now() - start > maxMs) return;
     await new Promise<void>((r) => setTimeout(r, 50));
+  }
+}
+
+async function waitForExpandIdle(token: number, maxMs = 120000): Promise<void> {
+  const start = Date.now();
+  while (isGalleryExpandPending() && isHydrationTokenActive(token)) {
+    if (Date.now() - start > maxMs) return;
+    await new Promise<void>((r) => setTimeout(r, 50));
+  }
+}
+
+/** Espera scroll estable antes de HQ (evita trabajo sobre layout transitorio). */
+async function waitForScrollStable(
+  token: number,
+  stableMs = 200,
+  maxMs = 8000,
+): Promise<void> {
+  const start = Date.now();
+  let stableSince = get(galleryScrolling) ? Date.now() : 0;
+  while (isHydrationTokenActive(token)) {
+    if (get(galleryScrolling)) {
+      stableSince = 0;
+    } else if (stableSince === 0) {
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= stableMs) {
+      return;
+    }
+    if (Date.now() - start > maxMs) return;
+    await new Promise<void>((r) => setTimeout(r, 40));
   }
 }
 
@@ -102,6 +142,14 @@ async function hydrateOnce(
   if (!isHydrationTokenActive(token)) return;
 
   await waitForLqIdle(token);
+  await waitForExpandIdle(token);
+  if (isGalleryHqJumpGraceActive()) {
+    if (get(galleryScrolling)) {
+      await new Promise<void>((r) => setTimeout(r, 60));
+    }
+  } else {
+    await waitForScrollStable(token);
+  }
 
   lastHydrationScale = scale;
   const allNeeding = listGalleryItemsNeedingHq(getGalleryItems());
@@ -129,6 +177,14 @@ async function hydrateOnce(
     ) {
       await new Promise<void>((r) => setTimeout(r, 180));
       await waitForLqIdle(token);
+      await waitForExpandIdle(token);
+      if (isGalleryHqJumpGraceActive()) {
+        if (get(galleryScrolling)) {
+          await new Promise<void>((r) => setTimeout(r, 60));
+        }
+      } else {
+        await waitForScrollStable(token);
+      }
       if (isHydrationTokenActive(token)) {
         remaining = await runGalleryThumbHydration(
           listGalleryItemsNeedingHq(getGalleryItems()),

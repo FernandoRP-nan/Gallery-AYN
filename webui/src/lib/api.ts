@@ -251,8 +251,13 @@ export const bridge = {
   galleryLoadFolder: (path: string) => call<any>("gallery_load_folder", path),
   galleryReload: () => call<any>("gallery_reload"),
   galleryLoadMore: () => call<any>("gallery_load_more"),
-  galleryLoadUntilIndex: (targetIndex: number, jump = false) =>
-    call<any>("gallery_load_until_index", Math.max(0, Math.floor(targetIndex)), Boolean(jump)),
+  galleryLoadUntilIndex: (targetIndex: number, jump = false, expand = false) =>
+    call<any>(
+      "gallery_load_until_index",
+      Math.max(0, Math.floor(targetIndex)),
+      Boolean(jump),
+      Boolean(expand),
+    ),
   galleryPinFolder: (path: string) => call<any>("gallery_pin_folder", path),
   galleryUnpinFolder: (path: string) => call<any>("gallery_unpin_folder", path),
   galleryGoPage: (page: number) => call<any>("gallery_go_page", page),

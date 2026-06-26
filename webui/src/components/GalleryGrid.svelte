@@ -592,6 +592,11 @@
     return `top:${entry.top}px;left:${entry.left}px;width:${entry.width}px;height:${entry.height}px`;
   }
 
+  /** Evita micro-saltos de scroll cuando solo se amplía la ventana hacia abajo. */
+  export function suppressScrollPreserve(ms = 800) {
+    scrollPreserveSuppressUntil = Date.now() + ms;
+  }
+
   /** Ancla el scroll al índice de medio tras un salto (layout virtual estable). */
   export function scrollToMediaIndex(index: number, align: "start" | "center" = "start"): boolean {
     if (!fullVirtualEnabled || !galleryScrollEl) return false;

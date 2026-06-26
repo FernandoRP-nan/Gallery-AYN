@@ -3,7 +3,9 @@ import type { GalleryItem } from "./api";
 import {
   countSelectedGalleryItems,
   mergeItemsKeepingBestThumb,
+  isGalleryMediaKind,
 } from "./galleryUtils";
+import { getGalleryPerfConfig } from "./galleryPerfConfig";
 import {
   enrichItemsFromVisitedCache,
   stashGalleryItemsInVisitedCache,
@@ -18,9 +20,12 @@ import { galleryDbg } from "./galleryDebugLog";
 export type GalleryMutationResponse = {
   state?: GalleryState;
   items?: GalleryItem[];
+  prependItems?: GalleryItem[];
+  appendItems?: GalleryItem[];
   removedPaths?: string[];
   delta?: boolean;
   replaceWindow?: boolean;
+  windowExpandIncremental?: boolean;
   windowStart?: number;
   windowEnd?: number;
 };
@@ -99,6 +104,131 @@ export function mergeGalleryItemsFromApi(
   }
 }
 
+/** Añade ítems al final sin descartar la ventana ya cargada (scroll hacia abajo). */
+export function appendGalleryItemsFromApi(
+  nextItems: GalleryItem[],
+  state?: GalleryState,
+  opts?: { preserveSelection?: boolean },
+) {
+  if (!Array.isArray(nextItems) || nextItems.length === 0) {
+    if (state) setGalleryStateFromApi(state);
+    return;
+  }
+  const prevItems = getGalleryItems();
+  const prevPaths = new Set(prevItems.map((x) => x.path));
+  seedGalleryThumbHqFromItems(nextItems);
+  const mergedBatch = mergeItemsKeepingBestThumb(prevItems, nextItems, opts);
+  const appended = mergedBatch.filter((it) => !prevPaths.has(it.path));
+  if (appended.length === 0) {
+    if (state) setGalleryStateFromApi(state);
+    return;
+  }
+  const next = stripHqFromGalleryItems([...prevItems, ...appended]);
+  galleryItems.set(next);
+  if (state) {
+    galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
+    galleryDbg("window", "ventana ampliada (append)", {
+      windowStart: state.windowStart ?? 0,
+      endIndex: state.endIndex ?? 0,
+      appendCount: appended.length,
+      itemCount: next.length,
+    });
+  } else {
+    syncSelectedCountFromItems();
+  }
+  if (state) applySlidingWindowTrim(state);
+}
+
+/** Recorta ítems antiguos fuera de la ventana deslizante (RAM estable al scroll largo). */
+export function applySlidingWindowTrim(state?: GalleryState): number {
+  const st = state ?? getGalleryState();
+  const end = Number(st.endIndex ?? 0);
+  let ws = Number(st.windowStart ?? 0);
+  const perf = getGalleryPerfConfig();
+  if (!perf.slidingWindowEnabled || end <= ws) return 0;
+  if (end - ws <= perf.slidingWindowMaxItems) return 0;
+  ws = Math.max(0, end - perf.slidingWindowMaxItems);
+
+  const prev = getGalleryItems();
+  const removedPaths: string[] = [];
+  const kept = prev.filter((it) => {
+    if (it.kind === "folder" || it.kind === "folder_up") return true;
+    if (it.kind === "section" || it.kind === "day_break") return true;
+    if (!isGalleryMediaKind(it.kind)) return true;
+    const idx = it.mediaIndex;
+    if (typeof idx !== "number" || !Number.isFinite(idx)) return true;
+    if (idx < ws) {
+      removedPaths.push(it.path);
+      return false;
+    }
+    return true;
+  });
+
+  const prevWs = Number(st.windowStart ?? 0);
+  if (removedPaths.length === 0 && ws === prevWs) return 0;
+
+  if (removedPaths.length > 0) removeGalleryThumbHq(new Set(removedPaths));
+  const next = stripHqFromGalleryItems(kept);
+  galleryItems.set(next);
+  galleryState.set({
+    ...st,
+    windowStart: ws,
+    selectedCount: countSelectedGalleryItems(next),
+  });
+  galleryDbg("window", "ventana recortada (sliding)", {
+    windowStart: ws,
+    endIndex: end,
+    removed: removedPaths.length,
+    itemCount: next.length,
+  });
+  return removedPaths.length;
+}
+
+/** Recorta ítems posteriores al prepend hacia atrás (ventana deslizante). */
+export function applySlidingWindowTrimFromEnd(state?: GalleryState): number {
+  const st = state ?? getGalleryState();
+  let end = Number(st.endIndex ?? 0);
+  const ws = Number(st.windowStart ?? 0);
+  const perf = getGalleryPerfConfig();
+  if (!perf.slidingWindowEnabled || end <= ws) return 0;
+  if (end - ws <= perf.slidingWindowMaxItems) return 0;
+  end = ws + perf.slidingWindowMaxItems;
+
+  const prev = getGalleryItems();
+  const removedPaths: string[] = [];
+  const kept = prev.filter((it) => {
+    if (it.kind === "folder" || it.kind === "folder_up") return true;
+    if (it.kind === "section" || it.kind === "day_break") return true;
+    if (!isGalleryMediaKind(it.kind)) return true;
+    const idx = it.mediaIndex;
+    if (typeof idx !== "number" || !Number.isFinite(idx)) return true;
+    if (idx >= end) {
+      removedPaths.push(it.path);
+      return false;
+    }
+    return true;
+  });
+
+  const prevEnd = Number(st.endIndex ?? 0);
+  if (removedPaths.length === 0 && end === prevEnd) return 0;
+
+  if (removedPaths.length > 0) removeGalleryThumbHq(new Set(removedPaths));
+  const next = stripHqFromGalleryItems(kept);
+  galleryItems.set(next);
+  galleryState.set({
+    ...st,
+    endIndex: end,
+    selectedCount: countSelectedGalleryItems(next),
+  });
+  galleryDbg("window", "ventana recortada (sliding end)", {
+    windowStart: ws,
+    endIndex: end,
+    removed: removedPaths.length,
+    itemCount: next.length,
+  });
+  return removedPaths.length;
+}
+
 /** Elimina rutas del store local y sincroniza metadatos (respuesta delta del API). */
 function pruneOrphanGallerySections(items: GalleryItem[]): GalleryItem[] {
   const out: GalleryItem[] = [];
@@ -154,6 +284,59 @@ export function applyGalleryWindowItems(windowItems: GalleryItem[], state?: Gall
     });
   } else {
     syncSelectedCountFromItems();
+  }
+}
+
+/** Amplía la ventana tras salto sin reemplazar el núcleo ya renderizado. */
+export function applyGalleryWindowExpand(
+  prependItems: GalleryItem[],
+  appendItems: GalleryItem[],
+  state?: GalleryState,
+) {
+  const prep = Array.isArray(prependItems) ? prependItems : [];
+  const app = Array.isArray(appendItems) ? appendItems : [];
+  if (prep.length === 0 && app.length === 0) {
+    if (state) setGalleryStateFromApi(state);
+    return;
+  }
+  const prevItems = getGalleryItems();
+  stashGalleryItemsInVisitedCache(prevItems);
+  const prefix = prevItems.filter(
+    (it) => it.kind === "folder" || it.kind === "folder_up",
+  );
+  const media = prevItems.filter(
+    (it) =>
+      it.kind !== "folder" &&
+      it.kind !== "folder_up" &&
+      it.kind !== "section" &&
+      it.kind !== "day_break",
+  );
+  seedGalleryThumbHqFromItems([...prep, ...app]);
+  const prepMerged = enrichItemsFromVisitedCache(prevItems, prep);
+  const appMerged = enrichItemsFromVisitedCache(prevItems, app);
+  const next = stripHqFromGalleryItems([...prefix, ...prepMerged, ...media, ...appMerged]);
+  galleryItems.set(next);
+  if (state) {
+    galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
+    galleryDbg("window", "ventana ampliada (incremental)", {
+      windowStart: state.windowStart ?? 0,
+      endIndex: state.endIndex ?? 0,
+      total: state.total ?? 0,
+      prependCount: prep.length,
+      appendCount: app.length,
+    });
+  } else {
+    syncSelectedCountFromItems();
+  }
+  if (state) {
+    if (prep.length > 0 && app.length === 0) {
+      applySlidingWindowTrimFromEnd(state);
+    } else if (app.length > 0 && prep.length === 0) {
+      applySlidingWindowTrim(state);
+    } else {
+      applySlidingWindowTrim(state);
+      applySlidingWindowTrimFromEnd(state);
+    }
   }
 }
 

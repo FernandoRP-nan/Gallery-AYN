@@ -203,3 +203,4 @@ class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, Select
         # Caché de listados escaneados (reabrir la misma carpeta evita re-stat masivo).
         self._gallery_scan_cache: dict[tuple, dict] = {}
         self._last_scan_source = "fresh"
+        self._jump_expand_center = 0

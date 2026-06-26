@@ -30,6 +30,10 @@
   export let galleryUnlimitedBatchSize: number;
   export let galleryWindowOverscanBefore: number;
   export let galleryWindowOverscanAfter: number;
+  export let galleryJumpCoreOverscanBefore: number;
+  export let galleryJumpCoreOverscanAfter: number;
+  export let gallerySlidingWindowEnabled: boolean;
+  export let gallerySlidingWindowMaxItems: number;
   export let galleryThumbBuildWorkers: number;
   export let galleryThumbHqWorkers: number;
   export let galleryThumbHqVisibleSequential: number;
@@ -120,6 +124,10 @@
           bind:galleryUnlimitedBatchSize
           bind:galleryWindowOverscanBefore
           bind:galleryWindowOverscanAfter
+          bind:galleryJumpCoreOverscanBefore
+          bind:galleryJumpCoreOverscanAfter
+          bind:gallerySlidingWindowEnabled
+          bind:gallerySlidingWindowMaxItems
           bind:galleryThumbBuildWorkers
           bind:galleryThumbHqWorkers
           bind:galleryThumbHqVisibleSequential

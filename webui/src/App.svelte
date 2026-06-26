@@ -290,12 +290,20 @@
   let galleryUnlimitedBatchSize = 48;
   let galleryWindowOverscanBefore = 96;
   let galleryWindowOverscanAfter = 160;
+  let galleryJumpCoreOverscanBefore = 32;
+  let galleryJumpCoreOverscanAfter = 48;
+  let gallerySlidingWindowEnabled = false;
+  let gallerySlidingWindowMaxItems = 896;
   let galleryThumbBuildWorkers = 8;
   let galleryThumbHqWorkers = 4;
   let galleryThumbHqVisibleSequential = 16;
   let galleryUnlimitedBatchSizeBackup = 48;
   let galleryWindowOverscanBeforeBackup = 96;
   let galleryWindowOverscanAfterBackup = 160;
+  let galleryJumpCoreOverscanBeforeBackup = 32;
+  let galleryJumpCoreOverscanAfterBackup = 48;
+  let gallerySlidingWindowEnabledBackup = false;
+  let gallerySlidingWindowMaxItemsBackup = 896;
   let galleryThumbBuildWorkersBackup = 8;
   let galleryThumbHqWorkersBackup = 4;
   let galleryThumbHqVisibleSequentialBackup = 16;
@@ -779,6 +787,10 @@
     galleryUnlimitedBatchSize = perfCfg.unlimitedBatchSize;
     galleryWindowOverscanBefore = perfCfg.windowOverscanBefore;
     galleryWindowOverscanAfter = perfCfg.windowOverscanAfter;
+    galleryJumpCoreOverscanBefore = perfCfg.jumpCoreOverscanBefore;
+    galleryJumpCoreOverscanAfter = perfCfg.jumpCoreOverscanAfter;
+    gallerySlidingWindowEnabled = perfCfg.slidingWindowEnabled;
+    gallerySlidingWindowMaxItems = perfCfg.slidingWindowMaxItems;
     galleryThumbBuildWorkers = perfCfg.thumbBuildWorkers;
     galleryThumbHqWorkers = perfCfg.thumbHqWorkers;
     galleryThumbHqVisibleSequential = perfCfg.thumbHqVisibleSequential;
@@ -1262,6 +1274,10 @@
     galleryUnlimitedBatchSizeBackup = galleryUnlimitedBatchSize;
     galleryWindowOverscanBeforeBackup = galleryWindowOverscanBefore;
     galleryWindowOverscanAfterBackup = galleryWindowOverscanAfter;
+    galleryJumpCoreOverscanBeforeBackup = galleryJumpCoreOverscanBefore;
+    galleryJumpCoreOverscanAfterBackup = galleryJumpCoreOverscanAfter;
+    gallerySlidingWindowEnabledBackup = gallerySlidingWindowEnabled;
+    gallerySlidingWindowMaxItemsBackup = gallerySlidingWindowMaxItems;
     galleryThumbBuildWorkersBackup = galleryThumbBuildWorkers;
     galleryThumbHqWorkersBackup = galleryThumbHqWorkers;
     galleryThumbHqVisibleSequentialBackup = galleryThumbHqVisibleSequential;
@@ -1291,6 +1307,10 @@
     galleryUnlimitedBatchSize = galleryUnlimitedBatchSizeBackup;
     galleryWindowOverscanBefore = galleryWindowOverscanBeforeBackup;
     galleryWindowOverscanAfter = galleryWindowOverscanAfterBackup;
+    galleryJumpCoreOverscanBefore = galleryJumpCoreOverscanBeforeBackup;
+    galleryJumpCoreOverscanAfter = galleryJumpCoreOverscanAfterBackup;
+    gallerySlidingWindowEnabled = gallerySlidingWindowEnabledBackup;
+    gallerySlidingWindowMaxItems = gallerySlidingWindowMaxItemsBackup;
     galleryThumbBuildWorkers = galleryThumbBuildWorkersBackup;
     galleryThumbHqWorkers = galleryThumbHqWorkersBackup;
     galleryThumbHqVisibleSequential = galleryThumbHqVisibleSequentialBackup;
@@ -1332,6 +1352,9 @@
     galleryUnlimitedBatchSize = clampSettingInt(galleryUnlimitedBatchSize, 24, 256, 48);
     galleryWindowOverscanBefore = clampSettingInt(galleryWindowOverscanBefore, 32, 512, 96);
     galleryWindowOverscanAfter = clampSettingInt(galleryWindowOverscanAfter, 32, 512, 160);
+    galleryJumpCoreOverscanBefore = clampSettingInt(galleryJumpCoreOverscanBefore, 16, 128, 32);
+    galleryJumpCoreOverscanAfter = clampSettingInt(galleryJumpCoreOverscanAfter, 24, 160, 48);
+    gallerySlidingWindowMaxItems = clampSettingInt(gallerySlidingWindowMaxItems, 320, 4096, 896);
     galleryThumbBuildWorkers = clampSettingInt(galleryThumbBuildWorkers, 2, 16, 8);
     galleryThumbHqWorkers = clampSettingInt(galleryThumbHqWorkers, 1, 16, 4);
     galleryThumbHqVisibleSequential = clampSettingInt(galleryThumbHqVisibleSequential, 4, 32, 16);
@@ -1354,6 +1377,10 @@
         gallery_unlimited_batch_size: galleryUnlimitedBatchSize,
         gallery_window_overscan_before: galleryWindowOverscanBefore,
         gallery_window_overscan_after: galleryWindowOverscanAfter,
+        gallery_jump_core_overscan_before: galleryJumpCoreOverscanBefore,
+        gallery_jump_core_overscan_after: galleryJumpCoreOverscanAfter,
+        gallery_sliding_window_enabled: Boolean(gallerySlidingWindowEnabled),
+        gallery_sliding_window_max_items: gallerySlidingWindowMaxItems,
         gallery_thumb_build_workers: galleryThumbBuildWorkers,
         gallery_thumb_hq_workers: galleryThumbHqWorkers,
         gallery_thumb_hq_visible_sequential: galleryThumbHqVisibleSequential,
@@ -1389,6 +1416,10 @@
         unlimitedBatchSize: galleryUnlimitedBatchSize,
         windowOverscanBefore: galleryWindowOverscanBefore,
         windowOverscanAfter: galleryWindowOverscanAfter,
+        jumpCoreOverscanBefore: galleryJumpCoreOverscanBefore,
+        jumpCoreOverscanAfter: galleryJumpCoreOverscanAfter,
+        slidingWindowEnabled: gallerySlidingWindowEnabled,
+        slidingWindowMaxItems: gallerySlidingWindowMaxItems,
         thumbBuildWorkers: galleryThumbBuildWorkers,
         thumbHqWorkers: galleryThumbHqWorkers,
         thumbHqVisibleSequential: galleryThumbHqVisibleSequential,
@@ -5171,6 +5202,10 @@
       bind:galleryUnlimitedBatchSize
       bind:galleryWindowOverscanBefore
       bind:galleryWindowOverscanAfter
+      bind:galleryJumpCoreOverscanBefore
+      bind:galleryJumpCoreOverscanAfter
+      bind:gallerySlidingWindowEnabled
+      bind:gallerySlidingWindowMaxItems
       bind:galleryThumbBuildWorkers
       bind:galleryThumbHqWorkers
       bind:galleryThumbHqVisibleSequential
