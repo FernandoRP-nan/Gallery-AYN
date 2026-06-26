@@ -482,6 +482,10 @@
     object-fit: contain;
   }
 /* Sin LQ (HQ inmediata o tras crossfade): la HQ debe ser estática o el stack colapsa a 0px. */
+.grid-masonry .tile.tile--masonry .thumb-stack__lq,
+.grid-masonry .tile.tile--masonry .thumb-stack__hq {
+    max-height: var(--masonry-max-h, none);
+}
 .grid-masonry .tile.tile--masonry .thumb-stack:not(:has(.thumb-stack__lq)) .thumb-stack__hq {
     position: static;
     display: block;

@@ -144,22 +144,9 @@ def _img_to_data_url_contain(path: Path, max_w: int, max_h: int) -> str | None:
         return None
 
 def _thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 90) -> str | None:
-    """Miniatura cuadrada para la rejilla; JPEG reduce mucho el tamaño frente a PNG."""
-    if Image is None:
-        return None
-    try:
-        with Image.open(path) as im:
-            im = im.convert("RGB")
-            if ImageOps is not None:
-                im = ImageOps.fit(im, (size, size), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-            else:
-                im.thumbnail((size, size), Image.Resampling.LANCZOS)
-            bio = io.BytesIO()
-            im.save(bio, format="JPEG", quality=quality, optimize=True)
-            payload = base64.b64encode(bio.getvalue()).decode("ascii")
-            return f"data:image/jpeg;base64,{payload}"
-    except Exception:
-        return None
+    from ..core.thumbs import thumb_jpeg_data_url_square
+
+    return thumb_jpeg_data_url_square(path, size, quality=quality)
 
 def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) -> str | None:
     """Miniatura modal destino: encaja en size×size manteniendo proporción."""
@@ -217,25 +204,22 @@ def _video_thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quali
     """Primer fotograma del vídeo con proporción original (vista masonry)."""
     import subprocess
 
+    from ..core.thumbs import ffmpeg_masonry_scale_filter
     from ..core.video_tools import resolve_ffmpeg
 
     ffmpeg = resolve_ffmpeg()
     if not ffmpeg:
         return None
 
-    mw, mh = max(48, int(max_w)), max(48, int(max_h))
-    if mw % 2:
-        mw += 1
-    if mh % 2:
-        mh += 1
     try:
+        vf = ffmpeg_masonry_scale_filter(max_w, max_h)
         result = subprocess.run(
             [
                 ffmpeg, "-y",
                 "-ss", "0.5",
                 "-i", str(path),
                 "-vframes", "1",
-                "-vf", f"scale={mw}:{mh}:force_original_aspect_ratio=decrease",
+                "-vf", vf,
                 "-f", "image2pipe",
                 "-vcodec", "mjpeg",
                 "-q:v", str(max(2, min(31, int((100 - quality) / 3)))),
@@ -570,7 +554,7 @@ class EditorBridgeMixin:
             else "balanced"
         )
         masonry = bool(self.settings.get("gallery_masonry_view", False))
-        key = (str(path.resolve()), thumb_px, profile, preset_key, masonry)
+        key = (str(path.resolve()), thumb_px, profile, preset_key, masonry, "portrait-v2")
         try:
             mtime = path.stat().st_mtime
         except OSError:

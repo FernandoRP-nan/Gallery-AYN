@@ -3951,11 +3951,12 @@
 
   function openEditFromCtx() {
     if (destCtxMenu === null) return;
-    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
+    const idx = destCtxMenu.idx;
+    const node = destNodeAtToolbarIdx(idx);
     closeDestCtxMenu();
     if (!node || !isDestNode(node)) return;
     destFormMode = "edit";
-    destFormIdx = destCtxMenu.idx;
+    destFormIdx = idx;
     destFormLabel = node.label;
     destFormPath = node.path;
     destFormOpen = true;
