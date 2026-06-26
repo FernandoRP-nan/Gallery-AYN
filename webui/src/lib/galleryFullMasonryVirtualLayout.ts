@@ -1,6 +1,8 @@
 import type { GalleryItem } from "./api";
 import type { VirtualLayoutEntry } from "./galleryVirtualLayout";
 import { resolveVirtualLayoutSpans } from "./galleryLayoutSpans";
+import { resolveMasonrySlotHeight } from "./galleryMasonryHeightCache";
+import { masonryMaxHeightPx } from "./galleryMasonryLayoutMetrics";
 import {
   type GalleryFullVirtualLayout,
   type GalleryLayoutMode,
@@ -9,25 +11,10 @@ import {
 } from "./galleryFullVirtualLayout";
 
 export type { GalleryFullVirtualLayout, GalleryScrollMarker };
+export { masonryTileHeightPx, masonryDisplayHeightPx } from "./galleryMasonryLayoutMetrics";
 
 const END_SPACER_PX = 58;
-const MASONRY_HEIGHT_FACTOR = 2.4;
-const TILE_PAD_PX = 8;
 const FOLDER_TILE_PAD_PX = 16;
-
-/** Proporciones pseudo-deterministas (ancho:alto) para huecos sin miniatura. */
-const PLACEHOLDER_ASPECTS: Array<[number, number]> = [
-  [3, 4],
-  [4, 3],
-  [16, 9],
-  [9, 16],
-  [1, 1],
-  [5, 7],
-  [7, 5],
-  [2, 3],
-  [3, 2],
-  [4, 5],
-];
 
 function sectionHeightPx(item: GalleryItem): number {
   if (item.path.includes("section:timeline:")) return 72;
@@ -40,55 +27,6 @@ function placeholderItem(mediaIndex: number): GalleryItem {
     name: "",
     path: `placeholder:media:${mediaIndex}`,
   };
-}
-
-/** Altura de tile masonry alineada con masonry_thumb_target_size del backend. */
-export function masonryTileHeightPx(
-  colWidth: number,
-  maxH: number,
-  mediaIndex: number,
-  tilePadding = TILE_PAD_PX,
-): number {
-  const [sw, sh] = PLACEHOLDER_ASPECTS[mediaIndex % PLACEHOLDER_ASPECTS.length];
-  const jitter = 1 + ((mediaIndex * 17) % 11) / 100;
-  const srcH = sh * jitter;
-  const srcW = sw;
-  if (srcH > srcW) {
-    const th = Math.min(maxH, Math.max(1, Math.round(colWidth * (srcH / srcW))));
-    return th + tilePadding * 2;
-  }
-  const ratio = Math.min(colWidth / srcW, maxH / srcH);
-  const th = Math.max(1, Math.round(srcH * ratio));
-  return th + tilePadding * 2;
-}
-
-/** Altura visible de imagen masonry (sin padding del tile). */
-function masonryDisplayHeightPx(
-  colWidth: number,
-  maxH: number,
-  srcW: number,
-  srcH: number,
-): number {
-  if (srcH > srcW) {
-    return Math.min(maxH, Math.max(1, Math.round(colWidth * (srcH / srcW))));
-  }
-  const ratio = Math.min(colWidth / srcW, maxH / srcH);
-  return Math.max(1, Math.round(srcH * ratio));
-}
-
-function masonryItemHeightPx(
-  item: GalleryItem,
-  colWidth: number,
-  maxH: number,
-  mediaIndex: number,
-  tilePadding = TILE_PAD_PX,
-): number {
-  const tw = item.thumbW;
-  const th = item.thumbH;
-  if (typeof tw === "number" && typeof th === "number" && tw > 0 && th > 0) {
-    return masonryDisplayHeightPx(colWidth, maxH, tw, th) + tilePadding * 2;
-  }
-  return masonryTileHeightPx(colWidth, maxH, mediaIndex, tilePadding);
 }
 
 function folderTileHeightPx(colWidth: number): number {
@@ -122,6 +60,8 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
   containerWidth: number;
   cellTargetPx: number;
   gapPx: number;
+  rowGapPx?: number;
+  tilePaddingPx?: number;
   edgePadPx: number;
   extraBottomPx?: number;
 }): GalleryFullVirtualLayout {
@@ -134,6 +74,8 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
     containerWidth,
     cellTargetPx,
     gapPx,
+    rowGapPx = gapPx,
+    tilePaddingPx = 8,
     edgePadPx,
     extraBottomPx = 0,
   } = opts;
@@ -142,7 +84,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
   const columnCount = Math.max(1, Math.floor((inner + gapPx) / (cellTargetPx + gapPx)));
   const colWidth =
     columnCount > 0 ? (inner - (columnCount - 1) * gapPx) / columnCount : cellTargetPx;
-  const maxH = Math.round(cellTargetPx * MASONRY_HEIGHT_FACTOR);
+  const maxH = masonryMaxHeightPx(cellTargetPx);
 
   const entries: VirtualLayoutEntry[] = [];
   const markers: GalleryScrollMarker[] = [];
@@ -161,7 +103,6 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
     for (let c = 0; c < columnCount; c += 1) colTops[c] = y;
   };
 
-  const colMinTop = () => Math.min(...colTops);
   const colMaxTop = () => Math.max(...colTops);
   const shortestCol = () => {
     let pick = 0;
@@ -191,7 +132,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
       sectionLabel: label,
     });
     markers.push({ label, kind, top, height, startIndex });
-    syncColsTo(top + height + gapPx);
+    syncColsTo(top + height + rowGapPx);
   };
 
   for (const folder of folderItems) {
@@ -206,7 +147,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
       width: colWidth,
       height,
     });
-    colTops[col] = top + height + gapPx;
+    colTops[col] = top + height + rowGapPx;
   }
 
   const emitMediaRange = (
@@ -224,7 +165,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
       const item = mediaByIndex.get(mediaIndex) ?? placeholderItem(mediaIndex);
       const col = shortestCol();
       const top = colTops[col];
-      const height = masonryItemHeightPx(item, colWidth, maxH, mediaIndex);
+      const height = resolveMasonrySlotHeight(item, mediaIndex, colWidth, maxH, tilePaddingPx);
       entries.push({
         item,
         index: entryIndex++,
@@ -234,7 +175,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
         height,
         mediaIndex,
       });
-      colTops[col] = top + height + gapPx;
+      colTops[col] = top + height + rowGapPx;
     }
   };
 

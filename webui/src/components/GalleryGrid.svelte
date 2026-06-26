@@ -14,8 +14,11 @@
     virtualLoadedTopY,
     type GalleryLayoutMode,
     type GalleryLayoutSpan,
+    type GalleryFullVirtualLayout,
   } from "../lib/galleryFullVirtualLayout";
   import { buildGalleryFullMasonryVirtualLayout } from "../lib/galleryFullMasonryVirtualLayout";
+  import { seedMasonryHeightsFromItems } from "../lib/galleryMasonryHeightCache";
+  import { masonryMaxHeightPx, MASONRY_TILE_PAD_PX } from "../lib/galleryMasonryLayoutMetrics";
   import GalleryScrollGutter from "./GalleryScrollGutter.svelte";
   import {
     buildMasonrySegments,
@@ -25,6 +28,12 @@
   import GalleryMessSuggestions from "./GalleryMessSuggestions.svelte";
   import DestToolbar from "./DestToolbar.svelte";
   import type { DestToolbarItem } from "../lib/itemTree";
+  import { galleryDbg } from "../lib/galleryDebugLog";
+  import {
+    effectiveUnlimitedBatchSize,
+    getGalleryPerfConfig,
+    isSmallGalleryTotal,
+  } from "../lib/galleryPerfConfig";
 
   export let galleryGridItems: any[];
   export let gridCellPx: number;
@@ -85,23 +94,34 @@
   export let galleryTargetFolder = "";
   export let messSuggestionsMasonry = true;
   export let galleryMasonryView = false;
+  export let galleryMasonryTightSpacing = false;
   export let unlimitedScroll = false;
   export let layoutMode: GalleryLayoutMode = "flat";
   export let layoutSpans: GalleryLayoutSpan[] = [];
   export let totalMediaCount = 0;
   export let galleryWindowStart = 0;
   export let galleryLoadedEnd = 0;
-  export let onRequestLoadUntilIndex: (targetIndex: number, jump?: boolean) => void = () => {};
+  export let onRequestLoadUntilIndex: (
+    targetIndex: number,
+    jump?: boolean,
+    urgent?: boolean,
+  ) => void = () => {};
   export let onCancelBackgroundLoad: () => void = () => {};
   export let onCancelScrollLoads: () => void = () => {};
   export let onMessSuggestionMoved: () => void = () => {};
 
   const SCROLL_LOAD_IDLE_MS = 400;
+  const SCROLL_LOAD_IDLE_SMALL_MS = 180;
   const SCROLL_STABLE_MS = 280;
+  const SCROLL_STABLE_SMALL_MS = 140;
   const WINDOW_JUMP_MARGIN = 128;
-  /** Precarga hacia adelante mientras bajas por miniaturas ya cargadas (~1.5 pantallas antes del borde). */
+  /** Precarga hacia adelante mientras bajas por miniaturas ya cargadas. */
   const PREFETCH_LEAD_VIEWPORTS = 1.5;
-  const PREFETCH_THROTTLE_MS = 180;
+  const PREFETCH_LEAD_VIEWPORTS_SMALL = 2.75;
+  const PREFETCH_THROTTLE_MS = 280;
+  const PREFETCH_THROTTLE_AGGRESSIVE_MS = 100;
+  /** Índices de hueco scroll→loadedEnd que activan prefetch urgente. */
+  const PREFETCH_AGGRESSIVE_GAP = 40;
 
   let messSuggestionsRefresh = 0;
   function handleMessSuggestionMoved() {
@@ -112,6 +132,9 @@
   let scrollTop = 0;
   let scrollViewportH = 640;
   let scrollViewportW = 640;
+  let scrollPreserveSuppressUntil = 0;
+  let prevVirtualLayout: GalleryFullVirtualLayout | null = null;
+  let scrollTopBeforeLayout = 0;
   let resizeObserver: ResizeObserver | null = null;
   let masonryInnerEl: HTMLDivElement | null = null;
   let masonryInnerH = 0;
@@ -126,6 +149,7 @@
   let lastScrollCancelTs = 0;
   let prevGalleryScrolling = false;
   let scrollDragActive = false;
+  let lastScrollLogTs = 0;
 
   function clearViewportLoadTimers() {
     if (viewportLoadTimer !== null) {
@@ -149,6 +173,11 @@
     scrollDragActive = true;
     clearViewportLoadTimers();
     onCancelScrollLoads();
+    galleryDbg("scroll_drag", "inicio arrastre scrollbar", {
+      scrollTop,
+      windowStart: galleryWindowStart,
+      loadedEnd: galleryLoadedEnd,
+    });
   }
 
   /** Índice de medio en la posición actual del scroll (para salto al soltar el scrollbar). */
@@ -193,7 +222,21 @@
     railJumpSuppressUntil = Date.now() + 3000;
 
     const target = scrollAnchorMediaIndex();
-    onRequestLoadUntilIndex(target, true);
+    if (target >= galleryWindowStart && target < galleryLoadedEnd) {
+      scheduleViewportLoadAfterScrollIdle();
+      return;
+    }
+    const far =
+      target < galleryWindowStart - WINDOW_JUMP_MARGIN ||
+      target >= galleryLoadedEnd + WINDOW_JUMP_MARGIN;
+    galleryDbg("scroll_drag", "fin arrastre scrollbar", {
+      targetIndex: target,
+      jump: far,
+      scrollTop,
+      windowStart: galleryWindowStart,
+      loadedEnd: galleryLoadedEnd,
+    });
+    onRequestLoadUntilIndex(target, far);
   }
 
   function handleScrollMouseDown(e: MouseEvent) {
@@ -217,6 +260,24 @@
   $: extraBottomPx = destinationsMode ? DEST_BAR_RESERVE_PX : 0;
   $: folderItems = galleryGridItems.filter((it) => it.kind === "folder" || it.kind === "folder_up");
   $: mediaByIndex = buildMediaIndexMap(galleryGridItems);
+  $: masonrySeedColWidth = (() => {
+    const inner = Math.max(0, scrollViewportW - GALLERY_GRID_EDGE_PAD_PX * 2);
+    const columnCount = Math.max(1, Math.floor((inner + thumbGapPx) / (gridCellPx + thumbGapPx)));
+    return columnCount > 0
+      ? (inner - (columnCount - 1) * thumbGapPx) / columnCount
+      : gridCellPx;
+  })();
+  $: masonryRowGapPx = galleryMasonryTightSpacing ? 0 : thumbGapPx;
+  $: masonryTilePadPx = galleryMasonryTightSpacing ? 0 : MASONRY_TILE_PAD_PX;
+  $: masonryTilePadCssPx = galleryMasonryTightSpacing ? 0 : 4;
+  $: if (galleryMasonryView && galleryGridItems.length > 0) {
+    seedMasonryHeightsFromItems(
+      galleryGridItems,
+      masonrySeedColWidth,
+      masonryMaxHeightPx(gridCellPx),
+      masonryTilePadPx,
+    );
+  }
   $: fullVirtualEnabled = unlimitedScroll && totalMediaCount > 0;
   $: fullVirtualLayout = fullVirtualEnabled
     ? galleryMasonryView
@@ -229,6 +290,8 @@
           containerWidth: scrollViewportW,
           cellTargetPx: gridCellPx,
           gapPx: thumbGapPx,
+          rowGapPx: masonryRowGapPx,
+          tilePaddingPx: masonryTilePadPx,
           edgePadPx: GALLERY_GRID_EDGE_PAD_PX,
           extraBottomPx,
         })
@@ -258,10 +321,71 @@
     scrollTop,
     scrollViewportH
   );
+
+  function mediaIndexAtLayoutY(entries: VirtualLayoutEntry[], anchorY: number): number {
+    for (const e of entries) {
+      if (e.mediaIndex == null) continue;
+      if (anchorY >= e.top && anchorY < e.top + e.height) return e.mediaIndex;
+    }
+    let best = -1;
+    let bestTop = -1;
+    for (const e of entries) {
+      if (e.mediaIndex == null) continue;
+      if (e.top <= anchorY && e.top >= bestTop) {
+        bestTop = e.top;
+        best = e.mediaIndex;
+      }
+    }
+    return best;
+  }
+
+  function scrollTopPreservingAnchor(
+    oldLayout: GalleryFullVirtualLayout,
+    newLayout: GalleryFullVirtualLayout,
+    oldScrollTop: number,
+    viewportH: number,
+  ): number {
+    const anchorY = oldScrollTop + viewportH * 0.28;
+    const idx = mediaIndexAtLayoutY(oldLayout.entries, anchorY);
+    if (idx < 0) return oldScrollTop;
+    const oldEntry = oldLayout.entries.find((e) => e.mediaIndex === idx);
+    const newEntry = newLayout.entries.find((e) => e.mediaIndex === idx);
+    if (!oldEntry || !newEntry) return oldScrollTop;
+    const delta = newEntry.top - oldEntry.top;
+    if (Math.abs(delta) < 1) return oldScrollTop;
+    return Math.max(0, oldScrollTop + delta);
+  }
+
+  $: if (fullVirtualEnabled && fullVirtualLayout && galleryScrollEl) {
+    if (
+      Date.now() >= scrollPreserveSuppressUntil &&
+      prevVirtualLayout &&
+      prevVirtualLayout !== fullVirtualLayout &&
+      !scrollDragActive
+    ) {
+      const nextTop = scrollTopPreservingAnchor(
+        prevVirtualLayout,
+        fullVirtualLayout,
+        scrollTopBeforeLayout,
+        scrollViewportH,
+      );
+      if (Math.abs(nextTop - scrollTop) > 1) {
+        galleryScrollEl.scrollTop = nextTop;
+        scrollTop = nextTop;
+        galleryDbg("window", "scroll compensado tras reflow", {
+          delta: Math.round(nextTop - scrollTopBeforeLayout),
+          scrollTop: nextTop,
+        });
+      }
+    }
+    prevVirtualLayout = fullVirtualLayout;
+    scrollTopBeforeLayout = scrollTop;
+  }
+
   $: scrollMarkers =
     fullVirtualLayout && fullVirtualLayout.markers.length > 0 ? fullVirtualLayout.markers : [];
   $: masonryCellPx = Math.max(72, Math.round(gridCellPx));
-  $: masonryStyle = `--cell:${masonryCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px;--masonry-max-h:${Math.round(masonryCellPx * 2.4)}px`;
+  $: masonryStyle = `--cell:${masonryCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px;--masonry-v-gap:${masonryRowGapPx}px;--masonry-tile-pad:${masonryTilePadCssPx}px;--masonry-max-h:${Math.round(masonryCellPx * 2.4)}px`;
   $: masonryVirtualEnabled = fullVirtualEnabled && galleryMasonryView;
   $: masonryColumnCount = computeMasonryColumnCount(
     scrollViewportW,
@@ -276,14 +400,38 @@
   $: masonrySegments = galleryMasonryView
     ? buildMasonrySegments(masonryDisplayItems, masonryColumnCount)
     : [];
-  $: masonryTopSpacer =
-    masonryVirtualShellActive && fullVirtualLayout && galleryWindowStart > 0
-      ? (fullVirtualLayout.entries.find((e) => e.mediaIndex === galleryWindowStart)?.top ?? 0)
-      : 0;
-  $: masonryBottomSpacer =
-    masonryVirtualShellActive && fullVirtualLayout
-      ? Math.max(0, fullVirtualLayout.totalHeight - masonryTopSpacer - masonryInnerH)
-      : 0;
+
+  /** Limita prefetch LQ; en carpetas pequeñas permite más alcance por tanda corta. */
+  function capPrefetchIndex(index: number): number {
+    const batch = effectiveUnlimitedBatchSize(totalMediaCount);
+    const leadMult = isSmallGalleryTotal(totalMediaCount) ? 3 : 2;
+    return Math.min(index, galleryLoadedEnd + batch * leadMult);
+  }
+
+  function prefetchLeadViewports(): number {
+    return isSmallGalleryTotal(totalMediaCount)
+      ? PREFETCH_LEAD_VIEWPORTS_SMALL
+      : PREFETCH_LEAD_VIEWPORTS;
+  }
+
+  function scrollLoadIdleMs(): number {
+    return isSmallGalleryTotal(totalMediaCount) ? SCROLL_LOAD_IDLE_SMALL_MS : SCROLL_LOAD_IDLE_MS;
+  }
+
+  function scrollStableMs(): number {
+    return isSmallGalleryTotal(totalMediaCount) ? SCROLL_STABLE_SMALL_MS : SCROLL_STABLE_MS;
+  }
+
+  /** Hueco entre índice estimado del viewport y borde cargado (scroll adelantado). */
+  function scrollAheadIndexGap(layout: GalleryFullVirtualLayout): number {
+    const est = estimateTargetMediaIndex(
+      layout.entries,
+      scrollTop + scrollViewportH * 0.35,
+      scrollViewportH,
+    );
+    if (est < galleryLoadedEnd) return 0;
+    return est - galleryLoadedEnd;
+  }
 
   /** Índice destino para extender hacia adelante según scroll y borde cargado. */
   function computeForwardPrefetchTarget(
@@ -292,7 +440,7 @@
     if (galleryLoadedEnd >= totalMediaCount) return -1;
 
     const viewBottom = scrollTop + scrollViewportH;
-    const leadPx = scrollViewportH * PREFETCH_LEAD_VIEWPORTS;
+    const leadPx = scrollViewportH * prefetchLeadViewports();
     let target = -1;
 
     const loadedBottom = virtualLoadedBottomY(layout.entries, galleryLoadedEnd);
@@ -311,7 +459,12 @@
       if (viewBottom >= loadedBottom - leadPx) target = galleryLoadedEnd;
     }
 
-    return target;
+    const aheadGap = scrollAheadIndexGap(layout);
+    if (aheadGap >= PREFETCH_AGGRESSIVE_GAP) {
+      target = Math.max(target, capPrefetchIndex(galleryLoadedEnd + aheadGap));
+    }
+
+    return target >= 0 ? capPrefetchIndex(target) : -1;
   }
 
   /** Índice destino para extender hacia arriba (ventana deslizante). */
@@ -321,7 +474,7 @@
     if (galleryWindowStart <= 0) return -1;
 
     const viewTop = scrollTop;
-    const leadPx = scrollViewportH * PREFETCH_LEAD_VIEWPORTS;
+    const leadPx = scrollViewportH * prefetchLeadViewports();
     let target = -1;
 
     const loadedTop = virtualLoadedTopY(layout.entries, galleryWindowStart);
@@ -356,20 +509,35 @@
     const layout = fullVirtualLayout;
     if (!layout) return;
 
-    const now = Date.now();
-    if (now - lastPrefetchTs < PREFETCH_THROTTLE_MS) return;
-
     const prevTop = lastScrollTopForPrefetch;
-    const delta = scrollTop - prevTop;
+    const scrollDelta = scrollTop - prevTop;
     lastScrollTopForPrefetch = scrollTop;
-    if (Math.abs(delta) < 2) return;
+    if (Math.abs(scrollDelta) < 2) return;
+
+    const aheadGap = scrollDelta > 0 ? scrollAheadIndexGap(layout) : 0;
+    const aggressive =
+      scrollDelta > 0 &&
+      (aheadGap >= PREFETCH_AGGRESSIVE_GAP ||
+        (isSmallGalleryTotal(totalMediaCount) && aheadGap >= 24));
+
+    const now = Date.now();
+    const throttleMs = aggressive ? PREFETCH_THROTTLE_AGGRESSIVE_MS : PREFETCH_THROTTLE_MS;
+    if (now - lastPrefetchTs < throttleMs) return;
 
     let target = -1;
     let jump = false;
 
-    if (delta > 0) {
+    if (scrollDelta > 0) {
       if (galleryLoadedEnd >= totalMediaCount) return;
       target = computeForwardPrefetchTarget(layout);
+      if (aggressive && target < 0) {
+        const est = estimateTargetMediaIndex(
+          layout.entries,
+          scrollTop + scrollViewportH * 0.35,
+          scrollViewportH,
+        );
+        if (est >= galleryLoadedEnd) target = capPrefetchIndex(est);
+      }
     } else {
       target = computeBackwardPrefetchTarget(layout);
       if (target >= 0 && target < galleryWindowStart - WINDOW_JUMP_MARGIN) {
@@ -403,13 +571,14 @@
           return;
         }
         requestLoadForViewport();
-      }, SCROLL_STABLE_MS);
-    }, SCROLL_LOAD_IDLE_MS);
+      }, scrollStableMs());
+    }, scrollLoadIdleMs());
   }
 
   /** Pide más ítems según scroll y huecos visibles (no durante salto por rail). */
   function requestLoadForViewport() {
-    if (!fullVirtualEnabled || galleryLoadedEnd >= totalMediaCount) return;
+    if (!fullVirtualEnabled) return;
+    if (galleryLoadedEnd >= totalMediaCount && galleryWindowStart <= 0) return;
     if (Date.now() < railJumpSuppressUntil) return;
 
     const layout = fullVirtualLayout;
@@ -447,11 +616,15 @@
       }
 
       if (target >= 0) {
-        onRequestLoadUntilIndex(target, jump);
+        const aheadGap = scrollAheadIndexGap(layout);
+        const urgent =
+          aheadGap >= PREFETCH_AGGRESSIVE_GAP ||
+          (isSmallGalleryTotal(totalMediaCount) && aheadGap >= 24);
+        onRequestLoadUntilIndex(target, jump, urgent);
         return;
       }
-      const actualEnd = masonryInnerH > 0 ? masonryTopSpacer + masonryInnerH : 0;
-      if (actualEnd > 0 && viewBottom > actualEnd + 16) {
+      const loadedBottom = virtualLoadedBottomY(layout.entries, galleryLoadedEnd);
+      if (loadedBottom > 0 && viewBottom > loadedBottom + 16) {
         onRequestLoadUntilIndex(galleryLoadedEnd, false);
       }
       return;
@@ -473,16 +646,22 @@
       target = Math.max(target, galleryLoadedEnd);
     }
 
-    const actualEnd =
-      masonryVirtualShellActive && masonryInnerH > 0 ? masonryTopSpacer + masonryInnerH : 0;
-    if (actualEnd > 0 && viewBottom > actualEnd + 16) {
-      target = Math.max(target, galleryLoadedEnd);
-    }
-
     const est = estimateTargetMediaIndex(layout.entries, scrollTop, scrollViewportH);
     if (est >= galleryLoadedEnd) target = Math.max(target, est);
 
-    if (target >= 0) onRequestLoadUntilIndex(target, jump);
+    const aheadGap = scrollAheadIndexGap(layout);
+    const urgent =
+      aheadGap >= PREFETCH_AGGRESSIVE_GAP ||
+      (isSmallGalleryTotal(totalMediaCount) && aheadGap >= 24);
+
+    if (target >= 0) onRequestLoadUntilIndex(target, jump, urgent);
+  }
+
+  /** Tras un append LQ: comprobar si el viewport sigue adelantado y pedir más. */
+  export function nudgeViewportLoad() {
+    if (!fullVirtualEnabled) return;
+    if (galleryLoadedEnd >= totalMediaCount) return;
+    requestLoadForViewport();
   }
 
   $: {
@@ -492,18 +671,39 @@
     prevGalleryScrolling = galleryScrolling;
   }
 
-  $: masonryVisiblePlaceholders =
-    masonryVirtualShellActive && fullVirtualLayout
-      ? getVisibleLayoutEntries(fullVirtualLayout.entries, scrollTop, scrollViewportH, 720).filter(
-          (e) =>
-            e.item.kind === "placeholder" &&
-            e.mediaIndex != null &&
-            e.mediaIndex >= galleryLoadedEnd,
-        )
-      : [];
-
   function entryStyle(entry: VirtualLayoutEntry): string {
     return `top:${entry.top}px;left:${entry.left}px;width:${entry.width}px;height:${entry.height}px`;
+  }
+
+  /** Evita micro-saltos de scroll cuando solo se amplía la ventana hacia abajo. */
+  export function suppressScrollPreserve(ms = 800) {
+    scrollPreserveSuppressUntil = Date.now() + ms;
+  }
+
+  /** Ancla el scroll al índice de medio tras un salto (layout virtual estable). */
+  export function scrollToMediaIndex(index: number, align: "start" | "center" = "start"): boolean {
+    if (!fullVirtualEnabled || !galleryScrollEl) return false;
+    const layout = fullVirtualLayout;
+    if (!layout) return false;
+    const idx = Math.max(0, Math.min(totalMediaCount - 1, Math.floor(index)));
+    const entry = layout.entries.find((e) => e.mediaIndex === idx);
+    let top: number;
+    if (entry) {
+      top = Math.max(0, entry.top - (align === "center" ? scrollViewportH * 0.35 : 12));
+    } else {
+      const maxScroll = Math.max(0, layout.totalHeight - scrollViewportH);
+      const ratio = idx / Math.max(1, totalMediaCount - 1);
+      top = ratio * maxScroll;
+    }
+    galleryScrollEl.scrollTop = top;
+    scrollTop = top;
+    scrollPreserveSuppressUntil = Date.now() + 600;
+    galleryDbg("window", "scroll anclado tras salto", {
+      targetIndex: idx,
+      scrollTop: top,
+      foundEntry: Boolean(entry),
+    });
+    return true;
   }
 
   function syncMasonryInnerHeight(el: HTMLDivElement | null) {
@@ -531,11 +731,21 @@
         // Solo invalidar cargas en curso en arrastre muy rápido, no en scroll ligero.
         if (dt > 0 && dt < 180 && delta > 320) {
           onCancelScrollLoads();
+          galleryDbg("scroll", "scroll rápido — cancelar cargas", { scrollTop: newTop, delta });
         }
         lastScrollCancelTop = newTop;
         lastScrollCancelTs = now;
         maybePrefetchDuringScroll();
         scheduleViewportLoadAfterScrollIdle();
+        if (now - lastScrollLogTs > 450) {
+          lastScrollLogTs = now;
+          galleryDbg("scroll", "posición viewport", {
+            scrollTop: newTop,
+            viewportH: scrollViewportH,
+            windowStart: galleryWindowStart,
+            loadedEnd: galleryLoadedEnd,
+          });
+        }
       } else {
         lastScrollCancelTop = newTop;
         lastScrollCancelTs = now;
@@ -570,7 +780,32 @@
     }
     onCancelBackgroundLoad();
     railJumpSuppressUntil = Date.now() + 4000;
-    onRequestLoadUntilIndex(marker.startIndex, true);
+    const idx = marker.startIndex;
+    if (idx >= galleryWindowStart && idx < galleryLoadedEnd) {
+      galleryDbg("rail_jump", "salto en ventana (solo scroll)", {
+        targetIndex: idx,
+        label: marker.label,
+        markerTop: marker.top,
+        windowStart: galleryWindowStart,
+        loadedEnd: galleryLoadedEnd,
+      });
+      requestAnimationFrame(() => {
+        galleryScrollEl?.scrollTo({ top: Math.max(0, marker.top - 12), behavior: "auto" });
+      });
+      return;
+    }
+    const far =
+      idx < galleryWindowStart - WINDOW_JUMP_MARGIN ||
+      idx >= galleryLoadedEnd + WINDOW_JUMP_MARGIN;
+    galleryDbg("rail_jump", "salto a fecha / marca", {
+      targetIndex: idx,
+      jump: far,
+      label: marker.label,
+      markerTop: marker.top,
+      windowStart: galleryWindowStart,
+      loadedEnd: galleryLoadedEnd,
+    });
+    onRequestLoadUntilIndex(idx, far);
     requestAnimationFrame(() => {
       galleryScrollEl?.scrollTo({ top: Math.max(0, marker.top - 12), behavior: "auto" });
     });
@@ -658,12 +893,38 @@
         class:grid-masonry--virtual-shell={masonryVirtualShellActive}
         bind:this={galleryGridEl}
         style={masonryVirtualShellActive
-          ? `${masonryStyle};min-height:${virtualLayout.totalHeight}px`
+          ? `${masonryStyle};height:${virtualLayout.totalHeight}px;position:relative;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px`
           : masonryStyle}
       >
         {#if masonryVirtualShellActive}
-          <div class="masonry-virtual-spacer" style={`height:${masonryTopSpacer}px`} aria-hidden="true"></div>
-        {/if}
+          {#each visibleEntries as entry (entry.item.path)}
+            <GalleryGridItem
+              it={entry.item}
+              style={`position:absolute;box-sizing:border-box;${entryStyle(entry)}`}
+              masonrySpan={entry.item.kind === "section" || entry.item.kind === "day_break"}
+              masonryLayout={isGalleryMediaKind(entry.item.kind)}
+              {dragOverSectionPath}
+              {galleryKeyboardNavHintActive}
+              {galleryCursorPath}
+              {galleryFloatChromeActive}
+              {galleryRangeSelecting}
+              {galleryRangeSuppressClick}
+              {galleryRangeDraftSelectedSet}
+              {showThumbLabels}
+              {galleryScrolling}
+              {galleryBusy}
+              {navigateToFolder}
+              {onSectionFolderDrop}
+              {isGalleryMediaKind}
+              {onGalleryTilePointerDown}
+              {onGalleryTilePointerEnter}
+              {onTileDragStart}
+              {clickItem}
+              {openZoomFromGallery}
+              {onGalleryItemContextMenu}
+            />
+          {/each}
+        {:else}
         <div class="grid-masonry__body" bind:this={masonryInnerEl}>
           {#each masonrySegments as segment, segIdx (`${segment.kind}:${segment.kind === "span" ? segment.item.path : segIdx}`)}
             {#if segment.kind === "span"}
@@ -727,43 +988,6 @@
             {/if}
           {/each}
         </div>
-        {#if masonryVirtualShellActive}
-          <div class="masonry-virtual-spacer" style={`height:${masonryBottomSpacer}px`} aria-hidden="true"></div>
-        {/if}
-        {#if masonryVisiblePlaceholders.length > 0}
-          <div
-            class="grid-masonry__virtual-ph"
-            style={`min-height:${virtualLayout.totalHeight}px`}
-            aria-hidden="true"
-          >
-            {#each masonryVisiblePlaceholders as entry (entry.item.path)}
-              <GalleryGridItem
-                it={entry.item}
-                style={`position:absolute;box-sizing:border-box;${entryStyle(entry)}`}
-                masonrySpan={false}
-                masonryLayout={true}
-                {dragOverSectionPath}
-                {galleryKeyboardNavHintActive}
-                {galleryCursorPath}
-                {galleryFloatChromeActive}
-                {galleryRangeSelecting}
-                {galleryRangeSuppressClick}
-                {galleryRangeDraftSelectedSet}
-                {showThumbLabels}
-                {galleryScrolling}
-                {galleryBusy}
-                {navigateToFolder}
-                {onSectionFolderDrop}
-                {isGalleryMediaKind}
-                {onGalleryTilePointerDown}
-                {onGalleryTilePointerEnter}
-                {onTileDragStart}
-                {clickItem}
-                {openZoomFromGallery}
-                {onGalleryItemContextMenu}
-              />
-            {/each}
-          </div>
         {/if}
       </div>
     {:else}

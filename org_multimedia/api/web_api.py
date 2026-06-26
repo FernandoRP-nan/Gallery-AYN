@@ -192,9 +192,15 @@ class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, Select
         self._last_gallery_move: tuple[Path, Path] | None = None
         # Caché (ruta, tamaño, perfil) -> (mtime, data_url)
         self._thumb_cache: dict[tuple[str, int, str], tuple[float, str | None]] = {}
+        # Plantillas de ítem de galería por (ruta, px) para saltos de scroll virtual.
+        self._gallery_path_item_cache: dict[tuple[str, int], dict] = {}
         # [start, end), ruta de carpeta de sección, etiqueta (solo modo agrupar por carpeta).
         self._gallery_section_spans: list[tuple[int, int, str, str]] = []
         # [start, end), clave YYYY-MM, etiqueta visible (solo modo línea de tiempo).
         self._gallery_timeline_spans: list[tuple[int, int, str, str]] = []
         # [start, end), letra, etiqueta (orden por nombre).
         self._gallery_alpha_spans: list[tuple[int, int, str, str]] = []
+        # Caché de listados escaneados (reabrir la misma carpeta evita re-stat masivo).
+        self._gallery_scan_cache: dict[tuple, dict] = {}
+        self._last_scan_source = "fresh"
+        self._jump_expand_center = 0

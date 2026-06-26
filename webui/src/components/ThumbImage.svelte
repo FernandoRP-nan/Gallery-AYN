@@ -11,9 +11,14 @@
   let hqDecoded = false;
   let trackedHqUrl = "";
 
+  let hqPathStore: ReturnType<typeof galleryThumbHqFor> | null = null;
+
   $: cacheRevision = $galleryThumbHqCacheRevision;
-  $: hqStore = itemPath && cacheRevision >= 0 ? galleryThumbHqFor(itemPath) : null;
-  $: cached = hqStore ? $hqStore : null;
+  $: {
+    void cacheRevision;
+    hqPathStore = itemPath ? galleryThumbHqFor(itemPath) : null;
+  }
+  $: cached = hqPathStore ? $hqPathStore : null;
 
   $: hqUrl = cached?.hqUrl ?? (thumbQuality === "hq" ? thumbDataUrl : null);
   $: lqUrl =
@@ -21,11 +26,13 @@
     thumbLqDataUrl ??
     (thumbQuality === "lq" ? thumbDataUrl : null);
   /** Sin placeholder LQ: mostrar HQ de inmediato (p. ej. caché del servidor). */
-  $: hqImmediate = Boolean(hqUrl) && !lqUrl;
+  $: if (hqUrl && !lqUrl) {
+    hqDecoded = true;
+  }
 
   $: if (hqUrl !== trackedHqUrl) {
     trackedHqUrl = hqUrl ?? "";
-    hqDecoded = hqImmediate;
+    hqDecoded = Boolean(hqUrl && !lqUrl);
   }
 
   function onHqLoad() {

@@ -15,7 +15,7 @@
 </script>
 
 <div class="settings-group">
-  <h3 class="settings-group__title">{t("settings.sectionAppearance")}</h3>
+  <p class="settings-lead">{t("settings.appearanceLead")}</p>
   <label class="field-label" for="set-theme-midnight">{t("settings.themeTitle")}</label>
   <p class="settings-hint">{t("settings.themeHint")}</p>
   <div class="settings-preset-row" role="group" aria-label={t("settings.themeTitle")}>
@@ -68,4 +68,5 @@
     {thumbFrameVisible}
     {thumbCardStyle}
   />
+  <p class="settings-hint">{t("settings.appearanceThumbsHint")}</p>
 </div>

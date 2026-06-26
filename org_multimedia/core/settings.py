@@ -53,12 +53,15 @@ def load_app_settings() -> dict:
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_masonry_view": False,
+            "gallery_masonry_tight_spacing": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
             "video_transcode_preset": "fast",
             "video_transcode_max_height": 1080,
             "video_transcode_max_width": 1920,
             "video_transcode_hw": "auto",
+            "preview_video_autoplay": True,
+            "preview_video_autoplay_edit": False,
             "mess_folder_path": "",
             "mess_similarity_min": 0.82,
             "mess_pinterest_masonry": False,
@@ -66,6 +69,17 @@ def load_app_settings() -> dict:
             "mess_pinterest_drag_groups": False,
             "mess_suggestions_enabled": False,
             "mess_scan_max_files": 400,
+            "gallery_unlimited_batch_size": 48,
+            "gallery_window_overscan_before": 96,
+            "gallery_window_overscan_after": 160,
+            "gallery_jump_core_overscan_before": 32,
+            "gallery_jump_core_overscan_after": 48,
+            "gallery_sliding_window_enabled": True,
+            "gallery_sliding_window_max_items": 896,
+            "gallery_thumb_build_workers": 8,
+            "gallery_thumb_hq_workers": 4,
+            "gallery_thumb_hq_visible_sequential": 16,
+            "web_debug_log_enabled": False,
         }
     try:
         with path.open(encoding="utf-8") as f:
@@ -184,6 +198,10 @@ def load_app_settings() -> dict:
             data["gallery_masonry_view"] = False
         else:
             data["gallery_masonry_view"] = bool(data["gallery_masonry_view"])
+        if "gallery_masonry_tight_spacing" not in data:
+            data["gallery_masonry_tight_spacing"] = False
+        else:
+            data["gallery_masonry_tight_spacing"] = bool(data["gallery_masonry_tight_spacing"])
         if "gallery_section_dominant_color" not in data:
             data["gallery_section_dominant_color"] = True
         else:
@@ -216,6 +234,14 @@ def load_app_settings() -> dict:
             data["video_transcode_hw"] = "auto"
         elif str(data["video_transcode_hw"]).lower() not in ("auto", "off"):
             data["video_transcode_hw"] = "auto"
+        if "preview_video_autoplay" not in data:
+            data["preview_video_autoplay"] = True
+        else:
+            data["preview_video_autoplay"] = bool(data["preview_video_autoplay"])
+        if "preview_video_autoplay_edit" not in data:
+            data["preview_video_autoplay_edit"] = False
+        else:
+            data["preview_video_autoplay_edit"] = bool(data["preview_video_autoplay_edit"])
         if "mess_folder_path" not in data:
             data["mess_folder_path"] = ""
         else:
@@ -252,6 +278,56 @@ def load_app_settings() -> dict:
             data["mess_suggestions_enabled"] = False
         else:
             data["mess_suggestions_enabled"] = bool(data["mess_suggestions_enabled"])
+        if "gallery_unlimited_batch_size" not in data:
+            data["gallery_unlimited_batch_size"] = 48
+        else:
+            try:
+                data["gallery_unlimited_batch_size"] = max(
+                    24, min(256, int(data["gallery_unlimited_batch_size"]))
+                )
+            except (TypeError, ValueError):
+                data["gallery_unlimited_batch_size"] = 48
+        for key, default, lo, hi in (
+            ("gallery_window_overscan_before", 96, 32, 512),
+            ("gallery_window_overscan_after", 160, 32, 512),
+            ("gallery_jump_core_overscan_before", 32, 16, 128),
+            ("gallery_jump_core_overscan_after", 48, 24, 160),
+            ("gallery_sliding_window_max_items", 896, 320, 4096),
+            ("gallery_thumb_build_workers", 8, 2, 16),
+            ("gallery_thumb_hq_workers", 4, 1, 16),
+            ("gallery_thumb_hq_visible_sequential", 16, 4, 32),
+        ):
+            if key not in data:
+                data[key] = default
+            else:
+                try:
+                    data[key] = max(lo, min(hi, int(data[key])))
+                except (TypeError, ValueError):
+                    data[key] = default
+        # Migrar núcleo de salto antiguo (48+72) al preset agresivo (32+48).
+        if (
+            int(data.get("gallery_jump_core_overscan_before", 32)) == 48
+            and int(data.get("gallery_jump_core_overscan_after", 48)) == 72
+        ):
+            data["gallery_jump_core_overscan_before"] = 32
+            data["gallery_jump_core_overscan_after"] = 48
+        if "gallery_sliding_window_enabled" not in data:
+            data["gallery_sliding_window_enabled"] = True
+        else:
+            data["gallery_sliding_window_enabled"] = bool(data["gallery_sliding_window_enabled"])
+        if "gallery_sliding_window_max_items" not in data:
+            data["gallery_sliding_window_max_items"] = 896
+        else:
+            try:
+                data["gallery_sliding_window_max_items"] = max(
+                    320, min(4096, int(data["gallery_sliding_window_max_items"]))
+                )
+            except (TypeError, ValueError):
+                data["gallery_sliding_window_max_items"] = 896
+        if "web_debug_log_enabled" not in data:
+            data["web_debug_log_enabled"] = False
+        else:
+            data["web_debug_log_enabled"] = bool(data["web_debug_log_enabled"])
         return data
     except (OSError, json.JSONDecodeError):
         return {
@@ -288,12 +364,15 @@ def load_app_settings() -> dict:
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_masonry_view": False,
+            "gallery_masonry_tight_spacing": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
             "video_transcode_preset": "fast",
             "video_transcode_max_height": 1080,
             "video_transcode_max_width": 1920,
             "video_transcode_hw": "auto",
+            "preview_video_autoplay": True,
+            "preview_video_autoplay_edit": False,
             "mess_folder_path": "",
             "mess_similarity_min": 0.82,
             "mess_pinterest_masonry": False,
@@ -301,6 +380,17 @@ def load_app_settings() -> dict:
             "mess_pinterest_drag_groups": False,
             "mess_suggestions_enabled": False,
             "mess_scan_max_files": 400,
+            "gallery_unlimited_batch_size": 48,
+            "gallery_window_overscan_before": 96,
+            "gallery_window_overscan_after": 160,
+            "gallery_jump_core_overscan_before": 32,
+            "gallery_jump_core_overscan_after": 48,
+            "gallery_sliding_window_enabled": True,
+            "gallery_sliding_window_max_items": 896,
+            "gallery_thumb_build_workers": 8,
+            "gallery_thumb_hq_workers": 4,
+            "gallery_thumb_hq_visible_sequential": 16,
+            "web_debug_log_enabled": False,
         }
 
 

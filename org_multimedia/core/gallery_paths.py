@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .media_organizer import MediaOrganizer
@@ -57,12 +59,14 @@ def scan_media_flat(root: Path, extensions: frozenset[str] | None = None) -> lis
     exts = extensions if extensions is not None else GALLERY_MEDIA_EXTENSIONS
     out: list[Path] = []
     try:
-        for p in root.iterdir():
-            if p.is_file() and p.suffix.lower() in exts:
-                out.append(p)
+        with os.scandir(root) as it:
+            for entry in it:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if Path(entry.name).suffix.lower() in exts:
+                    out.append(Path(entry.path))
     except OSError:
         pass
-    out.sort(key=lambda x: str(x).lower())
     return out
 
 
@@ -80,7 +84,30 @@ def scan_media_recursive(root: Path, extensions: frozenset[str] | None = None) -
     return out
 
 
-def sort_image_paths(paths: list[Path], mode: str) -> list[Path]:
+def _prefetch_path_stats(
+    paths: list[Path],
+    cache: dict[Path, os.stat_result | None],
+    *,
+    max_workers: int | None = None,
+) -> None:
+    """Precarga stat() en paralelo (5600X / discos grandes)."""
+    if len(paths) <= 512:
+        return
+    workers = max_workers or min(12, max(4, os.cpu_count() or 4))
+
+    def stat_one(p: Path) -> tuple[Path, os.stat_result | None]:
+        try:
+            return p, p.stat()
+        except OSError:
+            return p, None
+
+    chunk = max(64, len(paths) // (workers * 4))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for p, st in pool.map(stat_one, paths, chunksize=chunk):
+            cache[p] = st
+
+
+def sort_image_paths(paths: list[Path], mode: str, *, stat_workers: int | None = None) -> list[Path]:
     """Orden compuesto y estable: `mode` puede ser una lista separada por comas, ej. 'type,mtime,name'.
 
     Criterios:
@@ -122,51 +149,41 @@ def sort_image_paths(paths: list[Path], mode: str) -> list[Path]:
     if not any(k[0] == "name" for k in sort_keys):
         sort_keys.append(("name", False))
 
-    # Python's `sorted` can only sort by a single `reverse` boolean for all keys at once.
-    # To support mixed directions, we invert the values of descending keys.
-    def make_sort_key(p: Path) -> tuple:
-        key_parts = []
-        for sk, is_desc in sort_keys:
-            if sk == "mtime":
-                try:
-                    val = p.stat().st_mtime_ns
-                except OSError:
-                    val = 0
-                key_parts.append(-val if is_desc else val)
-            elif sk == "type":
-                # Vídeos tienen valor 1, imágenes valor 0 para ordenamiento
-                is_video = p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS
-                val = 1 if is_video else 0
-                key_parts.append(-val if is_desc else val)
-            elif sk == "name":
-                # Strings can't be easily inverted numerically, but we can rely on Python's stable sort
-                # by sorting in multiple passes. But for simplicity, since name is usually the tiebreaker,
-                # we'll use a trick or just use single pass and not support desc name sorting fully.
-                # Actually, wait, let's just use string for ascending. For descending, we can invert characters?
-                # A simpler approach: we'll do multiple passes of stable sorting!
-                pass # Handled below
-        return tuple()
-        
-    # Since we need mixed sorting (some asc, some desc), and Python's stable sort allows us to sort multiple times:
-    # We sort by the least important key first, up to the most important key.
+    # Orden estable con stat() cacheado; precarga paralela si hace falta mtime/ctime.
+    stat_cache: dict[Path, os.stat_result | None] = {}
+    needs_stat = any(sk in ("mtime", "ctime") for sk, _ in sort_keys)
+    if needs_stat:
+        _prefetch_path_stats(paths, stat_cache, max_workers=stat_workers)
+
+    def _stat_cached(p: Path) -> os.stat_result | None:
+        if p not in stat_cache:
+            try:
+                stat_cache[p] = p.stat()
+            except OSError:
+                stat_cache[p] = None
+        return stat_cache[p]
+
     result = paths.copy()
     for sk, is_desc in reversed(sort_keys):
         if sk == "mtime":
-            def get_mtime(p: Path):
-                try: return p.stat().st_mtime_ns
-                except OSError: return 0
-            result.sort(key=get_mtime, reverse=is_desc)
+            def get_mtime(p: Path, _desc=is_desc):
+                st = _stat_cached(p)
+                val = st.st_mtime_ns if st is not None else 0
+                return -val if _desc else val
+            result.sort(key=get_mtime)
         elif sk == "ctime":
-            def get_ctime(p: Path):
-                try: return p.stat().st_ctime_ns
-                except OSError: return 0
-            result.sort(key=get_ctime, reverse=is_desc)
+            def get_ctime(p: Path, _desc=is_desc):
+                st = _stat_cached(p)
+                val = st.st_ctime_ns if st is not None else 0
+                return -val if _desc else val
+            result.sort(key=get_ctime)
         elif sk == "type":
-            def get_type(p: Path):
-                return 1 if p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS else 0
-            result.sort(key=get_type, reverse=is_desc)
+            def get_type(p: Path, _desc=is_desc):
+                val = 1 if p.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS else 0
+                return -val if _desc else val
+            result.sort(key=get_type)
         elif sk == "name":
-            def get_name(p: Path):
+            def get_name(p: Path, _desc=is_desc):
                 return str(p).lower()
             result.sort(key=get_name, reverse=is_desc)
 

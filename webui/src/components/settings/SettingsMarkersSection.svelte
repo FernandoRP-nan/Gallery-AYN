@@ -8,7 +8,7 @@
   export let onPickMarkerFolder: () => Promise<string | null>;
 </script>
 
-<div class="settings-group">
+<div class="settings-group settings-group--nested">
   <h3 class="settings-group__title">{t("settings.sectionMarkers")}</h3>
   <p class="settings-hint">{t("settings.markersHint")}</p>
   <SettingsTreeManager

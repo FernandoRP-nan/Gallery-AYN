@@ -100,10 +100,18 @@ def _thumb_px_from_dest_scale(scale: float) -> int:
 # Ventana de carga para scroll virtual (salto a fecha/letra lejana).
 _GALLERY_WINDOW_OVERSCAN_BEFORE = 96
 _GALLERY_WINDOW_OVERSCAN_AFTER = 160
+# Núcleo visible en salto (fase 1 rápida); fase 2 expande al overscan completo.
+_GALLERY_JUMP_CORE_OVERSCAN_BEFORE = 32
+_GALLERY_JUMP_CORE_OVERSCAN_AFTER = 48
 # Scroll leve por encima de la ventana: ampliar hacia atrás; más lejos: recentrar ventana.
 _GALLERY_WINDOW_JUMP_MARGIN = 128
 _GALLERY_LOAD_MAX_BATCHES = 2
+_GALLERY_SCAN_CACHE_TTL_S = 300.0
+_GALLERY_SCAN_CACHE_MAX = 8
 _GALLERY_EXTEND_MAX_BATCHES = 16
+# Carpetas pequeñas: tandas LQ más cortas para builds rápidos.
+_GALLERY_SMALL_FOLDER_MAX = 2000
+_GALLERY_SMALL_FOLDER_BATCH_CAP = 32
 MASONRY_THUMB_HEIGHT_FACTOR = 2.4
 
 def _img_to_data_url(path: Path, size: tuple[int, int]) -> str | None:
@@ -215,8 +223,90 @@ class GalleryBridgeMixin:
     def _is_unlimited_mode(self) -> bool:
         return int(self.settings.get("gallery_thumbs_per_page", 48)) <= 0
 
-    def _unlimited_batch_size(self) -> int:
-        return 48
+    def _unlimited_batch_size(self, total: int | None = None, *, for_scroll: bool = False) -> int:
+        n = int(self.settings.get("gallery_unlimited_batch_size", 48))
+        base = max(24, min(256, n))
+        if total is None:
+            total = len(self.ordered_paths)
+        # Solo acortar tandas en scroll/append; la apertura inicial usa el batch completo.
+        if for_scroll and total > 0 and total <= _GALLERY_SMALL_FOLDER_MAX:
+            return max(24, min(base, _GALLERY_SMALL_FOLDER_BATCH_CAP))
+        return base
+
+    def _is_small_gallery_folder(self) -> bool:
+        total = len(self.ordered_paths)
+        return total > 0 and total <= _GALLERY_SMALL_FOLDER_MAX
+
+    def _gallery_window_overscan_before(self) -> int:
+        n = int(self.settings.get("gallery_window_overscan_before", _GALLERY_WINDOW_OVERSCAN_BEFORE))
+        return max(32, min(512, n))
+
+    def _gallery_window_overscan_after(self) -> int:
+        n = int(self.settings.get("gallery_window_overscan_after", _GALLERY_WINDOW_OVERSCAN_AFTER))
+        return max(32, min(512, n))
+
+    def _gallery_jump_core_overscan_before(self) -> int:
+        n = int(
+            self.settings.get(
+                "gallery_jump_core_overscan_before",
+                _GALLERY_JUMP_CORE_OVERSCAN_BEFORE,
+            )
+        )
+        return max(24, min(128, n))
+
+    def _gallery_jump_core_overscan_after(self) -> int:
+        n = int(
+            self.settings.get(
+                "gallery_jump_core_overscan_after",
+                _GALLERY_JUMP_CORE_OVERSCAN_AFTER,
+            )
+        )
+        return max(32, min(160, n))
+
+    def _gallery_thumb_build_workers(self, *, boost: bool = False) -> int:
+        n = int(self.settings.get("gallery_thumb_build_workers", 8))
+        if boost:
+            n = min(16, max(n, 12))
+        return max(2, min(16, n))
+
+    def _gallery_sliding_window_enabled(self) -> bool:
+        return bool(self.settings.get("gallery_sliding_window_enabled", False))
+
+    def _gallery_sliding_window_max_items(self) -> int:
+        n = int(self.settings.get("gallery_sliding_window_max_items", 896))
+        return max(320, min(4096, n))
+
+    def _maybe_trim_sliding_window(self) -> int:
+        """Recorta el inicio de la ventana deslizante si supera el máximo configurado."""
+        if not self._gallery_sliding_window_enabled():
+            return 0
+        ws = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        loaded = int(self.gallery_unlimited_loaded or 0)
+        if loaded <= ws:
+            return 0
+        max_items = self._gallery_sliding_window_max_items()
+        span = loaded - ws
+        if span <= max_items:
+            return 0
+        trim = span - max_items
+        self.gallery_unlimited_window_start = ws + trim
+        return trim
+
+    def _maybe_trim_sliding_window_from_end(self) -> int:
+        """Recorta el final de la ventana al prepend hacia atrás."""
+        if not self._gallery_sliding_window_enabled():
+            return 0
+        ws = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        loaded = int(self.gallery_unlimited_loaded or 0)
+        if loaded <= ws:
+            return 0
+        max_items = self._gallery_sliding_window_max_items()
+        span = loaded - ws
+        if span <= max_items:
+            return 0
+        trim = span - max_items
+        self.gallery_unlimited_loaded = loaded - trim
+        return trim
 
     def _thumbs_per_page(self) -> int:
         n = int(self.settings.get("gallery_thumbs_per_page", 48))
@@ -262,10 +352,7 @@ class GalleryBridgeMixin:
         self.gallery_page = max(0, min(self.gallery_page, tp - 1))
 
     def _slice(self) -> tuple[int, int]:
-        if self._is_grouped_mode():
-            total = len(self.ordered_paths)
-            return 0, total
-        if self._is_timeline_mode():
+        if self._is_grouped_mode() or self._is_timeline_mode():
             total = len(self.ordered_paths)
             if not self._is_unlimited_mode():
                 return 0, total
@@ -436,6 +523,12 @@ class GalleryBridgeMixin:
             side = max(48, int(thumb_px))
             return side, min(max_h, max(1, int(round(side * 1.25))))
 
+    def _gallery_item_path(self, p: Path) -> str:
+        try:
+            return str(p.resolve())
+        except OSError:
+            return str(p)
+
     def _build_image_items(
         self,
         slice_paths: list[Path],
@@ -445,15 +538,25 @@ class GalleryBridgeMixin:
         base_index: int = 0,
         timeline_meta: bool = False,
         timeline_date_field: str = "mtime",
+        jump_fast: bool = False,
+        build_boost: bool = False,
     ) -> list[dict]:
         def _one_image_item(entry: tuple[int, Path]) -> dict:
             i, p = entry
+            item_path = self._gallery_item_path(p)
+            cache_key = (item_path, int(thumb_px))
+            cached = self._gallery_path_item_cache.get(cache_key)
+            if cached is not None:
+                d = dict(cached)
+                d["selected"] = p in selected_frozenset
+                d["mediaIndex"] = base_index + i
+                return d
             ext = p.suffix.lower()
             is_video = ext in MediaOrganizer.VIDEO_EXTENSIONS
             d: dict = {
                 "kind": "video" if is_video else "image",
                 "name": p.name,
-                "path": str(p),
+                "path": item_path,
                 "selected": p in selected_frozenset,
                 "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
                 "thumbQuality": "lq",
@@ -461,15 +564,25 @@ class GalleryBridgeMixin:
             }
             if timeline_meta:
                 d["mtimeIso"] = self._path_date_iso(p, timeline_date_field)
-            if self._is_masonry_view() and p.suffix.lower() not in (".svg",):
+            if (
+                self._is_masonry_view()
+                and not jump_fast
+                and p.suffix.lower() not in (".svg",)
+            ):
                 tw, th = self._masonry_display_size(p, thumb_px)
                 d["thumbW"] = int(tw)
                 d["thumbH"] = int(th)
+            template = {k: v for k, v in d.items() if k not in ("selected", "mediaIndex")}
+            if template.get("thumbDataUrl"):
+                self._gallery_path_item_cache[cache_key] = template
             return d
 
         if not slice_paths:
             return []
-        max_workers = min(8, max(1, len(slice_paths)))
+        max_workers = min(
+            self._gallery_thumb_build_workers(boost=jump_fast or build_boost),
+            max(1, len(slice_paths)),
+        )
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(_one_image_item, enumerate(slice_paths)))
 
@@ -490,8 +603,90 @@ class GalleryBridgeMixin:
             idx += len(files)
         return ordered, spans
 
+    def _scan_cache_key(self, folder: Path) -> tuple:
+        return (
+            str(folder.resolve()),
+            bool(self.settings.get("gallery_include_subfolders", False)),
+            bool(self.settings.get("gallery_group_by_folder", False)),
+            bool(self.settings.get("gallery_timeline_view", False)),
+            str(self.settings.get("gallery_sort_mode", "name")),
+            self._layout_mode(),
+        )
+
+    def _invalidate_gallery_scan_cache(self) -> None:
+        self._gallery_scan_cache = {}
+
+    def _store_scan_cache(self, key: tuple, ordered: list[Path]) -> None:
+        cache: dict = getattr(self, "_gallery_scan_cache", {})
+        cache[key] = {
+            "paths": ordered,
+            "section_spans": list(self._gallery_section_spans),
+            "timeline_spans": list(self._gallery_timeline_spans),
+            "alpha_spans": list(self._gallery_alpha_spans),
+            "ts": time.monotonic(),
+        }
+        if len(cache) > _GALLERY_SCAN_CACHE_MAX:
+            oldest_key = min(cache, key=lambda k: float(cache[k].get("ts", 0)))
+            del cache[oldest_key]
+        self._gallery_scan_cache = cache
+
+    def _apply_scan_spans(
+        self,
+        section_spans: list[tuple],
+        timeline_spans: list[tuple],
+        alpha_spans: list[tuple],
+    ) -> None:
+        self._gallery_section_spans = list(section_spans)
+        self._gallery_timeline_spans = list(timeline_spans)
+        self._gallery_alpha_spans = list(alpha_spans)
+
     def _scan_ordered_paths(self, folder: Path) -> list[Path]:
         """Lista de imágenes según ajustes de recursión, agrupación u orden."""
+        from ..core.gallery_index_cache import save_gallery_index, try_load_gallery_index
+
+        key = self._scan_cache_key(folder)
+        self._last_scan_source = "fresh"
+        cache: dict = getattr(self, "_gallery_scan_cache", {})
+        hit = cache.get(key)
+        now = time.monotonic()
+        if hit and (now - float(hit.get("ts", 0))) < _GALLERY_SCAN_CACHE_TTL_S:
+            self._apply_scan_spans(
+                hit.get("section_spans") or [],
+                hit.get("timeline_spans") or [],
+                hit.get("alpha_spans") or [],
+            )
+            self._last_scan_source = "memory"
+            return list(hit.get("paths") or [])
+
+        disk = try_load_gallery_index(folder, key)
+        if disk is not None:
+            self._apply_scan_spans(
+                disk.get("section_spans") or [],
+                disk.get("timeline_spans") or [],
+                disk.get("alpha_spans") or [],
+            )
+            ordered = list(disk.get("paths") or [])
+            self._store_scan_cache(key, ordered)
+            self._last_scan_source = "disk"
+            return ordered
+
+        ordered = self._scan_ordered_paths_fresh(folder)
+        self._store_scan_cache(key, ordered)
+        try:
+            save_gallery_index(
+                folder,
+                key,
+                ordered,
+                section_spans=self._gallery_section_spans,
+                timeline_spans=self._gallery_timeline_spans,
+                alpha_spans=self._gallery_alpha_spans,
+            )
+        except Exception:
+            pass
+        return ordered
+
+    def _scan_ordered_paths_fresh(self, folder: Path) -> list[Path]:
+        """Escaneo en disco sin caché."""
         self._gallery_section_spans = []
         self._gallery_timeline_spans = []
         self._gallery_alpha_spans = []
@@ -511,7 +706,8 @@ class GalleryBridgeMixin:
         else:
             raw = scan_media_flat(folder)
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
-        ordered = sort_image_paths(raw, sort_mode)
+        stat_workers = self._gallery_thumb_build_workers()
+        ordered = sort_image_paths(raw, sort_mode, stat_workers=stat_workers)
         if self._is_date_primary_sort() and not self._is_timeline_mode():
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
         if self._layout_mode() == "alpha":
@@ -550,36 +746,75 @@ class GalleryBridgeMixin:
             "windowStart": int(getattr(self, "gallery_unlimited_window_start", 0) or 0),
         }
 
-    def _build_gallery_items_grouped(self) -> list[dict]:
+    def _build_grouped_items_for_range(
+        self,
+        range_start: int,
+        range_end: int,
+        *,
+        build_boost: bool = False,
+        jump_fast: bool = False,
+    ) -> list[dict]:
+        """Ítems agrupados por subcarpeta para un rango de índices en ordered_paths."""
         items: list[dict] = []
+        if range_start >= range_end:
+            return items
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
         use_tint = bool(self.settings.get("gallery_section_dominant_color", True))
         for start, end, folder_path, label in self._gallery_section_spans:
-            slice_paths = self.ordered_paths[start:end]
-            sec: dict = {
-                "kind": "section",
-                "name": label,
-                "path": f"section:{folder_path}",
-                "sectionFolder": folder_path,
-                "thumbDataUrl": None,
-            }
-            if use_tint and slice_paths:
-                img_only = [
-                    p
-                    for p in slice_paths
-                    if p.suffix.lower() in MediaOrganizer.IMAGE_EXTENSIONS and p.suffix.lower() != ".svg"
-                ]
-                th = accent_hex_from_paths(img_only, max_samples=3) if img_only else None
-                if th:
-                    sec["sectionTintHex"] = th
-            items.append(sec)
+            if end <= range_start:
+                continue
+            if start >= range_end:
+                break
+            clip_start = max(start, range_start)
+            clip_end = min(end, range_end)
+            if clip_start >= clip_end:
+                continue
+            if clip_start == start:
+                section_paths = self.ordered_paths[start:end]
+                sec: dict = {
+                    "kind": "section",
+                    "name": label,
+                    "path": f"section:{folder_path}",
+                    "sectionFolder": folder_path,
+                    "thumbDataUrl": None,
+                }
+                if use_tint and section_paths:
+                    img_only = [
+                        p
+                        for p in section_paths
+                        if p.suffix.lower() in MediaOrganizer.IMAGE_EXTENSIONS
+                        and p.suffix.lower() != ".svg"
+                    ]
+                    th = accent_hex_from_paths(img_only, max_samples=3) if img_only else None
+                    if th:
+                        sec["sectionTintHex"] = th
+                items.append(sec)
+            slice_paths = self.ordered_paths[clip_start:clip_end]
             items.extend(
-                self._build_image_items(slice_paths, thumb_px, selected_frozenset, base_index=start)
+                self._build_image_items(
+                    slice_paths,
+                    thumb_px,
+                    selected_frozenset,
+                    base_index=clip_start,
+                    jump_fast=jump_fast,
+                    build_boost=build_boost,
+                )
             )
         return items
 
-    def _build_timeline_items_for_range(self, range_start: int, range_end: int) -> list[dict]:
+    def _build_gallery_items_grouped(self) -> list[dict]:
+        s, e = self._slice()
+        build_boost = self._is_unlimited_mode() and self.gallery_page == 0 and s == 0
+        return self._build_grouped_items_for_range(s, e, build_boost=build_boost)
+
+    def _build_timeline_items_for_range(
+        self,
+        range_start: int,
+        range_end: int,
+        *,
+        build_boost: bool = False,
+    ) -> list[dict]:
         """Ítems de línea de tiempo para un rango de índices en ordered_paths (carga progresiva)."""
         items: list[dict] = []
         if range_start >= range_end:
@@ -614,6 +849,7 @@ class GalleryBridgeMixin:
                     base_index=clip_start,
                     timeline_meta=True,
                     timeline_date_field=self._timeline_date_field(),
+                    build_boost=build_boost,
                 )
             )
         return items
@@ -643,7 +879,8 @@ class GalleryBridgeMixin:
         items: list[dict] = []
         if s == 0 and self.gallery_folder is not None:
             items.extend(self._build_folder_items(thumb_px))
-        items.extend(self._build_timeline_items_for_range(s, e))
+        build_boost = self._is_unlimited_mode() and self.gallery_page == 0 and s == 0
+        items.extend(self._build_timeline_items_for_range(s, e, build_boost=build_boost))
         return items
 
     def _build_gallery_items(self) -> list[dict]:
@@ -661,10 +898,25 @@ class GalleryBridgeMixin:
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         slice_paths = self.ordered_paths[s:e]
         selected_frozenset = frozenset(self.selected)
-        items.extend(self._build_image_items(slice_paths, thumb_px, selected_frozenset, base_index=s))
+        build_boost = self._is_unlimited_mode() and self.gallery_page == 0 and s == 0
+        items.extend(
+            self._build_image_items(
+                slice_paths,
+                thumb_px,
+                selected_frozenset,
+                base_index=s,
+                build_boost=build_boost,
+            )
+        )
         return items
 
-    def _gallery_items_for_range(self, start: int, end: int) -> list[dict]:
+    def _gallery_items_for_range(
+        self,
+        start: int,
+        end: int,
+        *,
+        jump_fast: bool = False,
+    ) -> list[dict]:
         """Ítems de galería para un rango [start, end) de ordered_paths."""
         start = max(0, int(start))
         end = max(start, int(end))
@@ -672,13 +924,19 @@ class GalleryBridgeMixin:
             return []
         if self._is_timeline_mode():
             return self._build_timeline_items_for_range(start, end)
+        if self._is_grouped_mode():
+            return self._build_grouped_items_for_range(start, end, jump_fast=jump_fast)
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
         return self._build_image_items(
-            self.ordered_paths[start:end], thumb_px, selected_frozenset, base_index=start
+            self.ordered_paths[start:end],
+            thumb_px,
+            selected_frozenset,
+            base_index=start,
+            jump_fast=jump_fast,
         )
 
-    def _gallery_load_window(self, center_index: int) -> dict:
+    def _gallery_load_window(self, center_index: int, *, jump_core: bool = False) -> dict:
         """Carga solo una ventana alrededor del índice (salto o scroll fuera de rango)."""
         total = len(self.ordered_paths)
         if total <= 0:
@@ -691,11 +949,133 @@ class GalleryBridgeMixin:
                 "windowEnd": 0,
             }
         center = max(0, min(total - 1, int(center_index)))
-        start = max(0, center - _GALLERY_WINDOW_OVERSCAN_BEFORE)
-        end = min(total, center + _GALLERY_WINDOW_OVERSCAN_AFTER)
-        batch_items = self._gallery_items_for_range(start, end)
+        if jump_core:
+            before = self._gallery_jump_core_overscan_before()
+            after = self._gallery_jump_core_overscan_after()
+        else:
+            before = self._gallery_window_overscan_before()
+            after = self._gallery_window_overscan_after()
+        start = max(0, center - before)
+        end = min(total, center + after)
+        old_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        old_end = int(self.gallery_unlimited_loaded or 0)
+        # Ya cubierto: evita reconstruir la ventana al soltar el scroll en la misma zona.
+        if (
+            not jump_core
+            and old_end > old_start
+            and old_start <= center < old_end
+            and start >= old_start
+            and end <= old_end
+        ):
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "hasMore": old_end < total,
+                "replaceWindow": False,
+            }
+        t_build = time.perf_counter()
+        batch_items = self._gallery_items_for_range(start, end, jump_fast=jump_core)
+        build_ms = int((time.perf_counter() - t_build) * 1000)
         self.gallery_unlimited_window_start = start
         self.gallery_unlimited_loaded = end
+        if jump_core:
+            self._jump_expand_center = center
+        payload: dict = {
+            "state": self._gallery_state(),
+            "items": batch_items,
+            "hasMore": end < total,
+            "replaceWindow": True,
+            "windowStart": start,
+            "windowEnd": end,
+            "windowPhase": "core" if jump_core else "full",
+            "timing": {"buildMs": build_ms, "itemCount": len(batch_items)},
+        }
+        if jump_core:
+            full_before = self._gallery_window_overscan_before()
+            full_after = self._gallery_window_overscan_after()
+            full_start = max(0, center - full_before)
+            full_end = min(total, center + full_after)
+            if full_start < start or full_end > end:
+                payload["windowExpandPending"] = True
+                payload["windowExpandCenter"] = center
+        return payload
+
+    def _gallery_expand_jump_window(self, center_index: int) -> dict:
+        """Fase 2 del salto: ampliar márgenes sin reconstruir el núcleo ya visible."""
+        total = len(self.ordered_paths)
+        if total <= 0:
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "hasMore": False,
+                "replaceWindow": False,
+                "windowPhase": "expand",
+            }
+        center = max(0, min(total - 1, int(center_index)))
+        before = self._gallery_window_overscan_before()
+        after = self._gallery_window_overscan_after()
+        start = max(0, center - before)
+        end = min(total, center + after)
+        cur_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        cur_end = int(self.gallery_unlimited_loaded or 0)
+        if cur_start <= start and cur_end >= end:
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "hasMore": end < total,
+                "replaceWindow": False,
+                "windowPhase": "expand",
+                "windowExpandPending": False,
+            }
+
+        prepend_items: list[dict] = []
+        append_items: list[dict] = []
+        need_prepend = cur_start > start
+        need_append = cur_end < end
+        can_incremental = cur_end > cur_start and (need_prepend or need_append)
+
+        t_build = time.perf_counter()
+        if can_incremental:
+            if need_prepend:
+                prepend_items = self._gallery_items_for_range(
+                    start, cur_start, jump_fast=False
+                )
+            if need_append:
+                append_items = self._gallery_items_for_range(
+                    cur_end, end, jump_fast=False
+                )
+            batch_items = prepend_items + append_items
+        else:
+            batch_items = self._gallery_items_for_range(start, end, jump_fast=False)
+
+        build_ms = int((time.perf_counter() - t_build) * 1000)
+        self.gallery_unlimited_window_start = start
+        self.gallery_unlimited_loaded = end
+        self._jump_expand_center = 0
+        trimmed = self._maybe_trim_sliding_window()
+
+        if can_incremental and batch_items:
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "prependItems": prepend_items,
+                "appendItems": append_items,
+                "hasMore": end < total,
+                "replaceWindow": False,
+                "windowExpandIncremental": True,
+                "windowStart": start,
+                "windowEnd": end,
+                "windowPhase": "expand",
+                "windowExpandPending": False,
+                "windowTrimmed": trimmed,
+                "timing": {
+                    "buildMs": build_ms,
+                    "itemCount": len(batch_items),
+                    "prependCount": len(prepend_items),
+                    "appendCount": len(append_items),
+                },
+            }
+
         return {
             "state": self._gallery_state(),
             "items": batch_items,
@@ -703,18 +1083,28 @@ class GalleryBridgeMixin:
             "replaceWindow": True,
             "windowStart": start,
             "windowEnd": end,
+            "windowPhase": "expand",
+            "windowExpandPending": False,
+            "timing": {"buildMs": build_ms, "itemCount": len(batch_items)},
         }
 
     def gallery_load_folder(self, raw_path: str) -> dict:
         folder = resolve_dir_path(raw_path)
         with self.lock:
-            self._clear_thumb_cache()
+            t0 = time.perf_counter()
+            folder_changed = self.gallery_folder != folder
+            if folder_changed:
+                self._clear_thumb_cache()
+            # Siempre regenerar plantillas LQ (p. ej. tras índice en disco o cambio de calidad).
+            self._gallery_path_item_cache.clear()
             self.gallery_folder = folder
             self.settings["gallery_last_folder"] = str(folder)
             self._merge_recent_folder(str(folder))
             save_app_settings(self.settings)
             self.subfolders = list_subdirs(folder)
+            t_scan = time.perf_counter()
             self.ordered_paths = self._scan_ordered_paths(folder)
+            scan_ms = int((time.perf_counter() - t_scan) * 1000)
             self._schedule_gallery_total_bytes_recompute()
             self.selected.clear()
             self.gallery_page = 0
@@ -722,12 +1112,21 @@ class GalleryBridgeMixin:
                 min(len(self.ordered_paths), self._unlimited_batch_size()) if self._is_unlimited_mode() else 0
             )
             self.gallery_unlimited_window_start = 0
-            if self._is_grouped_mode() and self._is_unlimited_mode():
-                self.gallery_unlimited_loaded = len(self.ordered_paths)
+            t_build = time.perf_counter()
+            items = self._build_gallery_items()
+            build_ms = int((time.perf_counter() - t_build) * 1000)
+            total_ms = int((time.perf_counter() - t0) * 1000)
             return {
                 "state": self._gallery_state(),
-                "items": self._build_gallery_items(),
+                "items": items,
                 "recentFolders": list(self.settings.get("gallery_recent_folders", [])),
+                "timing": {
+                    "scanMs": scan_ms,
+                    "buildMs": build_ms,
+                    "totalMs": total_ms,
+                    "fromCache": getattr(self, "_last_scan_source", "fresh") != "fresh",
+                    "scanSource": getattr(self, "_last_scan_source", "fresh"),
+                },
             }
 
     def gallery_reload(self, *, clear_thumb_cache: bool = True) -> dict:
@@ -742,6 +1141,11 @@ class GalleryBridgeMixin:
         prev_unlimited_loaded = int(self.gallery_unlimited_loaded or 0)
         if clear_thumb_cache:
             self._clear_thumb_cache()
+        self._invalidate_gallery_scan_cache()
+        if self.gallery_folder:
+            from ..core.gallery_index_cache import invalidate_gallery_index
+
+            invalidate_gallery_index(self.gallery_folder)
         folder = self.gallery_folder
         self.subfolders = list_subdirs(folder)
         self.ordered_paths = self._scan_ordered_paths(folder)
@@ -749,13 +1153,10 @@ class GalleryBridgeMixin:
         self._clamp_page()
         if self._is_unlimited_mode():
             total = len(self.ordered_paths)
-            if self._is_grouped_mode():
-                self.gallery_unlimited_loaded = total
-            else:
-                batch = self._unlimited_batch_size()
-                keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
-                self.gallery_unlimited_loaded = min(total, max(batch, keep))
-                self.gallery_unlimited_window_start = 0
+            batch = self._unlimited_batch_size(total)
+            keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
+            self.gallery_unlimited_loaded = min(total, max(batch, keep))
+            self.gallery_unlimited_window_start = 0
 
     def gallery_reindex_delta(self, removed_paths: list[str] | None = None) -> dict:
         """Reindexa metadatos tras quitar archivos; evita serializar toda la rejilla si no hace falta."""
@@ -801,6 +1202,12 @@ class GalleryBridgeMixin:
 
     def _extend_batch_count(self, gap: int, batch: int) -> int:
         """Tandas por petición al extender (más si el hueco hasta el target es grande)."""
+        if self._is_small_gallery_folder():
+            if gap <= batch:
+                return 1
+            if gap <= batch * 3:
+                return _GALLERY_LOAD_MAX_BATCHES
+            return min(4, _GALLERY_LOAD_MAX_BATCHES + 2)
         if gap <= batch * 2:
             return _GALLERY_LOAD_MAX_BATCHES
         return min(
@@ -812,8 +1219,6 @@ class GalleryBridgeMixin:
         with self.lock:
             if not self.gallery_folder:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
-            if self._is_grouped_mode():
-                return {"state": self._gallery_state(), "items": [], "hasMore": False}
             if not self._is_unlimited_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
             total = len(self.ordered_paths)
@@ -821,58 +1226,68 @@ class GalleryBridgeMixin:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
             start = max(0, min(total, self.gallery_unlimited_loaded))
-            end = min(total, start + self._unlimited_batch_size())
+            end = min(total, start + self._unlimited_batch_size(total, for_scroll=True))
             if start >= end:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
             window_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
             if window_start > 0:
-                batch_items = self._gallery_items_for_range(window_start, end)
+                batch_items = self._gallery_items_for_range(start, end)
                 self.gallery_unlimited_loaded = end
+                trimmed = self._maybe_trim_sliding_window()
                 has_more = end < total
                 return {
                     "state": self._gallery_state(),
                     "items": batch_items,
                     "hasMore": has_more,
-                    "replaceWindow": True,
+                    "replaceWindow": False,
                     "windowStart": window_start,
                     "windowEnd": end,
+                    "windowTrimmed": trimmed,
                 }
 
-            if self._is_timeline_mode():
-                batch_items = self._build_timeline_items_for_range(start, end)
-            else:
-                batch_items = self._gallery_items_for_range(start, end)
+            batch_items = self._gallery_items_for_range(start, end)
 
             self.gallery_unlimited_loaded = end
             has_more = end < total
             return {"state": self._gallery_state(), "items": batch_items, "hasMore": has_more}
 
-    def gallery_load_until_index(self, target_index: int, jump: bool = False) -> dict:
+    def gallery_load_until_index(
+        self,
+        target_index: int,
+        jump: bool = False,
+        expand: bool = False,
+    ) -> dict:
         """Carga progresiva o ventana directa (salto a índice lejano)."""
         with self.lock:
             if not self.gallery_folder:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
-            if self._is_grouped_mode() or not self._is_unlimited_mode():
+            if not self._is_unlimited_mode():
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
             total = len(self.ordered_paths)
             if total <= 0:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
             target = max(0, min(total, int(target_index)))
+            if expand:
+                center = int(getattr(self, "_jump_expand_center", 0) or target)
+                if center <= 0 or abs(center - target) > self._gallery_window_overscan_before() + 128:
+                    center = target
+                return self._gallery_expand_jump_window(center)
+
             window_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
             loaded = int(self.gallery_unlimited_loaded or 0)
-            batch = self._unlimited_batch_size()
+            batch = self._unlimited_batch_size(total, for_scroll=True)
 
-            # Salto explícito (rail o scroll muy lejos): recentrar ventana.
+            # Salto explícito (rail o scroll muy lejos): núcleo rápido + expansión en segundo plano.
             if jump:
-                return self._gallery_load_window(target)
+                return self._gallery_load_window(target, jump_core=True)
 
-            # Scroll por encima del inicio cargado: ampliar hacia atrás o recentrar si es lejos.
+            # Scroll por encima del inicio cargado: prepend incremental (sin reemplazar ventana).
             if target < window_start:
                 margin = _GALLERY_WINDOW_JUMP_MARGIN
                 if target >= window_start - margin:
-                    new_start = max(0, target - _GALLERY_WINDOW_OVERSCAN_BEFORE)
+                    new_start = max(0, target - self._gallery_window_overscan_before())
                     new_end = loaded
                     if new_start >= window_start:
                         return {
@@ -881,15 +1296,36 @@ class GalleryBridgeMixin:
                             "hasMore": loaded < total,
                             "replaceWindow": False,
                         }
-                    batch_items = self._gallery_items_for_range(new_start, new_end)
+                    t_build = time.perf_counter()
+                    prepend_items = self._gallery_items_for_range(new_start, window_start)
+                    build_ms = int((time.perf_counter() - t_build) * 1000)
                     self.gallery_unlimited_window_start = new_start
+                    trimmed_end = self._maybe_trim_sliding_window_from_end()
+                    new_end = int(self.gallery_unlimited_loaded or new_end)
+                    if prepend_items:
+                        return {
+                            "state": self._gallery_state(),
+                            "items": [],
+                            "prependItems": prepend_items,
+                            "appendItems": [],
+                            "hasMore": new_end < total,
+                            "replaceWindow": False,
+                            "windowExpandIncremental": True,
+                            "windowStart": new_start,
+                            "windowEnd": new_end,
+                            "windowPhase": "scroll_prepend",
+                            "windowTrimmedEnd": trimmed_end,
+                            "timing": {
+                                "buildMs": build_ms,
+                                "prependCount": len(prepend_items),
+                                "itemCount": len(prepend_items),
+                            },
+                        }
                     return {
                         "state": self._gallery_state(),
-                        "items": batch_items,
+                        "items": [],
                         "hasMore": new_end < total,
-                        "replaceWindow": True,
-                        "windowStart": new_start,
-                        "windowEnd": new_end,
+                        "replaceWindow": False,
                     }
                 return self._gallery_load_window(target)
 
@@ -901,7 +1337,7 @@ class GalleryBridgeMixin:
                     "replaceWindow": False,
                 }
 
-            # Tras un salto: ampliar la ventana hacia adelante sin perder el inicio.
+            # Tras un salto: extender solo el tramo nuevo hacia adelante (append).
             if window_start > 0 and loaded >= window_start:
                 gap = max(0, target - loaded)
                 extend_batches = self._extend_batch_count(gap, batch)
@@ -914,15 +1350,21 @@ class GalleryBridgeMixin:
                         "hasMore": loaded < total,
                         "replaceWindow": False,
                     }
-                batch_items = self._gallery_items_for_range(window_start, new_end)
+                t_build = time.perf_counter()
+                batch_items = self._gallery_items_for_range(loaded, new_end)
+                build_ms = int((time.perf_counter() - t_build) * 1000)
                 self.gallery_unlimited_loaded = new_end
+                trimmed = self._maybe_trim_sliding_window()
                 return {
                     "state": self._gallery_state(),
                     "items": batch_items,
                     "hasMore": new_end < total,
-                    "replaceWindow": True,
+                    "replaceWindow": False,
                     "windowStart": window_start,
                     "windowEnd": new_end,
+                    "windowPhase": "scroll_append",
+                    "windowTrimmed": trimmed,
+                    "timing": {"buildMs": build_ms, "itemCount": len(batch_items)},
                 }
 
             # Modo append desde el inicio: extender sin reemplazar ítems ya cargados.
@@ -946,9 +1388,16 @@ class GalleryBridgeMixin:
         return self.gallery_load_folder(path)
 
     def gallery_thumb_hq(self, path: str, scale: float) -> dict:
-        p = Path(path).expanduser().resolve()
+        from ..core.fs_path import resolve_file_path
+
+        p = resolve_file_path(path)
         thumb_px = _thumb_px_from_gallery_scale(float(scale))
-        return {"path": str(p), "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "hq"), "thumbQuality": "hq"}
+        item_path = self._gallery_item_path(p)
+        return {
+            "path": item_path,
+            "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "hq"),
+            "thumbQuality": "hq",
+        }
 
     def gallery_file_stat(self, path: str) -> dict:
         """Metadatos básicos para propiedades del menú contextual."""
