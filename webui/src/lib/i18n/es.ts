@@ -126,6 +126,9 @@ export const es = {
     destBarAria: "Carpetas destino",
     noDestFolders: "No hay carpetas destino",
     previewToolbarAria: "Selección del modal de destino",
+    previewStripAria: "Miniaturas seleccionadas",
+    previewStripTitle: "Selección",
+    previewStripRemove: "Quitar de la selección",
     deactivateMode: "Desactivar modo selección",
     activateMode: "Activar modo selección",
     deactivate: "Desactivar",
@@ -564,7 +567,7 @@ export const es = {
     includeSubfolders: "Todas las imágenes (incluye subcarpetas)",
     groupByFolder: "Agrupar por carpeta",
     groupByFolderHint:
-      "Muestra subcarpetas como secciones en la misma vista. Arrastra con Ctrl (modo Edición) sobre el encabezado de otra sección para mover.",
+      "Muestra subcarpetas (también anidadas) como secciones en la misma vista. Arrastra con Ctrl (modo Edición) sobre el encabezado de otra sección para mover.",
     sortLabel: "Ordenar",
     sortName: "Nombre",
     sortDate: "Fecha (modificación)",

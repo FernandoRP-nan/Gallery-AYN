@@ -49,8 +49,10 @@
   import PreviewZoomPanel from "./components/PreviewZoomPanel.svelte";
   import PreviewVideoIdle from "./components/PreviewVideoIdle.svelte";
   import PreviewVideoProfiles from "./components/PreviewVideoProfiles.svelte";
+  import PreviewSelectionGrid from "./components/PreviewSelectionGrid.svelte";
   import {
     applyGalleryMutationResponse,
+    galleryItems,
     getGalleryItems,
     getGalleryState,
     mergeGalleryItemsFromApi,
@@ -1709,9 +1711,41 @@
     stopVideoPreparePoll();
   }
 
-  function setSelectedPreviewFromPath(path: string | null | undefined) {
+  $: editModeSelectedMedia = destinationsMode
+    ? $galleryItems.filter((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected))
+    : [];
+
+  async function deselectGalleryPath(path: string) {
     const p = String(path ?? "").trim();
     if (!p) return;
+    patchGallerySelection(
+      (items) => items.map((x) => (x.path === p ? { ...x, selected: false } : x)),
+      "selection:preview_strip_remove",
+      { path: p },
+    );
+    try {
+      await bridge.galleryApplySelectionDelta([], [p]);
+    } catch {
+      /* selección local ya aplicada */
+    }
+    if (selectedPreview?.path === p) {
+      const remaining = getGalleryItems().filter((x) => isGalleryMediaKind(x.kind) && x.selected);
+      setSelectedPreviewFromPath(remaining[0]?.path ?? null);
+    }
+  }
+
+  function previewStripSelectPath(path: string) {
+    galleryCursorPath = path;
+    setSelectedPreviewFromPath(path);
+  }
+
+  function setSelectedPreviewFromPath(path: string | null | undefined) {
+    const p = String(path ?? "").trim();
+    if (!p) {
+      selectedPreview = null;
+      resetPreviewVideoPlaybackUi();
+      return;
+    }
     const row = getGalleryItems().find((x) => isGalleryMediaKind(x.kind) && x.path === p) as GalleryItem | undefined;
     if (!row) return;
     const isSameVideo =
@@ -4621,6 +4655,7 @@
           ></div>
 
           <aside class="preview om-panel app-chrome app-chrome--preview">
+            <div class="preview__main">
             {#if selectedPreview?.mediaType === "video"}
               <div class="preview__video-toolbar">
                 <PreviewVideoProfiles
@@ -4719,6 +4754,15 @@
               {/key}
             {:else}
               <div class="preview__empty">{t("preview.emptySelect")}</div>
+            {/if}
+            </div>
+            {#if destinationsMode && editModeSelectedMedia.length > 0}
+              <PreviewSelectionGrid
+                items={editModeSelectedMedia}
+                activePath={selectedPreview?.path ?? null}
+                onSelect={previewStripSelectPath}
+                onRemove={(path) => void deselectGalleryPath(path)}
+              />
             {/if}
             <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
           </aside>
