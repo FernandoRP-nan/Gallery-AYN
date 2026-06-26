@@ -161,3 +161,36 @@ export function countSelectedMedia(items: GalleryItem[]): number {
 export function countSelectedGalleryItems(items: GalleryItem[]): number {
   return items.filter((x) => isGallerySelectableKind(x.kind) && x.selected).length;
 }
+
+/** Tras quitar medios, decrementa mediaIndex global para cerrar huecos en scroll virtual. */
+export function shiftGalleryMediaIndicesAfterRemoval(
+  items: GalleryItem[],
+  removedMediaIndices: number[],
+): GalleryItem[] {
+  const removed = [...removedMediaIndices]
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b);
+  if (removed.length === 0) return items;
+  return items.map((it) => {
+    if (!isGalleryMediaKind(it.kind)) return it;
+    const idx = it.mediaIndex;
+    if (typeof idx !== "number" || !Number.isFinite(idx)) return it;
+    let shift = 0;
+    for (const r of removed) {
+      if (idx > r) shift += 1;
+    }
+    const nextIdx = idx - shift;
+    return nextIdx === idx ? it : { ...it, mediaIndex: nextIdx };
+  });
+}
+
+export function collectRemovedMediaIndices(items: GalleryItem[], removedPaths: Set<string>): number[] {
+  const out: number[] = [];
+  for (const it of items) {
+    if (!isGalleryMediaKind(it.kind) || !removedPaths.has(it.path)) continue;
+    if (typeof it.mediaIndex === "number" && Number.isFinite(it.mediaIndex)) {
+      out.push(it.mediaIndex);
+    }
+  }
+  return out;
+}

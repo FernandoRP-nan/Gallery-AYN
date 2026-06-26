@@ -10,6 +10,7 @@ export type GalleryPerfConfig = {
   thumbBuildWorkers: number;
   thumbHqWorkers: number;
   thumbHqVisibleSequential: number;
+  compactIndicesAfterMove: boolean;
 };
 
 const DEFAULTS: GalleryPerfConfig = {
@@ -23,6 +24,7 @@ const DEFAULTS: GalleryPerfConfig = {
   thumbBuildWorkers: 8,
   thumbHqWorkers: 4,
   thumbHqVisibleSequential: 16,
+  compactIndicesAfterMove: true,
 };
 
 export const GALLERY_SMALL_FOLDER_MAX = 2000;
@@ -112,6 +114,9 @@ export function applyGalleryPerfConfig(raw: Partial<GalleryPerfConfig>) {
       4,
       32,
     ),
+    compactIndicesAfterMove: Boolean(
+      raw.compactIndicesAfterMove ?? active.compactIndicesAfterMove ?? DEFAULTS.compactIndicesAfterMove,
+    ),
   };
 }
 
@@ -136,6 +141,9 @@ export function galleryPerfFromSettings(settings: Record<string, unknown> | unde
     thumbHqWorkers: Number(settings?.gallery_thumb_hq_workers ?? DEFAULTS.thumbHqWorkers),
     thumbHqVisibleSequential: Number(
       settings?.gallery_thumb_hq_visible_sequential ?? DEFAULTS.thumbHqVisibleSequential,
+    ),
+    compactIndicesAfterMove: Boolean(
+      settings?.gallery_compact_indices_after_move ?? DEFAULTS.compactIndicesAfterMove,
     ),
   };
 }

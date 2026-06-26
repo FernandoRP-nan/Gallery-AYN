@@ -36,7 +36,9 @@
   export let galleryThumbBuildWorkers: number;
   export let galleryThumbHqWorkers: number;
   export let galleryThumbHqVisibleSequential: number;
+  export let galleryCompactIndicesAfterMove = true;
   export let debugLogEnabled = false;
+  export let debugLogFilters: import("../lib/galleryDebugLog").GalleryDebugFilters;
   export let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
   export let videoTranscodeMaxHeight = 1080;
   export let videoTranscodeHw: "auto" | "off" = "auto";
@@ -139,6 +141,7 @@
           bind:galleryThumbBuildWorkers
           bind:galleryThumbHqWorkers
           bind:galleryThumbHqVisibleSequential
+          bind:galleryCompactIndicesAfterMove
         />
       {:else if activeTab === "thumbs"}
         <SettingsThumbsSection
@@ -182,7 +185,7 @@
         <SettingsDestinationsSection {destTree} {onDestTreeChange} {onPickDestFolder} />
         <SettingsMarkersSection {markerTree} {onMarkerTreeChange} {onPickMarkerFolder} />
       {:else if activeTab === "debug"}
-        <SettingsDebugSection bind:debugLogEnabled />
+        <SettingsDebugSection bind:debugLogEnabled bind:debugLogFilters />
       {/if}
     </section>
 

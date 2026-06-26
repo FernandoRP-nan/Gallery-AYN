@@ -673,8 +673,10 @@
         galleryActionBusy = true;
         try {
           const nextSelected = !it.selected;
-          patchGallerySelection((items) =>
-            items.map((x) => (x.path === it.path ? { ...x, selected: nextSelected } : x))
+          patchGallerySelection(
+            (items) => items.map((x) => (x.path === it.path ? { ...x, selected: nextSelected } : x)),
+            "selection:click_toggle",
+            { path: it.path, selected: nextSelected, kind: it.kind },
           );
           void syncEditSelectionDelta(nextSelected ? [it.path] : [], nextSelected ? [] : [it.path]);
           galleryCursorPath = it.path;
@@ -693,8 +695,10 @@
     try {
       if (destinationsMode) {
         const nextSelected = !it.selected;
-        patchGallerySelection((items) =>
-          items.map((x) => (x.path === it.path ? { ...x, selected: nextSelected } : x))
+        patchGallerySelection(
+          (items) => items.map((x) => (x.path === it.path ? { ...x, selected: nextSelected } : x)),
+          "selection:click_toggle",
+          { path: it.path, selected: nextSelected, kind: it.kind },
         );
         void syncEditSelectionDelta(nextSelected ? [it.path] : [], nextSelected ? [] : [it.path]);
         emitPreview(it.path);
@@ -802,8 +806,10 @@
     }
 
     if (addPaths.length > 0 || removePaths.length > 0) {
-      patchGallerySelection((items) =>
-        items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: draft.has(x.path) } : x))
+      patchGallerySelection(
+        (items) => items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: draft.has(x.path) } : x)),
+        "selection:range",
+        { addCount: addPaths.length, removeCount: removePaths.length },
       );
       void syncEditSelectionDelta(addPaths, removePaths);
     }
@@ -828,8 +834,9 @@
   const selectPage = async () => {
     const out = await bridge.gallerySelectPage();
     mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
-    patchGallerySelection((items) =>
-      items.map((x) => (x.kind === "folder" ? { ...x, selected: true } : x))
+    patchGallerySelection(
+      (items) => items.map((x) => (x.kind === "folder" ? { ...x, selected: true } : x)),
+      "selection:select_page",
     );
     if (destinationsMode) {
       const items = getGalleryItems();
@@ -839,8 +846,9 @@
   };
 
   const clearSelection = async () => {
-    patchGallerySelection((items) =>
-      items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x))
+    patchGallerySelection(
+      (items) => items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x)),
+      "selection:clear",
     );
     galleryState.update((s) => ({ ...s, selectedCount: 0 }));
     try {
@@ -855,8 +863,9 @@
       const out = await bridge.galleryInvertSelection();
       mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
     } catch {
-      patchGallerySelection((items) =>
-        items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: !x.selected } : x))
+      patchGallerySelection(
+        (items) => items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: !x.selected } : x)),
+        "selection:invert",
       );
     }
     if (destinationsMode) {

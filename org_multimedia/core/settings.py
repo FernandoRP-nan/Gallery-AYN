@@ -79,7 +79,20 @@ def load_app_settings() -> dict:
             "gallery_thumb_build_workers": 8,
             "gallery_thumb_hq_workers": 4,
             "gallery_thumb_hq_visible_sequential": 16,
+            "gallery_compact_indices_after_move": True,
             "web_debug_log_enabled": False,
+            "web_debug_log_filters": {
+                "scroll": True,
+                "scroll_drag": True,
+                "rail_jump": True,
+                "prefetch": True,
+                "load_lq": True,
+                "load_hq": True,
+                "user": True,
+                "window": True,
+                "selection": True,
+                "selection_reset": True,
+            },
         }
     try:
         with path.open(encoding="utf-8") as f:
@@ -328,6 +341,31 @@ def load_app_settings() -> dict:
             data["web_debug_log_enabled"] = False
         else:
             data["web_debug_log_enabled"] = bool(data["web_debug_log_enabled"])
+        if "gallery_compact_indices_after_move" not in data:
+            data["gallery_compact_indices_after_move"] = True
+        else:
+            data["gallery_compact_indices_after_move"] = bool(data["gallery_compact_indices_after_move"])
+        _default_debug_filters = {
+            "scroll": True,
+            "scroll_drag": True,
+            "rail_jump": True,
+            "prefetch": True,
+            "load_lq": True,
+            "load_hq": True,
+            "user": True,
+            "window": True,
+            "selection": True,
+            "selection_reset": True,
+        }
+        raw_filters = data.get("web_debug_log_filters")
+        if not isinstance(raw_filters, dict):
+            data["web_debug_log_filters"] = dict(_default_debug_filters)
+        else:
+            merged = dict(_default_debug_filters)
+            for key in _default_debug_filters:
+                if key in raw_filters:
+                    merged[key] = bool(raw_filters[key])
+            data["web_debug_log_filters"] = merged
         return data
     except (OSError, json.JSONDecodeError):
         return {
@@ -390,7 +428,20 @@ def load_app_settings() -> dict:
             "gallery_thumb_build_workers": 8,
             "gallery_thumb_hq_workers": 4,
             "gallery_thumb_hq_visible_sequential": 16,
+            "gallery_compact_indices_after_move": True,
             "web_debug_log_enabled": False,
+            "web_debug_log_filters": {
+                "scroll": True,
+                "scroll_drag": True,
+                "rail_jump": True,
+                "prefetch": True,
+                "load_lq": True,
+                "load_hq": True,
+                "user": True,
+                "window": True,
+                "selection": True,
+                "selection_reset": True,
+            },
         }
 
 

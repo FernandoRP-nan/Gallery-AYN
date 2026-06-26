@@ -356,7 +356,7 @@ export const es = {
     messLead: "Fotos sugeridas desde la carpeta desorden al final de la galería.",
     videoLead: "Transcodificación al reproducir vídeos dentro del visor integrado.",
     shortcutsLead: "Teclas para cambiar de modo, zoom y acciones rápidas.",
-    debugLead: "Panel flotante con eventos de scroll, saltos y carga LQ/HQ (solo para diagnóstico).",
+    debugLead: "Panel flotante para diagnosticar scroll, carga de miniaturas y selección en modo edición.",
     perfAdvancedLead:
       "Ajustes técnicos para carpetas muy grandes, scroll largo y saltos por fecha. La mayoría de usuarios no necesitan tocarlos.",
     perfOverscanTitle: "Margen de carga al hacer scroll",
@@ -476,6 +476,9 @@ export const es = {
     thumbBuildWorkers: "Workers generación LQ",
     thumbHqWorkers: "Workers hidratación HQ",
     thumbHqVisibleSequential: "HQ visibles secuenciales",
+    compactIndicesAfterMove: "Quitar huecos tras mover archivos",
+    compactIndicesAfterMoveHint:
+      "Reindexa la rejilla virtual al mover o eliminar para no dejar celdas vacías (shimmer). Desactiva en carpetas enormes si notas un micro-tirón al mover muchos archivos seguidos.",
     perfMemoryHint:
       "Más overscan y tandas grandes usan más RAM pero reducen recargas al saltar fechas. Menos workers ahorra CPU.",
     saving: "Guardando ajustes…",
@@ -486,12 +489,21 @@ export const es = {
     sectionDebug: "Registro de eventos",
     debugLogEnabled: "Activar modo log / depurador",
     debugLogHint:
-      "Muestra un panel flotante con scrolls, saltos de fecha, tandas LQ/HQ y posición de ventana. Útil para copiar y analizar el comportamiento.",
-    debugLogItemScroll: "Scroll y posición del viewport",
-    debugLogItemDrag: "Arrastre del scrollbar (click pulsado)",
-    debugLogItemRail: "Saltos instantáneos por marcas de fecha",
-    debugLogItemLq: "Tandas de miniaturas LQ cargadas",
-    debugLogItemHq: "Tandas de hidratación HQ",
+      "Filtra por tipo de evento. Copia el log para analizar saltos de fecha, tandas LQ/HQ o reinicios de selección.",
+    debugFiltersLegend: "Tipos de evento",
+    debugFiltersHint: "Desactiva categorías que no necesites; el panel y la copia al portapapeles respetan estos filtros.",
+    debugFilter: {
+      scroll: "Scroll / viewport",
+      scroll_drag: "Arrastre scrollbar",
+      rail_jump: "Salto por fecha (rail)",
+      prefetch: "Prefetch scroll",
+      load_lq: "Tandas LQ",
+      load_hq: "Hidratación HQ",
+      user: "Acciones de usuario",
+      window: "Ventana deslizante",
+      selection: "Selección (modo edición)",
+      selection_reset: "Reinicio de selección",
+    },
   },
   debug: {
     panelAria: "Panel de depuración de galería",
@@ -503,6 +515,8 @@ export const es = {
     clear: "Limpiar",
     disable: "Desactivar depurador",
     empty: "Sin eventos aún. Interactúa con la galería para registrar acciones.",
+    filtersShow: "Filtros",
+    filtersHide: "Ocultar filtros",
   },
   treeManager: {
     back: "Volver",

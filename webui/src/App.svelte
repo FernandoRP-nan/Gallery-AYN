@@ -7,7 +7,7 @@
   import SettingsModal from "./components/SettingsModal.svelte";
   import DebugLogPanel from "./components/DebugLogPanel.svelte";
   import { applyGalleryPerfConfig, galleryPerfFromSettings, getGalleryPerfConfig } from "./lib/galleryPerfConfig";
-  import { setGalleryDebugLogEnabled, galleryDbg } from "./lib/galleryDebugLog";
+  import { setGalleryDebugLogEnabled, galleryDbg, setGalleryDebugFilters, normalizeGalleryDebugFilters, DEFAULT_GALLERY_DEBUG_FILTERS, logGallerySelectionDelta, type GalleryDebugFilters } from "./lib/galleryDebugLog";
   import { t } from "./lib/i18n";
   import { normalizePathForApi, buildMediaFileUrl } from "./lib/pathUtils";
   import { copyTextToClipboard } from "./lib/clipboardText";
@@ -87,7 +87,13 @@
     isGalleryNavigationCurrent,
   } from "./lib/gallerySession";
   import { commitChromePagerState } from "./lib/chromeRemember";
-  import { isGalleryMediaKind, isGallerySelectableKind, mergeItemsKeepingBestThumb } from "./lib/galleryUtils";
+  import {
+    collectRemovedMediaIndices,
+    isGalleryMediaKind,
+    isGallerySelectableKind,
+    mergeItemsKeepingBestThumb,
+    shiftGalleryMediaIndicesAfterRemoval,
+  } from "./lib/galleryUtils";
   import {
     applyUiThemeToDocument,
     normalizeUiTheme,
@@ -298,6 +304,7 @@
   let galleryThumbBuildWorkers = 8;
   let galleryThumbHqWorkers = 4;
   let galleryThumbHqVisibleSequential = 16;
+  let galleryCompactIndicesAfterMove = true;
   let galleryUnlimitedBatchSizeBackup = 48;
   let galleryWindowOverscanBeforeBackup = 96;
   let galleryWindowOverscanAfterBackup = 160;
@@ -308,8 +315,11 @@
   let galleryThumbBuildWorkersBackup = 8;
   let galleryThumbHqWorkersBackup = 4;
   let galleryThumbHqVisibleSequentialBackup = 16;
+  let galleryCompactIndicesAfterMoveBackup = true;
   let debugLogEnabled = false;
   let debugLogEnabledBackup = false;
+  let debugLogFilters: GalleryDebugFilters = { ...DEFAULT_GALLERY_DEBUG_FILTERS };
+  let debugLogFiltersBackup: GalleryDebugFilters = { ...DEFAULT_GALLERY_DEBUG_FILTERS };
   let settingsThumbScaleDraft = 1;
   let thumbGapPx = 12;
   let showThumbLabels = true;
@@ -797,8 +807,11 @@
     galleryThumbBuildWorkers = perfCfg.thumbBuildWorkers;
     galleryThumbHqWorkers = perfCfg.thumbHqWorkers;
     galleryThumbHqVisibleSequential = perfCfg.thumbHqVisibleSequential;
+    galleryCompactIndicesAfterMove = perfCfg.compactIndicesAfterMove;
     debugLogEnabled = Boolean(data.settings?.web_debug_log_enabled ?? false);
     setGalleryDebugLogEnabled(debugLogEnabled);
+    debugLogFilters = normalizeGalleryDebugFilters(data.settings?.web_debug_log_filters);
+    setGalleryDebugFilters(debugLogFilters);
     await syncDestinationsFromApi();
     await syncMarkersFromApi();
   };
@@ -988,7 +1001,7 @@
   async function applyGalleryItemsDelta(out: GalleryMutationResponse) {
     const anchor = captureGalleryScrollAnchor();
     if (Array.isArray(out.items)) {
-      mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
+      mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: true });
     } else {
       applyGalleryMutationResponse(out);
     }
@@ -1034,15 +1047,25 @@
       (x) => isGalleryMediaKind(x.kind) && pathSet.has(x.path)
     ).length;
     removeGalleryThumbHq(pathSet);
-    updateGalleryItems((items) =>
-      items
-        .filter((x) => !pathSet.has(x.path))
-        .map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x))
-    );
+    const prevItems = getGalleryItems();
+    const removedMediaIndices = collectRemovedMediaIndices(prevItems, pathSet);
+    const compactAfterMove = getGalleryPerfConfig().compactIndicesAfterMove;
+    updateGalleryItems((items) => {
+      const filtered = items.filter((x) => !pathSet.has(x.path));
+      return compactAfterMove
+        ? shiftGalleryMediaIndicesAfterRemoval(filtered, removedMediaIndices)
+        : filtered;
+    });
+    if (compactAfterMove) clearMasonryHeightCache();
+    syncSelectedCountFromItems();
+    logGallerySelectionDelta("optimistic:remove", prevItems, getGalleryItems(), {
+      removedMedia,
+      paths: snapshot.srcPaths.length,
+    });
     const s = snapshot.prevState;
     setGalleryState({
       ...s,
-      selectedCount: 0,
+      selectedCount: getGalleryState().selectedCount,
       total: Math.max(0, Number(s.total ?? 0) - removedMedia),
       endIndex: Math.max(0, Number(s.endIndex ?? 0) - removedMedia),
       totalElements: Math.max(0, Number(s.totalElements ?? s.total ?? 0) - removedMedia),
@@ -1285,7 +1308,9 @@
     galleryThumbBuildWorkersBackup = galleryThumbBuildWorkers;
     galleryThumbHqWorkersBackup = galleryThumbHqWorkers;
     galleryThumbHqVisibleSequentialBackup = galleryThumbHqVisibleSequential;
+    galleryCompactIndicesAfterMoveBackup = galleryCompactIndicesAfterMove;
     debugLogEnabledBackup = debugLogEnabled;
+    debugLogFiltersBackup = { ...debugLogFilters };
     settingsOpen = true;
   };
 
@@ -1319,7 +1344,11 @@
     galleryThumbBuildWorkers = galleryThumbBuildWorkersBackup;
     galleryThumbHqWorkers = galleryThumbHqWorkersBackup;
     galleryThumbHqVisibleSequential = galleryThumbHqVisibleSequentialBackup;
+    galleryCompactIndicesAfterMove = galleryCompactIndicesAfterMoveBackup;
     debugLogEnabled = debugLogEnabledBackup;
+    debugLogFilters = { ...debugLogFiltersBackup };
+    setGalleryDebugLogEnabled(debugLogEnabled);
+    setGalleryDebugFilters(debugLogFilters);
     settingsOpen = false;
   };
 
@@ -1389,7 +1418,9 @@
         gallery_thumb_build_workers: galleryThumbBuildWorkers,
         gallery_thumb_hq_workers: galleryThumbHqWorkers,
         gallery_thumb_hq_visible_sequential: galleryThumbHqVisibleSequential,
+        gallery_compact_indices_after_move: Boolean(galleryCompactIndicesAfterMove),
         web_debug_log_enabled: Boolean(debugLogEnabled),
+        web_debug_log_filters: { ...debugLogFilters },
         gallery_thumb_scale: Number(ts.toFixed(3)),
         gallery_thumb_quality_preset: galleryThumbQualityPreset,
         web_ui_theme: uiTheme,
@@ -1429,8 +1460,10 @@
         thumbBuildWorkers: galleryThumbBuildWorkers,
         thumbHqWorkers: galleryThumbHqWorkers,
         thumbHqVisibleSequential: galleryThumbHqVisibleSequential,
+        compactIndicesAfterMove: galleryCompactIndicesAfterMove,
       });
       setGalleryDebugLogEnabled(debugLogEnabled);
+      setGalleryDebugFilters(debugLogFilters);
       appliedThumbScale = ts;
       settingsOpen = false;
       uiLoading = false;
@@ -2077,18 +2110,12 @@
     const it = getGalleryItems().find((x) => x.path === path);
     if (!it) return;
 
-    // Actualización optimista local de forma instantánea
     const nextSelected = !it.selected;
-    updateGalleryItems((items) => items.map((x) =>
-      x.path === path ? { ...x, selected: nextSelected } : x
-    ));
-
-    const prevCount = Number(getGalleryState().selectedCount || 0);
-    setGalleryState({
-      ...getGalleryState(),
-      selectedCount: Math.max(0, prevCount + (nextSelected ? 1 : -1)),
-    });
-
+    patchGallerySelection(
+      (items) => items.map((x) => (x.path === path ? { ...x, selected: nextSelected } : x)),
+      "selection:ctrl_toggle",
+      { path, selected: nextSelected },
+    );
     setSelectedPreviewFromPath(path);
   }
 
@@ -2102,18 +2129,22 @@
     const target = new Set<string>();
     for (let i = lo; i <= hi; i++) target.add(imagePaths[i]);
     
-    patchGallerySelection((items) =>
-      items.map((it) => {
-        if (!isGalleryMediaKind(it.kind)) return it;
-        const isTarget = target.has(it.path);
-        return { ...it, selected: isTarget ? true : it.selected };
-      })
+    patchGallerySelection(
+      (items) =>
+        items.map((it) => {
+          if (!isGalleryMediaKind(it.kind)) return it;
+          const isTarget = target.has(it.path);
+          return { ...it, selected: isTarget ? true : it.selected };
+        }),
+      "selection:keyboard_range",
+      { from: anchorPath, to: toPath, count: target.size },
     );
   };
 
   const clearSelection = async () => {
-    patchGallerySelection((items) =>
-      items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x))
+    patchGallerySelection(
+      (items) => items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x)),
+      "selection:clear",
     );
     setGalleryState({ ...getGalleryState(), selectedCount: 0 });
     try {
@@ -2123,8 +2154,9 @@
     }
   };
   const invertSelection = async () => {
-    patchGallerySelection((items) =>
-      items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: !x.selected } : x))
+    patchGallerySelection(
+      (items) => items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: !x.selected } : x)),
+      "selection:invert",
     );
     if (destinationsMode) {
       const last = [...getGalleryItems()].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
@@ -2414,7 +2446,7 @@
     try {
       const out = await trackLoad(bridge.destinationMoveFromPreview(paths));
       setGalleryState(out.state ?? getGalleryState());
-      mergeGalleryItemsFromApi(out.items ?? getGalleryItems(), out.state, { preserveSelection: false });
+      mergeGalleryItemsFromApi(out.items ?? getGalleryItems(), out.state, { preserveSelection: true });
       void afterGalleryDataLoaded();
       const moved = Number(out.moveResult?.moved ?? 0);
       const errors = Number(out.moveResult?.errors ?? 0);
@@ -5220,7 +5252,9 @@
       bind:galleryThumbBuildWorkers
       bind:galleryThumbHqWorkers
       bind:galleryThumbHqVisibleSequential
+      bind:galleryCompactIndicesAfterMove
       bind:debugLogEnabled
+      bind:debugLogFilters
       bind:videoTranscodePreset
       bind:videoTranscodeMaxHeight
       bind:videoTranscodeHw

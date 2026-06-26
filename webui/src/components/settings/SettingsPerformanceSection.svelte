@@ -11,6 +11,7 @@
   export let galleryThumbBuildWorkers: number;
   export let galleryThumbHqWorkers: number;
   export let galleryThumbHqVisibleSequential: number;
+  export let galleryCompactIndicesAfterMove = true;
 
   function applyJumpCoreAggressivePreset() {
     galleryJumpCoreOverscanBefore = 32;
@@ -166,6 +167,12 @@
 
   <label class="field-label" for="set-hq-visible">{t("settings.thumbHqVisibleSequential")}</label>
   <input id="set-hq-visible" class="om-input" type="number" min="4" max="32" bind:value={galleryThumbHqVisibleSequential} />
+
+  <label class="settings-check">
+    <input type="checkbox" bind:checked={galleryCompactIndicesAfterMove} />
+    <span>{t("settings.compactIndicesAfterMove")}</span>
+  </label>
+  <p class="settings-hint">{t("settings.compactIndicesAfterMoveHint")}</p>
 
   <p class="settings-hint">{t("settings.perfMemoryHint")}</p>
 </div>

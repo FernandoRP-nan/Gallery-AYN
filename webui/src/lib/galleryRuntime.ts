@@ -4,8 +4,12 @@ import {
   countSelectedGalleryItems,
   mergeItemsKeepingBestThumb,
   isGalleryMediaKind,
+  isGallerySelectableKind,
+  shiftGalleryMediaIndicesAfterRemoval,
+  collectRemovedMediaIndices,
 } from "./galleryUtils";
 import { getGalleryPerfConfig } from "./galleryPerfConfig";
+import { clearMasonryHeightCache } from "./galleryMasonryHeightCache";
 import {
   enrichItemsFromVisitedCache,
   stashGalleryItemsInVisitedCache,
@@ -15,7 +19,7 @@ import {
   seedGalleryThumbHqFromItems,
   stripHqFromGalleryItems,
 } from "./galleryThumbHqCache";
-import { galleryDbg } from "./galleryDebugLog";
+import { galleryDbg, logGallerySelectionDelta } from "./galleryDebugLog";
 
 export type GalleryMutationResponse = {
   state?: GalleryState;
@@ -67,9 +71,15 @@ export function getGalleryState(): GalleryState {
 }
 
 export function setGalleryPayload(state: GalleryState, nextItems: GalleryItem[]) {
+  const prevItems = getGalleryItems();
   seedGalleryThumbHqFromItems(nextItems);
-  galleryItems.set(stripHqFromGalleryItems(nextItems));
-  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(getGalleryItems()) });
+  const stripped = stripHqFromGalleryItems(nextItems);
+  galleryItems.set(stripped);
+  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(stripped) });
+  logGallerySelectionDelta("payload:full_replace", prevItems, stripped, {
+    total: state.total ?? 0,
+    folder: state.folder ?? "",
+  });
 }
 
 export function setGalleryState(state: GalleryState) {
@@ -95,8 +105,15 @@ export function mergeGalleryItemsFromApi(
   opts?: { preserveSelection?: boolean },
 ) {
   seedGalleryThumbHqFromItems(nextItems);
-  const merged = mergeItemsKeepingBestThumb(getGalleryItems(), nextItems, opts);
+  const prevItems = getGalleryItems();
+  const merged = mergeItemsKeepingBestThumb(prevItems, nextItems, opts);
   galleryItems.set(stripHqFromGalleryItems(merged));
+  logGallerySelectionDelta(
+    opts?.preserveSelection === false ? "mergeApi:replace_selection" : "mergeApi:preserve",
+    prevItems,
+    merged,
+    { preserveSelection: opts?.preserveSelection !== false },
+  );
   if (state) {
     galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(merged) });
   } else {
@@ -125,6 +142,7 @@ export function appendGalleryItemsFromApi(
   }
   const next = stripHqFromGalleryItems([...prevItems, ...appended]);
   galleryItems.set(next);
+  logGallerySelectionDelta("window:append", prevItems, next, { appendCount: appended.length });
   if (state) {
     galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
     galleryDbg("window", "ventana ampliada (append)", {
@@ -170,6 +188,9 @@ export function applySlidingWindowTrim(state?: GalleryState): number {
   if (removedPaths.length > 0) removeGalleryThumbHq(new Set(removedPaths));
   const next = stripHqFromGalleryItems(kept);
   galleryItems.set(next);
+  const selectedRemoved = removedPaths.filter((p) =>
+    prev.some((x) => x.path === p && isGallerySelectableKind(x.kind) && x.selected),
+  );
   galleryState.set({
     ...st,
     windowStart: ws,
@@ -180,6 +201,11 @@ export function applySlidingWindowTrim(state?: GalleryState): number {
     endIndex: end,
     removed: removedPaths.length,
     itemCount: next.length,
+    selectedRemoved: selectedRemoved.length,
+  });
+  logGallerySelectionDelta("window:sliding_trim_start", prev, next, {
+    selectedRemoved,
+    removedFromWindow: removedPaths.length,
   });
   return removedPaths.length;
 }
@@ -215,6 +241,9 @@ export function applySlidingWindowTrimFromEnd(state?: GalleryState): number {
   if (removedPaths.length > 0) removeGalleryThumbHq(new Set(removedPaths));
   const next = stripHqFromGalleryItems(kept);
   galleryItems.set(next);
+  const selectedRemoved = removedPaths.filter((p) =>
+    prev.some((x) => x.path === p && isGallerySelectableKind(x.kind) && x.selected),
+  );
   galleryState.set({
     ...st,
     endIndex: end,
@@ -225,6 +254,11 @@ export function applySlidingWindowTrimFromEnd(state?: GalleryState): number {
     endIndex: end,
     removed: removedPaths.length,
     itemCount: next.length,
+    selectedRemoved: selectedRemoved.length,
+  });
+  logGallerySelectionDelta("window:sliding_trim_end", prev, next, {
+    selectedRemoved,
+    removedFromWindow: removedPaths.length,
   });
   return removedPaths.length;
 }
@@ -253,11 +287,23 @@ export function applyGalleryRemovePathsDelta(state: GalleryState, removedPaths: 
     setGalleryStateFromApi(state);
     return;
   }
+  const prevItems = getGalleryItems();
+  const removedMediaIndices = collectRemovedMediaIndices(prevItems, removed);
   removeGalleryThumbHq(removed);
-  updateGalleryItems((items) =>
-    pruneOrphanGallerySections(items.filter((x) => !removed.has(x.path)))
-  );
-  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(getGalleryItems()) });
+  updateGalleryItems((items) => {
+    let next = pruneOrphanGallerySections(items.filter((x) => !removed.has(x.path)));
+    if (getGalleryPerfConfig().compactIndicesAfterMove) {
+      next = shiftGalleryMediaIndicesAfterRemoval(next, removedMediaIndices);
+    }
+    return next;
+  });
+  if (getGalleryPerfConfig().compactIndicesAfterMove) clearMasonryHeightCache();
+  const nextItems = getGalleryItems();
+  galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(nextItems) });
+  logGallerySelectionDelta("delta:remove_paths", prevItems, nextItems, {
+    removedCount: removed.size,
+    compactIndices: getGalleryPerfConfig().compactIndicesAfterMove,
+  });
 }
 
 export function applyGalleryWindowItems(windowItems: GalleryItem[], state?: GalleryState) {
@@ -274,6 +320,11 @@ export function applyGalleryWindowItems(windowItems: GalleryItem[], state?: Gall
   const windowMerged = enrichItemsFromVisitedCache(prevItems, windowItems);
   const next = stripHqFromGalleryItems([...prefix, ...windowMerged]);
   galleryItems.set(next);
+  logGallerySelectionDelta("window:replace", prevItems, next, {
+    windowStart: state?.windowStart ?? 0,
+    endIndex: state?.endIndex ?? 0,
+    itemCount: windowItems.length,
+  });
   if (state) {
     galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
     galleryDbg("window", "ventana reemplazada", {
@@ -316,6 +367,10 @@ export function applyGalleryWindowExpand(
   const appMerged = enrichItemsFromVisitedCache(prevItems, app);
   const next = stripHqFromGalleryItems([...prefix, ...prepMerged, ...media, ...appMerged]);
   galleryItems.set(next);
+  logGallerySelectionDelta("window:expand", prevItems, next, {
+    prependCount: prep.length,
+    appendCount: app.length,
+  });
   if (state) {
     galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
     galleryDbg("window", "ventana ampliada (incremental)", {
@@ -346,7 +401,7 @@ export function applyGalleryMutationResponse(out: GalleryMutationResponse) {
     return;
   }
   if (Array.isArray(out?.items)) {
-    mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
+    mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: true });
     return;
   }
   if (out?.state) setGalleryStateFromApi(out.state);
@@ -357,7 +412,14 @@ export function syncSelectedCountFromItems() {
   galleryState.update((s) => ({ ...s, selectedCount: n }));
 }
 
-export function patchGallerySelection(mutator: (items: GalleryItem[]) => GalleryItem[]) {
+export function patchGallerySelection(
+  mutator: (items: GalleryItem[]) => GalleryItem[],
+  source = "selection:patch",
+  detail?: Record<string, unknown>,
+) {
+  const prevItems = getGalleryItems();
   galleryItems.update(mutator);
+  const nextItems = getGalleryItems();
   syncSelectedCountFromItems();
+  logGallerySelectionDelta(source, prevItems, nextItems, detail);
 }
