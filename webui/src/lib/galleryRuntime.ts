@@ -1,11 +1,19 @@
 import { get, writable } from "svelte/store";
 import type { GalleryItem } from "./api";
-import { countSelectedGalleryItems, mergeItemsKeepingBestThumb } from "./galleryUtils";
+import {
+  countSelectedGalleryItems,
+  mergeItemsKeepingBestThumb,
+} from "./galleryUtils";
+import {
+  enrichItemsFromVisitedCache,
+  stashGalleryItemsInVisitedCache,
+} from "./galleryVisitedCache";
 import {
   removeGalleryThumbHq,
   seedGalleryThumbHqFromItems,
   stripHqFromGalleryItems,
 } from "./galleryThumbHqCache";
+import { galleryDbg } from "./galleryDebugLog";
 
 export type GalleryMutationResponse = {
   state?: GalleryState;
@@ -76,9 +84,13 @@ export function updateGalleryItems(mutator: (items: GalleryItem[]) => GalleryIte
   galleryItems.update(mutator);
 }
 
-export function mergeGalleryItemsFromApi(nextItems: GalleryItem[], state?: GalleryState) {
+export function mergeGalleryItemsFromApi(
+  nextItems: GalleryItem[],
+  state?: GalleryState,
+  opts?: { preserveSelection?: boolean },
+) {
   seedGalleryThumbHqFromItems(nextItems);
-  const merged = mergeItemsKeepingBestThumb(getGalleryItems(), nextItems);
+  const merged = mergeItemsKeepingBestThumb(getGalleryItems(), nextItems, opts);
   galleryItems.set(stripHqFromGalleryItems(merged));
   if (state) {
     galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(merged) });
@@ -123,14 +135,23 @@ export function applyGalleryWindowItems(windowItems: GalleryItem[], state?: Gall
     if (state) setGalleryStateFromApi(state);
     return;
   }
-  const prefix = getGalleryItems().filter(
+  const prevItems = getGalleryItems();
+  stashGalleryItemsInVisitedCache(prevItems);
+  const prefix = prevItems.filter(
     (it) => it.kind === "folder" || it.kind === "folder_up"
   );
   seedGalleryThumbHqFromItems(windowItems);
-  const next = stripHqFromGalleryItems([...prefix, ...windowItems]);
+  const windowMerged = enrichItemsFromVisitedCache(prevItems, windowItems);
+  const next = stripHqFromGalleryItems([...prefix, ...windowMerged]);
   galleryItems.set(next);
   if (state) {
     galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
+    galleryDbg("window", "ventana reemplazada", {
+      windowStart: state.windowStart ?? 0,
+      endIndex: state.endIndex ?? 0,
+      total: state.total ?? 0,
+      itemCount: windowItems.length,
+    });
   } else {
     syncSelectedCountFromItems();
   }
@@ -142,7 +163,7 @@ export function applyGalleryMutationResponse(out: GalleryMutationResponse) {
     return;
   }
   if (Array.isArray(out?.items)) {
-    mergeGalleryItemsFromApi(out.items, out.state);
+    mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
     return;
   }
   if (out?.state) setGalleryStateFromApi(out.state);

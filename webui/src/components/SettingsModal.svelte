@@ -11,10 +11,29 @@
   import SettingsMessSection from "./settings/SettingsMessSection.svelte";
   import SettingsShortcutsSection from "./settings/SettingsShortcutsSection.svelte";
   import SettingsThumbsSection from "./settings/SettingsThumbsSection.svelte";
+  import SettingsDebugSection from "./settings/SettingsDebugSection.svelte";
 
   import type { TreeNode } from "../lib/itemTree";
 
+  type SettingsTabId =
+    | "performance"
+    | "thumbs"
+    | "appearance"
+    | "video"
+    | "shortcuts"
+    | "mess"
+    | "destinations"
+    | "markers"
+    | "debug";
+
   export let thumbsPerPage: number;
+  export let galleryUnlimitedBatchSize: number;
+  export let galleryWindowOverscanBefore: number;
+  export let galleryWindowOverscanAfter: number;
+  export let galleryThumbBuildWorkers: number;
+  export let galleryThumbHqWorkers: number;
+  export let galleryThumbHqVisibleSequential: number;
+  export let debugLogEnabled = false;
   export let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
   export let videoTranscodeMaxHeight = 1080;
   export let videoTranscodeHw: "auto" | "off" = "auto";
@@ -44,6 +63,20 @@
   export let onCancel: () => void;
   export let onSave: () => void;
 
+  let activeTab: SettingsTabId = "performance";
+
+  const tabs: { id: SettingsTabId; labelKey: string }[] = [
+    { id: "performance", labelKey: "settings.tabPerformance" },
+    { id: "thumbs", labelKey: "settings.tabThumbs" },
+    { id: "appearance", labelKey: "settings.tabAppearance" },
+    { id: "video", labelKey: "settings.tabVideo" },
+    { id: "shortcuts", labelKey: "settings.tabShortcuts" },
+    { id: "mess", labelKey: "settings.tabMess" },
+    { id: "destinations", labelKey: "settings.tabDestinations" },
+    { id: "markers", labelKey: "settings.tabMarkers" },
+    { id: "debug", labelKey: "settings.tabDebug" },
+  ];
+
   $: previewCellPx = galleryGridCellPx(settingsThumbScaleDraft);
 </script>
 
@@ -67,41 +100,74 @@
         on:click={onCancel}>✕</button
       >
     </header>
+
+    <nav class="settings-tabs" aria-label={t("settings.tabsAria")}>
+      {#each tabs as tab (tab.id)}
+        <button
+          type="button"
+          class="settings-tabs__btn"
+          class:settings-tabs__btn--active={activeTab === tab.id}
+          aria-selected={activeTab === tab.id}
+          on:click={() => (activeTab = tab.id)}>{t(tab.labelKey)}</button
+        >
+      {/each}
+    </nav>
+
     <section class="settings-body">
-      <SettingsPerformanceSection bind:thumbsPerPage />
-      <SettingsVideoSection
-        bind:videoTranscodePreset
-        bind:videoTranscodeMaxHeight
-        bind:videoTranscodeHw
-      />
-      <SettingsThumbsSection
-        bind:settingsThumbPresetIdx
-        bind:settingsThumbScaleDraft
-        bind:galleryThumbQualityPreset
-        bind:thumbGapPx
-        bind:thumbImageRadiusPx
-        bind:thumbTileRadiusPx
-      />
-      <SettingsAppearanceSection
-        bind:uiTheme
-        bind:showThumbLabels
-        bind:thumbFrameVisible
-        bind:thumbCardStyle
-        {previewCellPx}
-        {thumbGapPx}
-        {thumbImageRadiusPx}
-        {thumbTileRadiusPx}
-        {themeNameLabel}
-      />
-      <SettingsShortcutsSection bind:keyboardShortcuts {defaultShortcuts} />
-      <SettingsMessSection
-        bind:suggestionsEnabled
-        bind:suggestionsMasonry={pinterestMasonry}
-        bind:messScanMaxFiles
-      />
-      <SettingsDestinationsSection {destTree} {onDestTreeChange} {onPickDestFolder} />
-      <SettingsMarkersSection {markerTree} {onMarkerTreeChange} {onPickMarkerFolder} />
+      {#if activeTab === "performance"}
+        <SettingsPerformanceSection
+          bind:thumbsPerPage
+          bind:galleryUnlimitedBatchSize
+          bind:galleryWindowOverscanBefore
+          bind:galleryWindowOverscanAfter
+          bind:galleryThumbBuildWorkers
+          bind:galleryThumbHqWorkers
+          bind:galleryThumbHqVisibleSequential
+        />
+      {:else if activeTab === "thumbs"}
+        <SettingsThumbsSection
+          bind:settingsThumbPresetIdx
+          bind:settingsThumbScaleDraft
+          bind:galleryThumbQualityPreset
+          bind:thumbGapPx
+          bind:thumbImageRadiusPx
+          bind:thumbTileRadiusPx
+        />
+      {:else if activeTab === "appearance"}
+        <SettingsAppearanceSection
+          bind:uiTheme
+          bind:showThumbLabels
+          bind:thumbFrameVisible
+          bind:thumbCardStyle
+          {previewCellPx}
+          {thumbGapPx}
+          {thumbImageRadiusPx}
+          {thumbTileRadiusPx}
+          {themeNameLabel}
+        />
+      {:else if activeTab === "video"}
+        <SettingsVideoSection
+          bind:videoTranscodePreset
+          bind:videoTranscodeMaxHeight
+          bind:videoTranscodeHw
+        />
+      {:else if activeTab === "shortcuts"}
+        <SettingsShortcutsSection bind:keyboardShortcuts {defaultShortcuts} />
+      {:else if activeTab === "mess"}
+        <SettingsMessSection
+          bind:suggestionsEnabled
+          bind:suggestionsMasonry={pinterestMasonry}
+          bind:messScanMaxFiles
+        />
+      {:else if activeTab === "destinations"}
+        <SettingsDestinationsSection {destTree} {onDestTreeChange} {onPickDestFolder} />
+      {:else if activeTab === "markers"}
+        <SettingsMarkersSection {markerTree} {onMarkerTreeChange} {onPickMarkerFolder} />
+      {:else if activeTab === "debug"}
+        <SettingsDebugSection bind:debugLogEnabled />
+      {/if}
     </section>
+
     <div class="settings-actions">
       <button type="button" class="om-btn om-btn--ghost" on:click={onCancel}>{t("common.cancel")}</button>
       <button type="button" class="om-btn om-btn--primary" on:click={onSave}>{t("common.save")}</button>

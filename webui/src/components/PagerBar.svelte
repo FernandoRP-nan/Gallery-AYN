@@ -52,6 +52,17 @@
     }
     return `${total} ${t("pager.imagesWord")}`;
   }
+
+  /** Etiqueta de progreso en modo ilimitado (ventana deslizante vs carga desde el inicio). */
+  function unlimitedLoadedLabel(state: typeof pager): string {
+    const total = Number(state?.total ?? 0);
+    const end = Number(state?.endIndex ?? 0);
+    const windowStart = Number(state?.windowStart ?? 0);
+    if (windowStart > 0 && end > windowStart) {
+      return `${t("pager.showingRange")} ${windowStart + 1}–${end} ${t("pager.ofWord")} ${total}`;
+    }
+    return `${t("pager.loadedPrefix")} ${end}/${total}`;
+  }
 </script>
 
 <footer class="pager om-panel pager--bar app-chrome app-chrome--footer" aria-label={t("pager.footerAria")}>
@@ -103,8 +114,7 @@
     <button type="button" class="om-btn om-btn--primary om-btn--compact" on:click={jumpToPageDraft}>{t("pager.goJump")}</button>
   {:else}
     <span class="pager__google-line">
-      {t("pager.loadedPrefix")}
-      {Number(pager?.endIndex ?? 0)}/{Number(pager?.total ?? 0)}
+      {unlimitedLoadedLabel(pager)}
       · {mediaCountLabel(pager)} ·
       {Number(pager?.totalElements ?? Number(pager?.total ?? 0) + Number(pager?.subfoldersCount ?? 0))}
       {t("pager.elementsWord")} · {t("pager.totalWeight")}

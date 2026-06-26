@@ -5,6 +5,9 @@
   import ConfirmDeleteModal from "./components/ConfirmDeleteModal.svelte";
   import LoadOverlay from "./components/LoadOverlay.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
+  import DebugLogPanel from "./components/DebugLogPanel.svelte";
+  import { applyGalleryPerfConfig, galleryPerfFromSettings, getGalleryPerfConfig } from "./lib/galleryPerfConfig";
+  import { setGalleryDebugLogEnabled, galleryDbg } from "./lib/galleryDebugLog";
   import { t } from "./lib/i18n";
   import { normalizePathForApi, buildMediaFileUrl } from "./lib/pathUtils";
   import { copyTextToClipboard } from "./lib/clipboardText";
@@ -60,6 +63,8 @@
     type GalleryMutationResponse,
     type GalleryState,
   } from "./lib/galleryRuntime";
+  import { clearVisitedGalleryCache } from "./lib/galleryVisitedCache";
+  import { clearMasonryHeightCache } from "./lib/galleryMasonryHeightCache";
   import {
     bumpGalleryThumbHydrationToken,
     disposeGalleryThumbs,
@@ -216,6 +221,8 @@
   let videoTranscodeJobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }> = [];
   let videoPreparePollTimer: number | null = null;
   let previewVideoMode: VideoPlaybackMode = "auto";
+  let previewVideoAutoplay = true;
+  let previewVideoAutoplayEdit = false;
   let previewVideoProfiles: Array<{ id: string; available: boolean; recommended?: boolean; strategy?: string }> = [];
   let previewVideoPreparePath = "";
   let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
@@ -280,6 +287,20 @@
   let settingsOpen = false;
   let thumbsPerPage = 48;
   let thumbsPerPageBackup = 48;
+  let galleryUnlimitedBatchSize = 48;
+  let galleryWindowOverscanBefore = 96;
+  let galleryWindowOverscanAfter = 160;
+  let galleryThumbBuildWorkers = 8;
+  let galleryThumbHqWorkers = 4;
+  let galleryThumbHqVisibleSequential = 16;
+  let galleryUnlimitedBatchSizeBackup = 48;
+  let galleryWindowOverscanBeforeBackup = 96;
+  let galleryWindowOverscanAfterBackup = 160;
+  let galleryThumbBuildWorkersBackup = 8;
+  let galleryThumbHqWorkersBackup = 4;
+  let galleryThumbHqVisibleSequentialBackup = 16;
+  let debugLogEnabled = false;
+  let debugLogEnabledBackup = false;
   let settingsThumbScaleDraft = 1;
   let thumbGapPx = 12;
   let showThumbLabels = true;
@@ -746,11 +767,23 @@
       const hw = String(data.settings?.video_transcode_hw ?? "auto").toLowerCase();
       videoTranscodeHw = hw === "off" ? "off" : "auto";
     }
+    previewVideoAutoplay = Boolean(data.settings?.preview_video_autoplay ?? true);
+    previewVideoAutoplayEdit = Boolean(data.settings?.preview_video_autoplay_edit ?? false);
     {
       const tq = String(data.settings?.gallery_thumb_quality_preset ?? "balanced").toLowerCase();
       galleryThumbQualityPreset =
         tq === "sharp" ? "sharp" : tq === "hidpi" ? "hidpi" : tq === "performance" ? "performance" : "balanced";
     }
+    applyGalleryPerfConfig(galleryPerfFromSettings(data.settings as Record<string, unknown> | undefined));
+    const perfCfg = getGalleryPerfConfig();
+    galleryUnlimitedBatchSize = perfCfg.unlimitedBatchSize;
+    galleryWindowOverscanBefore = perfCfg.windowOverscanBefore;
+    galleryWindowOverscanAfter = perfCfg.windowOverscanAfter;
+    galleryThumbBuildWorkers = perfCfg.thumbBuildWorkers;
+    galleryThumbHqWorkers = perfCfg.thumbHqWorkers;
+    galleryThumbHqVisibleSequential = perfCfg.thumbHqVisibleSequential;
+    debugLogEnabled = Boolean(data.settings?.web_debug_log_enabled ?? false);
+    setGalleryDebugLogEnabled(debugLogEnabled);
     await syncDestinationsFromApi();
     await syncMarkersFromApi();
   };
@@ -940,7 +973,7 @@
   async function applyGalleryItemsDelta(out: GalleryMutationResponse) {
     const anchor = captureGalleryScrollAnchor();
     if (Array.isArray(out.items)) {
-      mergeGalleryItemsFromApi(out.items, out.state);
+      mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
     } else {
       applyGalleryMutationResponse(out);
     }
@@ -986,7 +1019,11 @@
       (x) => isGalleryMediaKind(x.kind) && pathSet.has(x.path)
     ).length;
     removeGalleryThumbHq(pathSet);
-    updateGalleryItems((items) => items.filter((x) => !pathSet.has(x.path)));
+    updateGalleryItems((items) =>
+      items
+        .filter((x) => !pathSet.has(x.path))
+        .map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x))
+    );
     const s = snapshot.prevState;
     setGalleryState({
       ...s,
@@ -1022,10 +1059,30 @@
       folderForwardStack = [];
     }
     const navGen = beginGalleryNavigation();
+    const t0 = performance.now();
+    galleryDbg("user", "abriendo carpeta", { path: target });
     try {
       const out = await trackLoad(bridge.galleryLoadFolder(target), t("load.openingFolder"));
+      galleryDbg("user", "carpeta cargada", {
+        ms: Math.round(performance.now() - t0),
+        items: Array.isArray(out.items) ? out.items.length : 0,
+        total: out.state?.total ?? 0,
+        scanMs: out.timing?.scanMs,
+        buildMs: out.timing?.buildMs,
+        fromCache: Boolean(out.timing?.fromCache),
+        scanSource: out.timing?.scanSource ?? "fresh",
+      });
       if (!isGalleryNavigationCurrent(navGen)) return;
+      clearVisitedGalleryCache();
+      clearMasonryHeightCache();
       setGalleryPayload(out.state, out.items);
+      const mediaItems = getGalleryItems().filter((x) => x.kind === "image" || x.kind === "video");
+      const withLq = mediaItems.filter((x) => Boolean(x.thumbDataUrl || x.thumbLqDataUrl)).length;
+      galleryDbg("user", "miniaturas LQ en payload", {
+        media: mediaItems.length,
+        withLq,
+        withoutLq: mediaItems.length - withLq,
+      });
       await afterGalleryDataLoaded();
       if (!isGalleryNavigationCurrent(navGen)) return;
       if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
@@ -1202,6 +1259,13 @@
     messPinterestMasonryBackup = messPinterestMasonry;
     messSuggestionsEnabledBackup = messSuggestionsEnabled;
     messScanMaxFilesBackup = messScanMaxFiles;
+    galleryUnlimitedBatchSizeBackup = galleryUnlimitedBatchSize;
+    galleryWindowOverscanBeforeBackup = galleryWindowOverscanBefore;
+    galleryWindowOverscanAfterBackup = galleryWindowOverscanAfter;
+    galleryThumbBuildWorkersBackup = galleryThumbBuildWorkers;
+    galleryThumbHqWorkersBackup = galleryThumbHqWorkers;
+    galleryThumbHqVisibleSequentialBackup = galleryThumbHqVisibleSequential;
+    debugLogEnabledBackup = debugLogEnabled;
     settingsOpen = true;
   };
 
@@ -1224,6 +1288,13 @@
     messPinterestMasonry = messPinterestMasonryBackup;
     messSuggestionsEnabled = messSuggestionsEnabledBackup;
     messScanMaxFiles = messScanMaxFilesBackup;
+    galleryUnlimitedBatchSize = galleryUnlimitedBatchSizeBackup;
+    galleryWindowOverscanBefore = galleryWindowOverscanBeforeBackup;
+    galleryWindowOverscanAfter = galleryWindowOverscanAfterBackup;
+    galleryThumbBuildWorkers = galleryThumbBuildWorkersBackup;
+    galleryThumbHqWorkers = galleryThumbHqWorkersBackup;
+    galleryThumbHqVisibleSequential = galleryThumbHqVisibleSequentialBackup;
+    debugLogEnabled = debugLogEnabledBackup;
     settingsOpen = false;
   };
 
@@ -1241,16 +1312,31 @@
     return pickSettingsDestFolder();
   }
 
+  function clampSettingInt(raw: unknown, lo: number, hi: number, fallback: number): number {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(lo, Math.min(hi, Math.round(n)));
+  }
+
   const saveSettingsModal = async () => {
     const parsedPerPage = Number(thumbsPerPage);
     const perPageRaw = Number.isFinite(parsedPerPage) ? Math.round(parsedPerPage) : 48;
     const n = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
-    thumbsPerPage = n;
     const prevScale = appliedThumbScale;
     const prevThumbQuality = galleryThumbQualityPresetBackup;
     const ts = Math.max(0.01, Math.min(2.25, Number(settingsThumbScaleDraft) || 1));
     const thumbConfigChanged =
       thumbQualityRefreshNeeded(prevScale, ts) || galleryThumbQualityPreset !== prevThumbQuality;
+    const needsGalleryReload = n !== thumbsPerPageBackup || thumbConfigChanged;
+
+    galleryUnlimitedBatchSize = clampSettingInt(galleryUnlimitedBatchSize, 24, 256, 48);
+    galleryWindowOverscanBefore = clampSettingInt(galleryWindowOverscanBefore, 32, 512, 96);
+    galleryWindowOverscanAfter = clampSettingInt(galleryWindowOverscanAfter, 32, 512, 160);
+    galleryThumbBuildWorkers = clampSettingInt(galleryThumbBuildWorkers, 2, 16, 8);
+    galleryThumbHqWorkers = clampSettingInt(galleryThumbHqWorkers, 1, 16, 4);
+    galleryThumbHqVisibleSequential = clampSettingInt(galleryThumbHqVisibleSequential, 4, 32, 16);
+
+    thumbsPerPage = n;
     thumbScale = ts;
     keyboardShortcuts = {
       toggleMode: normalizeShortcutValue(keyboardShortcuts.toggleMode, defaultKeyboardShortcuts.toggleMode),
@@ -1259,38 +1345,71 @@
       zoomNext: normalizeShortcutValue(keyboardShortcuts.zoomNext, defaultKeyboardShortcuts.zoomNext),
       escape: normalizeShortcutValue(keyboardShortcuts.escape, defaultKeyboardShortcuts.escape),
     };
-    await bridge.settingsPatch({
-      gallery_thumbs_per_page: n, // 0 = sin límite
-      gallery_thumb_scale: Number(ts.toFixed(3)),
-      gallery_thumb_quality_preset: galleryThumbQualityPreset,
-      web_ui_theme: uiTheme,
-      web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
-      web_show_thumb_labels: Boolean(showThumbLabels),
-      web_thumb_card_style: thumbCardStyle,
-      web_thumb_frame_visible: Boolean(thumbFrameVisible),
-      web_thumb_image_radius_px: Math.round(thumbImageRadiusPx),
-      web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx),
-      web_shortcuts: { ...keyboardShortcuts },
-      video_transcode_preset: videoTranscodePreset,
-      video_transcode_max_height: Math.max(0, Math.min(2160, Math.round(Number(videoTranscodeMaxHeight) || 1080))),
-      video_transcode_hw: videoTranscodeHw,
-      mess_suggestions_enabled: Boolean(messSuggestionsEnabled),
-      mess_pinterest_masonry: Boolean(messPinterestMasonry),
-      mess_scan_max_files: Math.max(50, Math.min(2000, Math.round(Number(messScanMaxFiles) || 400))),
-    });
-    if (selectedPreview?.mediaType === "video" && selectedPreview.path) {
-      previewVideoMode = "auto";
-      void loadPreviewVideoProfiles(selectedPreview.path);
-      resetPreviewVideoPlaybackUi({ keepPath: true });
-      requestPreviewVideoPlay();
+
+    uiLoading = true;
+    uiLoadingMessage = t("settings.saving");
+    try {
+      await bridge.settingsPatch({
+        gallery_thumbs_per_page: n, // 0 = sin límite
+        gallery_unlimited_batch_size: galleryUnlimitedBatchSize,
+        gallery_window_overscan_before: galleryWindowOverscanBefore,
+        gallery_window_overscan_after: galleryWindowOverscanAfter,
+        gallery_thumb_build_workers: galleryThumbBuildWorkers,
+        gallery_thumb_hq_workers: galleryThumbHqWorkers,
+        gallery_thumb_hq_visible_sequential: galleryThumbHqVisibleSequential,
+        web_debug_log_enabled: Boolean(debugLogEnabled),
+        gallery_thumb_scale: Number(ts.toFixed(3)),
+        gallery_thumb_quality_preset: galleryThumbQualityPreset,
+        web_ui_theme: uiTheme,
+        web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
+        web_show_thumb_labels: Boolean(showThumbLabels),
+        web_thumb_card_style: thumbCardStyle,
+        web_thumb_frame_visible: Boolean(thumbFrameVisible),
+        web_thumb_image_radius_px: Math.round(thumbImageRadiusPx),
+        web_thumb_tile_radius_px: Math.round(thumbTileRadiusPx),
+        web_shortcuts: { ...keyboardShortcuts },
+        video_transcode_preset: videoTranscodePreset,
+        video_transcode_max_height: Math.max(0, Math.min(2160, Math.round(Number(videoTranscodeMaxHeight) || 1080))),
+        video_transcode_hw: videoTranscodeHw,
+        mess_suggestions_enabled: Boolean(messSuggestionsEnabled),
+        mess_pinterest_masonry: Boolean(messPinterestMasonry),
+        mess_scan_max_files: Math.max(50, Math.min(2000, Math.round(Number(messScanMaxFiles) || 400))),
+      });
+      if (selectedPreview?.mediaType === "video" && selectedPreview.path) {
+        previewVideoMode = "auto";
+        void loadPreviewVideoProfiles(selectedPreview.path);
+        resetPreviewVideoPlaybackUi({ keepPath: true });
+        requestPreviewVideoPlay();
+      }
+      await trackLoad(bridge.destinationsSaveTree(destTreeSettingsDraft));
+      await trackLoad(bridge.markersSaveTree(markerTreeSettingsDraft));
+      await syncDestinationsFromApi();
+      await syncMarkersFromApi();
+      applyGalleryPerfConfig({
+        unlimitedBatchSize: galleryUnlimitedBatchSize,
+        windowOverscanBefore: galleryWindowOverscanBefore,
+        windowOverscanAfter: galleryWindowOverscanAfter,
+        thumbBuildWorkers: galleryThumbBuildWorkers,
+        thumbHqWorkers: galleryThumbHqWorkers,
+        thumbHqVisibleSequential: galleryThumbHqVisibleSequential,
+      });
+      setGalleryDebugLogEnabled(debugLogEnabled);
+      appliedThumbScale = ts;
+      settingsOpen = false;
+      uiLoading = false;
+
+      if (needsGalleryReload) {
+        uiLoading = true;
+        uiLoadingMessage = t("settings.applyingGallery");
+        await reload({ silent: false, invalidateThumbCache: thumbConfigChanged });
+        uiLoading = false;
+      }
+      status = needsGalleryReload ? t("settings.savedReloaded") : t("settings.savedInstant");
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("settings.saveError");
+    } finally {
+      uiLoading = false;
     }
-    await trackLoad(bridge.destinationsSaveTree(destTreeSettingsDraft));
-    await trackLoad(bridge.markersSaveTree(markerTreeSettingsDraft));
-    await syncDestinationsFromApi();
-    await syncMarkersFromApi();
-    await reload({ invalidateThumbCache: thumbConfigChanged });
-    appliedThumbScale = ts;
-    settingsOpen = false;
   };
 
   function openConfirmDelete(
@@ -1592,7 +1711,7 @@
           .catch(() => undefined);
       });
     }
-    if (isVideo && !destinationsMode) {
+    if (isVideo && isPreviewVideoAutoplayEnabled()) {
       requestPreviewVideoPlay();
     }
   }
@@ -1628,6 +1747,25 @@
       previewVideoProfiles = out?.profiles ?? [];
     } catch {
       previewVideoProfiles = [];
+    }
+  }
+
+  function isPreviewVideoAutoplayEnabled(): boolean {
+    return destinationsMode ? previewVideoAutoplayEdit : previewVideoAutoplay;
+  }
+
+  function maybeAutoplayPreviewVideo(el: HTMLVideoElement | null | undefined) {
+    if (!isPreviewVideoAutoplayEnabled()) return;
+    tryAutoplayVideo(el);
+  }
+
+  async function togglePreviewVideoAutoplay() {
+    if (destinationsMode) {
+      previewVideoAutoplayEdit = !previewVideoAutoplayEdit;
+      await bridge.settingsPatch({ preview_video_autoplay_edit: previewVideoAutoplayEdit });
+    } else {
+      previewVideoAutoplay = !previewVideoAutoplay;
+      await bridge.settingsPatch({ preview_video_autoplay: previewVideoAutoplay });
     }
   }
 
@@ -1701,7 +1839,7 @@
         stopVideoPreparePoll();
         previewVideoPlayLocked = false;
       }
-      void tick().then(() => tryAutoplayVideo(previewVideoEl));
+      void tick().then(() => maybeAutoplayPreviewVideo(previewVideoEl));
     } catch {
       if (selectedPreview?.path !== pathAtStart) return;
       resetPreviewVideoPlaybackUi({ keepPath: true });
@@ -1773,7 +1911,7 @@
     previewVideoLastErrorDetail = "";
     previewVideoDiagLoading = false;
     stopVideoPreparePoll();
-    tryAutoplayVideo(previewVideoEl);
+    maybeAutoplayPreviewVideo(previewVideoEl);
   }
 
   function onPreviewVideoLoadStart() {
@@ -1934,9 +2072,14 @@
 
   const clearSelection = async () => {
     patchGallerySelection((items) =>
-      items.map((x) => (isGalleryMediaKind(x.kind) ? { ...x, selected: false } : x))
+      items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x))
     );
     setGalleryState({ ...getGalleryState(), selectedCount: 0 });
+    try {
+      await bridge.galleryClearSelection();
+    } catch {
+      /* local ya limpio */
+    }
   };
   const invertSelection = async () => {
     patchGallerySelection((items) =>
@@ -2230,7 +2373,7 @@
     try {
       const out = await trackLoad(bridge.destinationMoveFromPreview(paths));
       setGalleryState(out.state ?? getGalleryState());
-      mergeGalleryItemsFromApi(out.items ?? getGalleryItems(), out.state);
+      mergeGalleryItemsFromApi(out.items ?? getGalleryItems(), out.state, { preserveSelection: false });
       void afterGalleryDataLoaded();
       const moved = Number(out.moveResult?.moved ?? 0);
       const errors = Number(out.moveResult?.errors ?? 0);
@@ -4405,12 +4548,18 @@
 
           <aside class="preview om-panel app-chrome app-chrome--preview">
             {#if selectedPreview?.mediaType === "video"}
-              <PreviewVideoProfiles
-                profiles={previewVideoProfiles}
-                activeMode={previewVideoMode}
-                disabled={previewVideoPlayLocked && previewVideoLaunching}
-                on:change={(e) => void setPreviewVideoMode(e.detail)}
-              />
+              <div class="preview__video-toolbar">
+                <PreviewVideoProfiles
+                  profiles={previewVideoProfiles}
+                  activeMode={previewVideoMode}
+                  disabled={previewVideoPlayLocked && previewVideoLaunching}
+                  autoplayEnabled={isPreviewVideoAutoplayEnabled()}
+                  autoplayEditMode={destinationsMode}
+                  autoplayDisabled={previewVideoPlayLocked && previewVideoLaunching}
+                  on:change={(e) => void setPreviewVideoMode(e.detail)}
+                  on:autoplayToggle={() => void togglePreviewVideoAutoplay()}
+                />
+              </div>
               {#if previewVideoArmed || previewVideoLaunching || previewVideoPlayLocked}
                 <div class="preview__video-shell">
                   <!-- svelte-ignore a11y_media_has_caption -->
@@ -5019,6 +5168,13 @@
   {#if settingsOpen}
     <SettingsModal
       bind:thumbsPerPage
+      bind:galleryUnlimitedBatchSize
+      bind:galleryWindowOverscanBefore
+      bind:galleryWindowOverscanAfter
+      bind:galleryThumbBuildWorkers
+      bind:galleryThumbHqWorkers
+      bind:galleryThumbHqVisibleSequential
+      bind:debugLogEnabled
       bind:videoTranscodePreset
       bind:videoTranscodeMaxHeight
       bind:videoTranscodeHw
@@ -5065,6 +5221,8 @@
   {#if uiLoading}
     <LoadOverlay message={uiLoadingMessage || t("load.loading")} />
   {/if}
+
+  <DebugLogPanel />
 
   <!-- Modal/Overlay Layer -->
   {#if viewMenuOpen}

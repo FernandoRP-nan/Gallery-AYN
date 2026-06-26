@@ -21,6 +21,25 @@ export type { GalleryThumbHydrateOpts };
 
 export const galleryThumbHydrating = writable(false);
 
+let galleryLqLoading = false;
+
+/** Pausa hidratación HQ mientras hay cargas LQ en curso. */
+export function setGalleryLqLoading(active: boolean) {
+  galleryLqLoading = Boolean(active);
+}
+
+function isGalleryLqLoading(): boolean {
+  return galleryLqLoading;
+}
+
+async function waitForLqIdle(token: number, maxMs = 120000): Promise<void> {
+  const start = Date.now();
+  while (isGalleryLqLoading() && isHydrationTokenActive(token)) {
+    if (Date.now() - start > maxMs) return;
+    await new Promise<void>((r) => setTimeout(r, 50));
+  }
+}
+
 let galleryThumbHydrationToken = 0;
 let hydrationQueue: Promise<void> = Promise.resolve();
 let continueTimer: ReturnType<typeof setTimeout> | null = null;
@@ -82,6 +101,8 @@ async function hydrateOnce(
 ): Promise<void> {
   if (!isHydrationTokenActive(token)) return;
 
+  await waitForLqIdle(token);
+
   lastHydrationScale = scale;
   const allNeeding = listGalleryItemsNeedingHq(getGalleryItems());
   if (allNeeding.length === 0) {
@@ -92,13 +113,32 @@ async function hydrateOnce(
 
   galleryThumbHydrating.set(true);
   try {
-    const remaining = await runGalleryThumbHydration(
+    let remaining = await runGalleryThumbHydration(
       allNeeding,
       scale,
       token,
       () => isHydrationTokenActive(token),
       opts
     );
+
+    // Reintento rápido si ninguna HQ aplicó (p. ej. backend aún calentando).
+    if (
+      remaining >= allNeeding.length &&
+      allNeeding.length > 0 &&
+      isHydrationTokenActive(token)
+    ) {
+      await new Promise<void>((r) => setTimeout(r, 180));
+      await waitForLqIdle(token);
+      if (isHydrationTokenActive(token)) {
+        remaining = await runGalleryThumbHydration(
+          listGalleryItemsNeedingHq(getGalleryItems()),
+          scale,
+          token,
+          () => isHydrationTokenActive(token),
+          opts
+        );
+      }
+    }
 
     if (!isHydrationTokenActive(token)) return;
 

@@ -25,7 +25,12 @@ export function videoFormatLabel(pathOrName: string): string | null {
   return ext ? ext.toUpperCase() : null;
 }
 
-export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: GalleryItem[]): GalleryItem[] {
+export function mergeItemsKeepingBestThumb(
+  prevItems: GalleryItem[],
+  nextItems: GalleryItem[],
+  opts?: { preserveSelection?: boolean },
+): GalleryItem[] {
+  const preserveSelection = opts?.preserveSelection !== false;
   const prevByPath = new Map(prevItems.map((x) => [x.path, x] as const));
   return nextItems.map((it) => {
     const prev = prevByPath.get(it.path);
@@ -33,9 +38,9 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
 
     if (!isGalleryMediaKind(it.kind) || !isGalleryMediaKind(prev.kind)) {
       if (prev.kind === it.kind && prev.name === it.name && prev.path === it.path) {
-        return prev;
+        return preserveSelection ? { ...prev, selected: prev.selected } : prev;
       }
-      return it;
+      return preserveSelection ? { ...it, selected: prev.selected } : it;
     }
 
     const prevQ = hasGalleryThumbHq(prev.path)
@@ -60,11 +65,12 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
         thumbLq;
       thumbUrl = thumbLq;
       thumbQ = thumbLq ? ("lq" as const) : undefined;
-      if (!thumbUrl && it.thumbDataUrl) return it;
+      if (!thumbUrl && it.thumbDataUrl) return preserveSelection ? { ...it, selected: prev.selected } : it;
     }
 
+    const selected = preserveSelection ? prev.selected : it.selected;
     const hasChanges =
-      Boolean(prev.selected) !== Boolean(it.selected) ||
+      Boolean(prev.selected) !== Boolean(selected) ||
       prev.thumbDataUrl !== thumbUrl ||
       prev.thumbQuality !== thumbQ ||
       prev.thumbLqDataUrl !== thumbLq ||
@@ -75,7 +81,7 @@ export function mergeItemsKeepingBestThumb(prevItems: GalleryItem[], nextItems: 
 
     return {
       ...prev,
-      selected: it.selected,
+      selected,
       thumbDataUrl: thumbUrl,
       thumbLqDataUrl: thumbLq,
       thumbQuality: thumbQ,

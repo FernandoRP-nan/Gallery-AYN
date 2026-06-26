@@ -16,12 +16,15 @@
     updateGalleryItems,
     applyGalleryWindowItems,
   } from "../lib/galleryRuntime";
+  import { galleryDbg } from "../lib/galleryDebugLog";
+  import { getGalleryPerfConfig } from "../lib/galleryPerfConfig";
   import {
     disposeGalleryThumbs,
     galleryThumbHydrating,
     getGalleryThumbHydrationToken,
     refreshGalleryThumbsForScale,
     requestGalleryThumbHqHydration,
+    setGalleryLqLoading,
     type GalleryThumbHydrateOpts,
   } from "../lib/galleryThumbs";
   import { listGalleryItemsNeedingHq } from "../lib/galleryThumbNeeding";
@@ -88,6 +91,14 @@
 
   export let galleryScrollEl: HTMLDivElement | null = null;
   export let galleryGridEl: HTMLDivElement | null = null;
+  let galleryGrid: GalleryGrid | undefined;
+
+  async function snapScrollAfterJump(targetIndex: number) {
+    await tick();
+    await tick();
+    galleryGrid?.scrollToMediaIndex(targetIndex, "center");
+  }
+
   export let galleryRangeSelecting = false;
   export let galleryRangeSuppressClick = false;
   export let galleryCursorPath: string | null = null;
@@ -211,6 +222,7 @@
   }
 
   $: syncGalleryChromeBusy(galleryScrolling, galleryLoadingMore, $galleryThumbHydrating);
+  $: setGalleryLqLoading(galleryLoadingMore);
 
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
   $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
@@ -245,6 +257,22 @@
     };
   }
 
+  async function hydrateAfterWindowReady() {
+    await tick();
+    await waitForGalleryTilesReady(galleryScrollEl, 1);
+    if (galleryLoadingMore) return;
+    void requestGalleryThumbHqHydration(
+      thumbScale,
+      getGalleryThumbHydrationToken(),
+      galleryThumbHydrateOpts()
+    );
+  }
+
+  function capLqExpansionTarget(target: number, loadedEnd: number): number {
+    const batch = getGalleryPerfConfig().unlimitedBatchSize;
+    return Math.min(target, loadedEnd + batch * 2);
+  }
+
   async function hydrateVisibleThumbsAfterScrollIdle() {
     const needing = listGalleryItemsNeedingHq(getGalleryItems());
     if (needing.length === 0) return;
@@ -271,11 +299,7 @@
       if (out?.replaceWindow) {
         if (extra.length > 0 || out?.state) {
           applyGalleryWindowItems(extra, out?.state);
-          void requestGalleryThumbHqHydration(
-            thumbScale,
-            getGalleryThumbHydrationToken(),
-            galleryThumbHydrateOpts()
-          );
+          void hydrateAfterWindowReady();
         }
       } else if (extra.length > 0) {
         updateGalleryItems((items) => [...items, ...extra]);
@@ -299,9 +323,10 @@
     loadUntilGeneration++;
     galleryLoadingMore = false;
     loadUntilPending = -1;
-    if (loadUntilTimer !== null) {
-      clearTimeout(loadUntilTimer);
-      loadUntilTimer = null;
+    loadUntilCoalesceTarget = -1;
+    if (loadUntilDebounceTimer !== null) {
+      clearTimeout(loadUntilDebounceTimer);
+      loadUntilDebounceTimer = null;
     }
   }
 
@@ -309,9 +334,10 @@
   export function cancelScrollLoads() {
     loadUntilGeneration++;
     loadUntilPending = -1;
-    if (loadUntilTimer !== null) {
-      clearTimeout(loadUntilTimer);
-      loadUntilTimer = null;
+    loadUntilCoalesceTarget = -1;
+    if (loadUntilDebounceTimer !== null) {
+      clearTimeout(loadUntilDebounceTimer);
+      loadUntilDebounceTimer = null;
     }
   }
 
@@ -327,7 +353,9 @@
     const windowStart = Number($galleryState?.windowStart ?? 0);
     const target = Math.max(0, Math.min(total - 1, targetIndex));
 
-    if (total <= 0 || loaded >= total) return;
+    if (total <= 0) return;
+    const needsBackward = windowStart > 0 && target < windowStart;
+    if (loaded >= total && !jump && !needsBackward) return;
     if (windowStart > 0 && !jump && target >= windowStart && target < loaded) return;
     if (windowStart === 0 && !jump && target < loaded) return;
 
@@ -342,6 +370,7 @@
       apiJump = false;
     } else {
       apiTarget = Math.min(total - 1, Math.max(target, loaded) + 128);
+      apiTarget = capLqExpansionTarget(apiTarget, loaded);
       apiJump = false;
     }
 
@@ -351,29 +380,37 @@
     }
     const navGen = getGalleryNavigationGeneration();
     galleryLoadingMore = true;
+    galleryDbg("load_lq", jump ? "carga LQ (salto)" : "carga LQ (expansión)", {
+      targetIndex: target,
+      apiTarget,
+      apiJump,
+      windowStart,
+      loadedEnd: loaded,
+      total,
+    });
     try {
       const out = await bridge.galleryLoadUntilIndex(apiTarget, apiJump);
       if (!isGalleryNavigationCurrent(navGen)) return;
       if (requestGen !== loadUntilGeneration) return;
       const extra = Array.isArray(out?.items) ? out.items : [];
+      galleryDbg("load_lq", "tanda LQ recibida", {
+        count: extra.length,
+        replaceWindow: Boolean(out?.replaceWindow),
+        windowStart: out?.state?.windowStart ?? windowStart,
+        endIndex: out?.state?.endIndex ?? loaded,
+        total: out?.state?.total ?? total,
+      });
       if (out?.replaceWindow) {
         if (extra.length > 0) {
           applyGalleryWindowItems(extra, out?.state);
-          void requestGalleryThumbHqHydration(
-            thumbScale,
-            getGalleryThumbHydrationToken(),
-            galleryThumbHydrateOpts()
-          );
+          if (jump) await snapScrollAfterJump(target);
+          void hydrateAfterWindowReady();
         } else if (out?.state) {
           setGalleryStateFromApi(out.state);
         }
       } else if (extra.length > 0) {
         updateGalleryItems((items) => [...items, ...extra]);
-        void requestGalleryThumbHqHydration(
-          thumbScale,
-          getGalleryThumbHydrationToken(),
-          galleryThumbHydrateOpts()
-        );
+        void hydrateAfterWindowReady();
         if (out?.state) setGalleryStateFromApi(out.state);
         else syncSelectedCountFromItems();
       } else if (out?.state) {
@@ -391,23 +428,30 @@
 
   let loadUntilGeneration = 0;
   let loadUntilPending = -1;
-  let loadUntilTimer: ReturnType<typeof setTimeout> | null = null;
+  let loadUntilCoalesceTarget = -1;
+  let loadUntilDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   function scheduleLoadUntilGalleryIndex(targetIndex: number, jump = false) {
     if (targetIndex < 0) return;
     if (jump) {
       loadUntilGeneration += 1;
       loadUntilPending = -1;
-      if (loadUntilTimer !== null) {
-        clearTimeout(loadUntilTimer);
-        loadUntilTimer = null;
+      loadUntilCoalesceTarget = -1;
+      if (loadUntilDebounceTimer !== null) {
+        clearTimeout(loadUntilDebounceTimer);
+        loadUntilDebounceTimer = null;
       }
       void loadUntilGalleryIndex(targetIndex, { jump: true });
       return;
     }
-    loadUntilPending = Math.max(loadUntilPending, targetIndex);
-    if (galleryLoadingMore) return;
-    void loadUntilGalleryIndex(targetIndex, { jump: false });
+    loadUntilCoalesceTarget = Math.max(loadUntilCoalesceTarget, targetIndex);
+    if (loadUntilDebounceTimer !== null) clearTimeout(loadUntilDebounceTimer);
+    loadUntilDebounceTimer = setTimeout(() => {
+      loadUntilDebounceTimer = null;
+      const t = loadUntilCoalesceTarget;
+      loadUntilCoalesceTarget = -1;
+      if (t >= 0) void loadUntilGalleryIndex(t, { jump: false });
+    }, 220);
   }
 
   $: layoutMode = String($galleryState?.layoutMode ?? "flat");
@@ -469,6 +513,17 @@
     }
   }
 
+  async function syncEditSelectionDelta(addPaths: string[], removePaths: string[]) {
+    if (!destinationsMode) return;
+    if (addPaths.length === 0 && removePaths.length === 0) return;
+    try {
+      const out = await bridge.galleryApplySelectionDelta(addPaths, removePaths);
+      mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: true });
+    } catch {
+      /* selección local ya aplicada */
+    }
+  }
+
   async function clickGalleryItem(it: GalleryItem) {
     if (galleryRangeSuppressClick) return;
     if (suppressNextGalleryClick) return;
@@ -490,6 +545,7 @@
           patchGallerySelection((items) =>
             items.map((x) => (x.path === it.path ? { ...x, selected: nextSelected } : x))
           );
+          void syncEditSelectionDelta(nextSelected ? [it.path] : [], nextSelected ? [] : [it.path]);
           galleryCursorPath = it.path;
         } finally {
           galleryActionBusy = false;
@@ -509,6 +565,7 @@
         patchGallerySelection((items) =>
           items.map((x) => (x.path === it.path ? { ...x, selected: nextSelected } : x))
         );
+        void syncEditSelectionDelta(nextSelected ? [it.path] : [], nextSelected ? [] : [it.path]);
         emitPreview(it.path);
         galleryCursorPath = it.path;
         return;
@@ -617,6 +674,7 @@
       patchGallerySelection((items) =>
         items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: draft.has(x.path) } : x))
       );
+      void syncEditSelectionDelta(addPaths, removePaths);
     }
     if (destinationsMode && previewPath) {
       emitPreview(previewPath);
@@ -638,7 +696,7 @@
 
   const selectPage = async () => {
     const out = await bridge.gallerySelectPage();
-    mergeGalleryItemsFromApi(out.items, out.state);
+    mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
     patchGallerySelection((items) =>
       items.map((x) => (x.kind === "folder" ? { ...x, selected: true } : x))
     );
@@ -654,12 +712,22 @@
       items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: false } : x))
     );
     galleryState.update((s) => ({ ...s, selectedCount: 0 }));
+    try {
+      await bridge.galleryClearSelection();
+    } catch {
+      /* local ya limpio */
+    }
   };
 
   const invertSelection = async () => {
-    patchGallerySelection((items) =>
-      items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: !x.selected } : x))
-    );
+    try {
+      const out = await bridge.galleryInvertSelection();
+      mergeGalleryItemsFromApi(out.items, out.state, { preserveSelection: false });
+    } catch {
+      patchGallerySelection((items) =>
+        items.map((x) => (isGallerySelectableKind(x.kind) ? { ...x, selected: !x.selected } : x))
+      );
+    }
     if (destinationsMode) {
       const items = getGalleryItems();
       const last = [...items].reverse().find((x) => isGalleryMediaKind(x.kind) && Boolean(x.selected));
@@ -674,6 +742,9 @@
   export async function afterGalleryPayloadLoaded(items: GalleryItem[], scale: number) {
     await tick();
     await waitForGalleryTilesReady(galleryScrollEl, 1);
+    // Breve pausa para que el bridge/PyWebView esté listo tras cargas LQ pesadas.
+    await new Promise<void>((r) => setTimeout(r, 320));
+    if (galleryLoadingMore) return;
     await requestGalleryThumbHqHydration(
       scale,
       getGalleryThumbHydrationToken(),
@@ -705,7 +776,7 @@
   onDestroy(() => {
     if (galleryScrollIdleTimer !== null) clearTimeout(galleryScrollIdleTimer);
     if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
-    if (loadUntilTimer !== null) clearTimeout(loadUntilTimer);
+    if (loadUntilDebounceTimer !== null) clearTimeout(loadUntilDebounceTimer);
     loadUntilGeneration++;
     galleryScrollingStore.set(false);
     galleryChromeBusy.set(false);
@@ -721,6 +792,7 @@
 
 <div class="gallery-workspace">
   <GalleryGrid
+    bind:this={galleryGrid}
     {galleryGridItems}
     bind:gridCellPx
     bind:thumbGapPx

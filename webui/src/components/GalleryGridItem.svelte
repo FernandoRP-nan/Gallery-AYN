@@ -1,7 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n";
   import { videoFormatLabel, isGalleryMediaKind, isGallerySelectableKind } from "../lib/galleryUtils";
-  import { hasGalleryThumbHq } from "../lib/galleryThumbHqCache";
   import ThumbImage from "./ThumbImage.svelte";
 
   export let it: any;
@@ -27,6 +26,7 @@
   export let clickItem: (it: any) => void;
   export let openZoomFromGallery: (it: any) => void;
   export let onGalleryItemContextMenu: (e: MouseEvent, it: any) => void;
+
 </script>
 
 {#if it.kind === "section"}
@@ -113,7 +113,7 @@
     }}
     on:contextmenu={(e) => onGalleryItemContextMenu(e, it)}
   >
-    {#if it.thumbDataUrl || (isGalleryMediaKind(it.kind) && hasGalleryThumbHq(it.path))}
+    {#if isGalleryMediaKind(it.kind)}
       <ThumbImage
         itemPath={it.path}
         thumbDataUrl={it.thumbDataUrl ?? ""}

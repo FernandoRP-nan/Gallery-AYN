@@ -102,7 +102,8 @@ _GALLERY_WINDOW_OVERSCAN_BEFORE = 96
 _GALLERY_WINDOW_OVERSCAN_AFTER = 160
 # Scroll leve por encima de la ventana: ampliar hacia atrás; más lejos: recentrar ventana.
 _GALLERY_WINDOW_JUMP_MARGIN = 128
-_GALLERY_LOAD_MAX_BATCHES = 2
+_GALLERY_SCAN_CACHE_TTL_S = 300.0
+_GALLERY_SCAN_CACHE_MAX = 8
 _GALLERY_EXTEND_MAX_BATCHES = 16
 MASONRY_THUMB_HEIGHT_FACTOR = 2.4
 
@@ -216,7 +217,20 @@ class GalleryBridgeMixin:
         return int(self.settings.get("gallery_thumbs_per_page", 48)) <= 0
 
     def _unlimited_batch_size(self) -> int:
-        return 48
+        n = int(self.settings.get("gallery_unlimited_batch_size", 48))
+        return max(24, min(256, n))
+
+    def _gallery_window_overscan_before(self) -> int:
+        n = int(self.settings.get("gallery_window_overscan_before", _GALLERY_WINDOW_OVERSCAN_BEFORE))
+        return max(32, min(512, n))
+
+    def _gallery_window_overscan_after(self) -> int:
+        n = int(self.settings.get("gallery_window_overscan_after", _GALLERY_WINDOW_OVERSCAN_AFTER))
+        return max(32, min(512, n))
+
+    def _gallery_thumb_build_workers(self) -> int:
+        n = int(self.settings.get("gallery_thumb_build_workers", 8))
+        return max(2, min(16, n))
 
     def _thumbs_per_page(self) -> int:
         n = int(self.settings.get("gallery_thumbs_per_page", 48))
@@ -436,6 +450,12 @@ class GalleryBridgeMixin:
             side = max(48, int(thumb_px))
             return side, min(max_h, max(1, int(round(side * 1.25))))
 
+    def _gallery_item_path(self, p: Path) -> str:
+        try:
+            return str(p.resolve())
+        except OSError:
+            return str(p)
+
     def _build_image_items(
         self,
         slice_paths: list[Path],
@@ -448,12 +468,20 @@ class GalleryBridgeMixin:
     ) -> list[dict]:
         def _one_image_item(entry: tuple[int, Path]) -> dict:
             i, p = entry
+            item_path = self._gallery_item_path(p)
+            cache_key = (item_path, int(thumb_px))
+            cached = self._gallery_path_item_cache.get(cache_key)
+            if cached is not None:
+                d = dict(cached)
+                d["selected"] = p in selected_frozenset
+                d["mediaIndex"] = base_index + i
+                return d
             ext = p.suffix.lower()
             is_video = ext in MediaOrganizer.VIDEO_EXTENSIONS
             d: dict = {
                 "kind": "video" if is_video else "image",
                 "name": p.name,
-                "path": str(p),
+                "path": item_path,
                 "selected": p in selected_frozenset,
                 "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
                 "thumbQuality": "lq",
@@ -465,11 +493,14 @@ class GalleryBridgeMixin:
                 tw, th = self._masonry_display_size(p, thumb_px)
                 d["thumbW"] = int(tw)
                 d["thumbH"] = int(th)
+            template = {k: v for k, v in d.items() if k not in ("selected", "mediaIndex")}
+            if template.get("thumbDataUrl"):
+                self._gallery_path_item_cache[cache_key] = template
             return d
 
         if not slice_paths:
             return []
-        max_workers = min(8, max(1, len(slice_paths)))
+        max_workers = min(self._gallery_thumb_build_workers(), max(1, len(slice_paths)))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(_one_image_item, enumerate(slice_paths)))
 
@@ -490,8 +521,90 @@ class GalleryBridgeMixin:
             idx += len(files)
         return ordered, spans
 
+    def _scan_cache_key(self, folder: Path) -> tuple:
+        return (
+            str(folder.resolve()),
+            bool(self.settings.get("gallery_include_subfolders", False)),
+            bool(self.settings.get("gallery_group_by_folder", False)),
+            bool(self.settings.get("gallery_timeline_view", False)),
+            str(self.settings.get("gallery_sort_mode", "name")),
+            self._layout_mode(),
+        )
+
+    def _invalidate_gallery_scan_cache(self) -> None:
+        self._gallery_scan_cache = {}
+
+    def _store_scan_cache(self, key: tuple, ordered: list[Path]) -> None:
+        cache: dict = getattr(self, "_gallery_scan_cache", {})
+        cache[key] = {
+            "paths": ordered,
+            "section_spans": list(self._gallery_section_spans),
+            "timeline_spans": list(self._gallery_timeline_spans),
+            "alpha_spans": list(self._gallery_alpha_spans),
+            "ts": time.monotonic(),
+        }
+        if len(cache) > _GALLERY_SCAN_CACHE_MAX:
+            oldest_key = min(cache, key=lambda k: float(cache[k].get("ts", 0)))
+            del cache[oldest_key]
+        self._gallery_scan_cache = cache
+
+    def _apply_scan_spans(
+        self,
+        section_spans: list[tuple],
+        timeline_spans: list[tuple],
+        alpha_spans: list[tuple],
+    ) -> None:
+        self._gallery_section_spans = list(section_spans)
+        self._gallery_timeline_spans = list(timeline_spans)
+        self._gallery_alpha_spans = list(alpha_spans)
+
     def _scan_ordered_paths(self, folder: Path) -> list[Path]:
         """Lista de imágenes según ajustes de recursión, agrupación u orden."""
+        from ..core.gallery_index_cache import save_gallery_index, try_load_gallery_index
+
+        key = self._scan_cache_key(folder)
+        self._last_scan_source = "fresh"
+        cache: dict = getattr(self, "_gallery_scan_cache", {})
+        hit = cache.get(key)
+        now = time.monotonic()
+        if hit and (now - float(hit.get("ts", 0))) < _GALLERY_SCAN_CACHE_TTL_S:
+            self._apply_scan_spans(
+                hit.get("section_spans") or [],
+                hit.get("timeline_spans") or [],
+                hit.get("alpha_spans") or [],
+            )
+            self._last_scan_source = "memory"
+            return list(hit.get("paths") or [])
+
+        disk = try_load_gallery_index(folder, key)
+        if disk is not None:
+            self._apply_scan_spans(
+                disk.get("section_spans") or [],
+                disk.get("timeline_spans") or [],
+                disk.get("alpha_spans") or [],
+            )
+            ordered = list(disk.get("paths") or [])
+            self._store_scan_cache(key, ordered)
+            self._last_scan_source = "disk"
+            return ordered
+
+        ordered = self._scan_ordered_paths_fresh(folder)
+        self._store_scan_cache(key, ordered)
+        try:
+            save_gallery_index(
+                folder,
+                key,
+                ordered,
+                section_spans=self._gallery_section_spans,
+                timeline_spans=self._gallery_timeline_spans,
+                alpha_spans=self._gallery_alpha_spans,
+            )
+        except Exception:
+            pass
+        return ordered
+
+    def _scan_ordered_paths_fresh(self, folder: Path) -> list[Path]:
+        """Escaneo en disco sin caché."""
         self._gallery_section_spans = []
         self._gallery_timeline_spans = []
         self._gallery_alpha_spans = []
@@ -511,7 +624,8 @@ class GalleryBridgeMixin:
         else:
             raw = scan_media_flat(folder)
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
-        ordered = sort_image_paths(raw, sort_mode)
+        stat_workers = self._gallery_thumb_build_workers()
+        ordered = sort_image_paths(raw, sort_mode, stat_workers=stat_workers)
         if self._is_date_primary_sort() and not self._is_timeline_mode():
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
         if self._layout_mode() == "alpha":
@@ -691,8 +805,25 @@ class GalleryBridgeMixin:
                 "windowEnd": 0,
             }
         center = max(0, min(total - 1, int(center_index)))
-        start = max(0, center - _GALLERY_WINDOW_OVERSCAN_BEFORE)
-        end = min(total, center + _GALLERY_WINDOW_OVERSCAN_AFTER)
+        before = self._gallery_window_overscan_before()
+        after = self._gallery_window_overscan_after()
+        start = max(0, center - before)
+        end = min(total, center + after)
+        old_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
+        old_end = int(self.gallery_unlimited_loaded or 0)
+        # Ya cubierto: evita reconstruir la ventana al soltar el scroll en la misma zona.
+        if (
+            old_end > old_start
+            and old_start <= center < old_end
+            and start >= old_start
+            and end <= old_end
+        ):
+            return {
+                "state": self._gallery_state(),
+                "items": [],
+                "hasMore": old_end < total,
+                "replaceWindow": False,
+            }
         batch_items = self._gallery_items_for_range(start, end)
         self.gallery_unlimited_window_start = start
         self.gallery_unlimited_loaded = end
@@ -708,13 +839,20 @@ class GalleryBridgeMixin:
     def gallery_load_folder(self, raw_path: str) -> dict:
         folder = resolve_dir_path(raw_path)
         with self.lock:
-            self._clear_thumb_cache()
+            t0 = time.perf_counter()
+            folder_changed = self.gallery_folder != folder
+            if folder_changed:
+                self._clear_thumb_cache()
+            # Siempre regenerar plantillas LQ (p. ej. tras índice en disco o cambio de calidad).
+            self._gallery_path_item_cache.clear()
             self.gallery_folder = folder
             self.settings["gallery_last_folder"] = str(folder)
             self._merge_recent_folder(str(folder))
             save_app_settings(self.settings)
             self.subfolders = list_subdirs(folder)
+            t_scan = time.perf_counter()
             self.ordered_paths = self._scan_ordered_paths(folder)
+            scan_ms = int((time.perf_counter() - t_scan) * 1000)
             self._schedule_gallery_total_bytes_recompute()
             self.selected.clear()
             self.gallery_page = 0
@@ -724,10 +862,21 @@ class GalleryBridgeMixin:
             self.gallery_unlimited_window_start = 0
             if self._is_grouped_mode() and self._is_unlimited_mode():
                 self.gallery_unlimited_loaded = len(self.ordered_paths)
+            t_build = time.perf_counter()
+            items = self._build_gallery_items()
+            build_ms = int((time.perf_counter() - t_build) * 1000)
+            total_ms = int((time.perf_counter() - t0) * 1000)
             return {
                 "state": self._gallery_state(),
-                "items": self._build_gallery_items(),
+                "items": items,
                 "recentFolders": list(self.settings.get("gallery_recent_folders", [])),
+                "timing": {
+                    "scanMs": scan_ms,
+                    "buildMs": build_ms,
+                    "totalMs": total_ms,
+                    "fromCache": getattr(self, "_last_scan_source", "fresh") != "fresh",
+                    "scanSource": getattr(self, "_last_scan_source", "fresh"),
+                },
             }
 
     def gallery_reload(self, *, clear_thumb_cache: bool = True) -> dict:
@@ -742,6 +891,11 @@ class GalleryBridgeMixin:
         prev_unlimited_loaded = int(self.gallery_unlimited_loaded or 0)
         if clear_thumb_cache:
             self._clear_thumb_cache()
+        self._invalidate_gallery_scan_cache()
+        if self.gallery_folder:
+            from ..core.gallery_index_cache import invalidate_gallery_index
+
+            invalidate_gallery_index(self.gallery_folder)
         folder = self.gallery_folder
         self.subfolders = list_subdirs(folder)
         self.ordered_paths = self._scan_ordered_paths(folder)
@@ -872,7 +1026,7 @@ class GalleryBridgeMixin:
             if target < window_start:
                 margin = _GALLERY_WINDOW_JUMP_MARGIN
                 if target >= window_start - margin:
-                    new_start = max(0, target - _GALLERY_WINDOW_OVERSCAN_BEFORE)
+                    new_start = max(0, target - self._gallery_window_overscan_before())
                     new_end = loaded
                     if new_start >= window_start:
                         return {
@@ -946,9 +1100,16 @@ class GalleryBridgeMixin:
         return self.gallery_load_folder(path)
 
     def gallery_thumb_hq(self, path: str, scale: float) -> dict:
-        p = Path(path).expanduser().resolve()
+        from ..core.fs_path import resolve_file_path
+
+        p = resolve_file_path(path)
         thumb_px = _thumb_px_from_gallery_scale(float(scale))
-        return {"path": str(p), "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "hq"), "thumbQuality": "hq"}
+        item_path = self._gallery_item_path(p)
+        return {
+            "path": item_path,
+            "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "hq"),
+            "thumbQuality": "hq",
+        }
 
     def gallery_file_stat(self, path: str) -> dict:
         """Metadatos básicos para propiedades del menú contextual."""

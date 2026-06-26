@@ -183,3 +183,35 @@
   gap: var(--om-space-2);
   flex-wrap: wrap;
 }
+
+.sm-dialog .settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+  padding-bottom: 2px;
+  border-bottom: 1px solid color-mix(in oklab, var(--om-border-default) 70%, transparent);
+}
+
+.sm-dialog .settings-tabs__btn {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: var(--om-radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--om-text-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.sm-dialog .settings-tabs__btn:hover {
+  color: var(--om-text-primary);
+  background: color-mix(in oklab, var(--om-surface-3) 80%, transparent);
+}
+
+.sm-dialog .settings-tabs__btn--active {
+  color: var(--om-text-primary);
+  border-color: color-mix(in oklab, var(--om-accent) 45%, var(--om-border-default));
+  background: color-mix(in oklab, var(--om-accent-muted, var(--om-surface-3)) 55%, transparent);
+}

@@ -1,4 +1,4 @@
-import { derived, writable, type Readable } from "svelte/store";
+import { writable, type Readable } from "svelte/store";
 import type { GalleryItem } from "./api";
 
 function isGalleryMediaKind(kind: GalleryItem["kind"]): boolean {
@@ -49,11 +49,11 @@ function notifyPath(path: string, entry: GalleryThumbHqEntry | null) {
   ensurePathStore(path).set(entry);
 }
 
-/** Suscripción fina por ruta: solo la tile afectada re-renderiza al llegar HQ. */
+/** Suscripción fina por ruta: store estable (no recrear derived en cada ciclo). */
 export function galleryThumbHqFor(path: string): Readable<GalleryThumbHqEntry | null> {
   const key = String(path ?? "").trim();
   if (!key) return writable<GalleryThumbHqEntry | null>(null);
-  return derived(ensurePathStore(key), (x) => x);
+  return ensurePathStore(key);
 }
 
 export function getGalleryThumbHq(path: string): GalleryThumbHqEntry | null {
