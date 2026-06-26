@@ -49,7 +49,7 @@
     gutterObserver = null;
   });
 
-  /** Hover sobre el rail o la barra de scroll nativa (desde GalleryGrid). */
+  /** Hover al pasar por el scrollbar nativo (desde GalleryGrid). */
   export function pointerOnRail(clientY: number, trackTop: number, trackHeight: number) {
     if (totalHeight <= 0 || trackHeight <= 0) return;
     gutterHover = true;
@@ -64,29 +64,6 @@
     hoverPercent = -1;
   }
 
-  function markerAtTrackY(clientY: number, trackTop: number, trackHeight: number): GalleryScrollMarker | null {
-    if (totalHeight <= 0 || trackHeight <= 0) return null;
-    const ratio = gutterRatioFromClientY(clientY, trackTop, trackHeight);
-    return scrollMarkerAtContentY(markers, contentYFromGutterRatio(ratio, totalHeight));
-  }
-
-  function handleGutterMove(e: MouseEvent) {
-    if (!gutterEl) return;
-    const rect = gutterEl.getBoundingClientRect();
-    pointerOnRail(e.clientY, rect.top, rect.height);
-  }
-
-  function handleGutterLeave() {
-    clearRailHover();
-  }
-
-  function handleGutterClick(e: MouseEvent) {
-    if (!gutterEl) return;
-    const rect = gutterEl.getBoundingClientRect();
-    const marker = markerAtTrackY(e.clientY, rect.top, rect.height);
-    if (marker) onJumpToMarker(marker);
-  }
-
   function handleLabelClick(label: GalleryScrollRailLabel) {
     onJumpToMarker(label.marker);
   }
@@ -97,15 +74,11 @@
   }
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 <div
   class="gallery-scroll-gutter"
   class:gallery-scroll-gutter--hover={gutterHover}
   aria-hidden={markers.length === 0}
   bind:this={gutterEl}
-  on:mousemove={handleGutterMove}
-  on:mouseleave={handleGutterLeave}
-  on:click={handleGutterClick}
 >
   {#each railLabels as label (`${label.startIndex}-${label.top}`)}
     <button
@@ -129,21 +102,21 @@
 </div>
 
 <style>
+  /* A la izquierda del scrollbar nativo; no intercepta clic ni arrastre. */
   .gallery-scroll-gutter {
     position: absolute;
     top: var(--om-space-2);
-    right: 0;
+    right: 14px;
     bottom: 0;
-    width: 76px;
+    width: 52px;
     z-index: 4;
-    pointer-events: auto;
-    cursor: pointer;
+    pointer-events: none;
     overflow: visible;
   }
 
   .gallery-scroll-gutter__label {
     position: absolute;
-    right: 18px;
+    right: 0;
     margin: 0;
     padding: 2px 5px;
     border: 1px solid rgb(255 255 255 / 0.1);

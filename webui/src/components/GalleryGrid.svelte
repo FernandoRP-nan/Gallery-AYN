@@ -11,6 +11,7 @@
     buildMediaIndexMap,
     estimateTargetMediaIndex,
     virtualLoadedBottomY,
+    virtualLoadedTopY,
     type GalleryLayoutMode,
     type GalleryLayoutSpan,
   } from "../lib/galleryFullVirtualLayout";
@@ -50,7 +51,8 @@
 
   let scrollGutter: GalleryScrollGutter | null = null;
   const GALLERY_GRID_EDGE_PAD_PX = 8;
-  const SCROLL_RAIL_HIT_PX = 56;
+  const SCROLL_RAIL_HIT_PX = 72;
+  const SCROLLBAR_DRAG_ZONE_PX = 18;
   const DEST_BAR_RESERVE_PX = 56;
 
   export let onGalleryScroll: (e: UIEvent) => void;
@@ -123,6 +125,88 @@
   let lastScrollCancelTop = 0;
   let lastScrollCancelTs = 0;
   let prevGalleryScrolling = false;
+  let scrollDragActive = false;
+
+  function clearViewportLoadTimers() {
+    if (viewportLoadTimer !== null) {
+      clearTimeout(viewportLoadTimer);
+      viewportLoadTimer = null;
+    }
+    if (viewportStableTimer !== null) {
+      clearTimeout(viewportStableTimer);
+      viewportStableTimer = null;
+    }
+  }
+
+  function isScrollbarMouseEvent(e: MouseEvent): boolean {
+    if (!galleryScrollEl) return false;
+    const rect = galleryScrollEl.getBoundingClientRect();
+    return e.clientX >= rect.right - SCROLLBAR_DRAG_ZONE_PX;
+  }
+
+  function beginScrollbarDrag() {
+    if (scrollDragActive) return;
+    scrollDragActive = true;
+    clearViewportLoadTimers();
+    onCancelScrollLoads();
+  }
+
+  /** Índice de medio en la posición actual del scroll (para salto al soltar el scrollbar). */
+  function scrollAnchorMediaIndex(): number {
+    if (!fullVirtualLayout || totalMediaCount <= 0) return 0;
+
+    const vis = getVisibleLayoutEntries(
+      fullVirtualLayout.entries,
+      scrollTop,
+      scrollViewportH,
+      720,
+    );
+    let anchor = -1;
+    for (const e of vis) {
+      if (e.mediaIndex != null) anchor = Math.max(anchor, e.mediaIndex);
+    }
+    if (anchor >= 0) return anchor;
+
+    const est = estimateTargetMediaIndex(
+      fullVirtualLayout.entries,
+      scrollTop,
+      scrollViewportH,
+      720,
+    );
+    if (est >= 0) return est;
+
+    const scrollMax = Math.max(0, fullVirtualLayout.totalHeight - scrollViewportH);
+    const ratio = scrollMax > 0 ? Math.min(1, Math.max(0, scrollTop / scrollMax)) : 0;
+    return Math.min(
+      totalMediaCount - 1,
+      Math.max(0, Math.floor(ratio * totalMediaCount)),
+    );
+  }
+
+  function endScrollbarDrag() {
+    if (!scrollDragActive) return;
+    scrollDragActive = false;
+    if (!fullVirtualEnabled) return;
+
+    clearViewportLoadTimers();
+    onCancelBackgroundLoad();
+    railJumpSuppressUntil = Date.now() + 3000;
+
+    const target = scrollAnchorMediaIndex();
+    onRequestLoadUntilIndex(target, true);
+  }
+
+  function handleScrollMouseDown(e: MouseEvent) {
+    if (!fullVirtualEnabled || scrollMarkers.length === 0) return;
+    if (!isScrollbarMouseEvent(e)) return;
+    beginScrollbarDrag();
+    window.addEventListener("mouseup", handleScrollMouseUp, true);
+  }
+
+  function handleScrollMouseUp() {
+    window.removeEventListener("mouseup", handleScrollMouseUp, true);
+    endScrollbarDrag();
+  }
 
   $: masonryFullyLoaded =
     masonryVirtualEnabled &&
@@ -230,9 +314,43 @@
     return target;
   }
 
-  /** Precarga en caliente mientras bajas (sin esperar a que el scroll se detenga). */
+  /** Índice destino para extender hacia arriba (ventana deslizante). */
+  function computeBackwardPrefetchTarget(
+    layout: NonNullable<typeof fullVirtualLayout>,
+  ): number {
+    if (galleryWindowStart <= 0) return -1;
+
+    const viewTop = scrollTop;
+    const leadPx = scrollViewportH * PREFETCH_LEAD_VIEWPORTS;
+    let target = -1;
+
+    const loadedTop = virtualLoadedTopY(layout.entries, galleryWindowStart);
+    if (loadedTop > 0 && viewTop <= loadedTop + leadPx) {
+      target = Math.max(0, galleryWindowStart - 1);
+    }
+
+    const est = estimateTargetMediaIndex(
+      layout.entries,
+      scrollTop - scrollViewportH * 0.15,
+      scrollViewportH,
+    );
+    if (est >= 0 && est < galleryWindowStart) target = Math.max(target, est);
+
+    const vis = getVisibleLayoutEntries(layout.entries, scrollTop, scrollViewportH, 720);
+    for (const e of vis) {
+      if (e.item.kind !== "placeholder" || e.mediaIndex == null) continue;
+      if (e.mediaIndex < galleryWindowStart) {
+        target = Math.max(target, e.mediaIndex);
+      }
+    }
+
+    return target;
+  }
+
+  /** Precarga en caliente según dirección del scroll (rueda arriba o abajo). */
   function maybePrefetchDuringScroll() {
-    if (!fullVirtualEnabled || galleryLoadedEnd >= totalMediaCount) return;
+    if (scrollDragActive) return;
+    if (!fullVirtualEnabled) return;
     if (Date.now() < railJumpSuppressUntil) return;
 
     const layout = fullVirtualLayout;
@@ -241,18 +359,32 @@
     const now = Date.now();
     if (now - lastPrefetchTs < PREFETCH_THROTTLE_MS) return;
 
-    const scrollingDown = scrollTop >= lastScrollTopForPrefetch - 6;
+    const prevTop = lastScrollTopForPrefetch;
+    const delta = scrollTop - prevTop;
     lastScrollTopForPrefetch = scrollTop;
-    if (!scrollingDown) return;
+    if (Math.abs(delta) < 2) return;
 
-    const target = computeForwardPrefetchTarget(layout);
+    let target = -1;
+    let jump = false;
+
+    if (delta > 0) {
+      if (galleryLoadedEnd >= totalMediaCount) return;
+      target = computeForwardPrefetchTarget(layout);
+    } else {
+      target = computeBackwardPrefetchTarget(layout);
+      if (target >= 0 && target < galleryWindowStart - WINDOW_JUMP_MARGIN) {
+        jump = true;
+      }
+    }
+
     if (target < 0) return;
 
     lastPrefetchTs = now;
-    onRequestLoadUntilIndex(target, false);
+    onRequestLoadUntilIndex(target, jump);
   }
 
   function scheduleViewportLoadAfterScrollIdle() {
+    if (scrollDragActive) return;
     if (viewportLoadTimer !== null) clearTimeout(viewportLoadTimer);
     if (viewportStableTimer !== null) clearTimeout(viewportStableTimer);
     viewportLoadTimer = setTimeout(() => {
@@ -303,8 +435,16 @@
     }
 
     if (galleryWindowStart > 0) {
-      const prefetch = computeForwardPrefetchTarget(layout);
-      if (prefetch >= 0) target = Math.max(target, prefetch);
+      const forwardPrefetch = computeForwardPrefetchTarget(layout);
+      const backPrefetch = computeBackwardPrefetchTarget(layout);
+      if (forwardPrefetch >= 0 && (target < 0 || target >= galleryWindowStart)) {
+        target = Math.max(target, forwardPrefetch);
+      }
+      if (backPrefetch >= 0 && backPrefetch < galleryWindowStart) {
+        if (target < 0 || target < galleryWindowStart) {
+          target = Math.max(target, backPrefetch);
+        }
+      }
 
       if (target >= 0) {
         onRequestLoadUntilIndex(target, jump);
@@ -317,8 +457,16 @@
       return;
     }
 
-    const prefetch = computeForwardPrefetchTarget(layout);
-    if (prefetch >= 0) target = Math.max(target, prefetch);
+    const forwardPrefetch = computeForwardPrefetchTarget(layout);
+    const backPrefetch = computeBackwardPrefetchTarget(layout);
+    if (forwardPrefetch >= 0 && (target < 0 || target >= galleryWindowStart)) {
+      target = Math.max(target, forwardPrefetch);
+    }
+    if (backPrefetch >= 0 && backPrefetch < galleryWindowStart) {
+      if (target < 0 || target < galleryWindowStart) {
+        target = Math.max(target, backPrefetch);
+      }
+    }
 
     const virtualEnd = virtualLoadedBottomY(layout.entries, galleryLoadedEnd);
     if (virtualEnd > 0 && viewBottom > virtualEnd + 16) {
@@ -338,7 +486,7 @@
   }
 
   $: {
-    if (prevGalleryScrolling && !galleryScrolling && fullVirtualEnabled) {
+    if (prevGalleryScrolling && !galleryScrolling && fullVirtualEnabled && !scrollDragActive) {
       scheduleViewportLoadAfterScrollIdle();
     }
     prevGalleryScrolling = galleryScrolling;
@@ -377,16 +525,21 @@
     scrollViewportH = el.clientHeight;
 
     if (now >= railJumpSuppressUntil) {
-      const dt = now - lastScrollCancelTs;
-      const delta = Math.abs(newTop - lastScrollCancelTop);
-      // Solo invalidar cargas en curso en arrastre muy rápido, no en scroll ligero.
-      if (dt > 0 && dt < 180 && delta > 320) {
-        onCancelScrollLoads();
+      if (!scrollDragActive) {
+        const dt = now - lastScrollCancelTs;
+        const delta = Math.abs(newTop - lastScrollCancelTop);
+        // Solo invalidar cargas en curso en arrastre muy rápido, no en scroll ligero.
+        if (dt > 0 && dt < 180 && delta > 320) {
+          onCancelScrollLoads();
+        }
+        lastScrollCancelTop = newTop;
+        lastScrollCancelTs = now;
+        maybePrefetchDuringScroll();
+        scheduleViewportLoadAfterScrollIdle();
+      } else {
+        lastScrollCancelTop = newTop;
+        lastScrollCancelTs = now;
       }
-      lastScrollCancelTop = newTop;
-      lastScrollCancelTs = now;
-      maybePrefetchDuringScroll();
-      scheduleViewportLoadAfterScrollIdle();
     }
     onGalleryScroll(e);
   }
@@ -448,6 +601,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener("mouseup", handleScrollMouseUp, true);
     if (viewportLoadTimer !== null) clearTimeout(viewportLoadTimer);
     viewportLoadTimer = null;
     resizeObserver?.disconnect();
@@ -473,6 +627,7 @@
       class:gallery__scroll--with-gutter={scrollMarkers.length > 0}
       bind:this={galleryScrollEl}
       on:scroll={handleGalleryScroll}
+      on:mousedown={handleScrollMouseDown}
       on:pointermove={handleScrollPointerMove}
       on:pointerleave={handleScrollPointerLeave}
     >

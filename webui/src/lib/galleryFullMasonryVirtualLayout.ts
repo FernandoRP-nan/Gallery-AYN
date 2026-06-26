@@ -1,5 +1,6 @@
 import type { GalleryItem } from "./api";
 import type { VirtualLayoutEntry } from "./galleryVirtualLayout";
+import { resolveVirtualLayoutSpans } from "./galleryLayoutSpans";
 import {
   type GalleryFullVirtualLayout,
   type GalleryLayoutMode,
@@ -148,7 +149,13 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
   const colTops = Array.from({ length: columnCount }, () => 0);
   let entryIndex = 0;
 
-  const spans = layoutSpans.length > 0 && layoutMode !== "flat" ? layoutSpans : [];
+  const { spans, railOnlyTimeline } = resolveVirtualLayoutSpans(layoutMode, layoutSpans);
+
+  const pushTimelineMarker = (label: string, startIndex: number) => {
+    const top = colMaxTop();
+    syncColsTo(top);
+    markers.push({ label, kind: "timeline", top, height: colWidth, startIndex });
+  };
 
   const syncColsTo = (y: number) => {
     for (let c = 0; c < columnCount; c += 1) colTops[c] = y;
@@ -208,7 +215,9 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
     sectionPath?: string,
     sectionLabel?: string,
   ) => {
-    if (sectionLabel && sectionPath) {
+    if (railOnlyTimeline && sectionLabel) {
+      pushTimelineMarker(sectionLabel, start);
+    } else if (sectionLabel && sectionPath) {
       pushSection(sectionLabel, sectionPath, layoutMode === "grouped" ? "folder" : layoutMode, start);
     }
     for (let mediaIndex = start; mediaIndex < end; mediaIndex += 1) {
@@ -235,7 +244,12 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
         span.kind === "timeline"
           ? `section:timeline:${span.key ?? span.label}`
           : `section:${span.key ?? span.start}`;
-      emitMediaRange(span.start, Math.min(span.end, totalMediaCount), sectionPath, span.label);
+      emitMediaRange(
+        span.start,
+        Math.min(span.end, totalMediaCount),
+        railOnlyTimeline ? undefined : sectionPath,
+        span.label,
+      );
     }
   } else {
     emitMediaRange(0, totalMediaCount);

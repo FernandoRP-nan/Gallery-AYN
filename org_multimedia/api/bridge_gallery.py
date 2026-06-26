@@ -374,6 +374,20 @@ class GalleryBridgeMixin:
             i = j
         return spans
 
+    def _is_date_primary_sort(self) -> bool:
+        """True si el criterio primario de orden es una fecha (mtime, ctime, etc.)."""
+        mode = str(self.settings.get("gallery_sort_mode", "name"))
+        primary = mode.split(",")[0].strip().split(":")[0].lower()
+        return primary in (
+            "mtime",
+            "date",
+            "fecha",
+            "ctime",
+            "creacion",
+            "creation",
+            "created",
+        )
+
     def _layout_mode(self) -> str:
         if self._is_grouped_mode():
             return "grouped"
@@ -396,6 +410,9 @@ class GalleryBridgeMixin:
         elif mode == "alpha":
             src = self._gallery_alpha_spans
             kind = "alpha"
+        elif self._is_date_primary_sort() and self._gallery_timeline_spans:
+            src = self._gallery_timeline_spans
+            kind = "timeline"
         else:
             return []
         return [
@@ -495,6 +512,8 @@ class GalleryBridgeMixin:
             raw = scan_media_flat(folder)
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
         ordered = sort_image_paths(raw, sort_mode)
+        if self._is_date_primary_sort() and not self._is_timeline_mode():
+            self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
         if self._layout_mode() == "alpha":
             self._gallery_alpha_spans = self._compute_alpha_spans(ordered)
         return ordered
