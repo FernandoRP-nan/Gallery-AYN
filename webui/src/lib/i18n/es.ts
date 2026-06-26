@@ -483,7 +483,7 @@ export const es = {
     timelineView: "Línea de tiempo (por mes)",
     timelineViewHint:
       "Agrupa por mes según la fecha de modificación o creación del archivo. Con zoom alto aparecen marcas por día. Requiere orden por fecha (se ajusta solo).",
-    masonryView: "Masonry (Pinterest)",
+    masonryView: "Masonry",
     masonryViewHint:
       "Columnas con altura natural según la proporción de cada imagen. El ancho de columna sigue la escala de miniaturas del visor.",
     timelineHint: "Activa «Línea de tiempo» arriba para ver el calendario por meses.",
@@ -574,6 +574,11 @@ export const es = {
     miniMapAria: "Minimapa: clic o arrastre para desplazar la vista",
     carouselAria: "Carrusel de miniaturas",
     previewLoading: "Cargando…",
+  },
+  scrollRail: {
+    jumpHint: "Saltar a sección (fecha o letra)",
+    aria: "Indicador de scroll por sección",
+    hoverJump: "Clic para saltar a esta fecha",
   },
 } as const;
 

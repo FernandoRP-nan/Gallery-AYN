@@ -183,6 +183,7 @@ class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, Select
         self.selected: set[Path] = set()
         self.gallery_page = 0
         self.gallery_unlimited_loaded = 0
+        self.gallery_unlimited_window_start = 0
         self.lock = threading.RLock()
         # Candado solo para la caché de miniaturas (los workers no deben tomar `self.lock` mientras el hilo principal construye la página).
         self._thumb_cache_lock = threading.Lock()
@@ -195,3 +196,5 @@ class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, Select
         self._gallery_section_spans: list[tuple[int, int, str, str]] = []
         # [start, end), clave YYYY-MM, etiqueta visible (solo modo línea de tiempo).
         self._gallery_timeline_spans: list[tuple[int, int, str, str]] = []
+        # [start, end), letra, etiqueta (orden por nombre).
+        self._gallery_alpha_spans: list[tuple[int, int, str, str]] = []

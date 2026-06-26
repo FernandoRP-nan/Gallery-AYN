@@ -7,6 +7,9 @@ export type VirtualLayoutEntry = {
   left: number;
   width: number;
   height: number;
+  /** Índice en ordered_paths (medios). */
+  mediaIndex?: number;
+  sectionLabel?: string;
 };
 
 export type GalleryVirtualLayout = {

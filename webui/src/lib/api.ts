@@ -1,7 +1,7 @@
 import { normalizePathForApi } from "./pathUtils";
 
 export type GalleryItem = {
-  kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break";
+  kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break" | "placeholder";
   name: string;
   path: string;
   /** Carpeta destino de la sección (solo kind === "section"). */
@@ -14,6 +14,11 @@ export type GalleryItem = {
   /** Placeholder LQ conservado durante el crossfade a HQ. */
   thumbLqDataUrl?: string | null;
   thumbQuality?: "lq" | "hq";
+  /** Índice absoluto en ordered_paths (scroll virtual). */
+  mediaIndex?: number;
+  /** Ancho/alto de miniatura masonry en px (proporción real en la UI). */
+  thumbW?: number;
+  thumbH?: number;
   selected?: boolean;
   /** Miniaturas del contenido interior (solo kind === "folder", hasta 4 elementos). */
   folderPreviewUrls?: (string | null)[];
@@ -79,6 +84,7 @@ const devMockApi: WebApi = {
   gallery_load_folder: async () => ({ ...mockGalleryPayload(), recentFolders: [] as string[] }),
   gallery_reload: async () => mockGalleryPayload(),
   gallery_load_more: async () => ({ ...mockGalleryPayload(), hasMore: false }),
+  gallery_load_until_index: async (_target: number) => ({ ...mockGalleryPayload(), hasMore: false, items: [] }),
   gallery_pin_folder: async () => ({ pinnedFolders: [] as string[] }),
   gallery_unpin_folder: async () => ({ pinnedFolders: [] as string[] }),
   gallery_go_page: async () => mockGalleryPayload(),
@@ -245,6 +251,8 @@ export const bridge = {
   galleryLoadFolder: (path: string) => call<any>("gallery_load_folder", path),
   galleryReload: () => call<any>("gallery_reload"),
   galleryLoadMore: () => call<any>("gallery_load_more"),
+  galleryLoadUntilIndex: (targetIndex: number, jump = false) =>
+    call<any>("gallery_load_until_index", Math.max(0, Math.floor(targetIndex)), Boolean(jump)),
   galleryPinFolder: (path: string) => call<any>("gallery_pin_folder", path),
   galleryUnpinFolder: (path: string) => call<any>("gallery_unpin_folder", path),
   galleryGoPage: (page: number) => call<any>("gallery_go_page", page),

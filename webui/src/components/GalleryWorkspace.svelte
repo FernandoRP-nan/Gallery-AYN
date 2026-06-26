@@ -6,6 +6,7 @@
     galleryItems,
     galleryState,
     getGalleryItems,
+    getGalleryState,
     mergeGalleryItemsFromApi,
     patchGallerySelection,
     setGalleryItems,
@@ -13,6 +14,7 @@
     setGalleryStateFromApi,
     syncSelectedCountFromItems,
     updateGalleryItems,
+    applyGalleryWindowItems,
   } from "../lib/galleryRuntime";
   import {
     disposeGalleryThumbs,
@@ -114,9 +116,24 @@
   let galleryHydratingPrev = false;
   const VIEWPORT_FILL_GUARD = 48;
 
+  function loadedContentFillsViewport(): boolean {
+    if (!galleryScrollEl) return true;
+    const loaded = Number($galleryState?.endIndex ?? 0);
+    const total = Number($galleryState?.total ?? 0);
+    if (loaded >= total) return true;
+    const innerW = Math.max(0, galleryScrollEl.clientWidth - 16);
+    const cols = Math.max(1, Math.floor((innerW + thumbGapPx) / (gridCellPx + thumbGapPx)));
+    const rowH = gridCellPx + thumbGapPx;
+    const rowsNeeded = Math.ceil(galleryScrollEl.clientHeight / rowH) + 2;
+    return loaded >= Math.min(total, rowsNeeded * cols);
+  }
+
   function viewportNeedsMoreContent(): boolean {
     if (!galleryScrollEl) return false;
-    return galleryScrollEl.scrollHeight <= galleryScrollEl.clientHeight + 40;
+    if (thumbsPerPage !== 0 || Number($galleryState?.total ?? 0) <= 0) {
+      return galleryScrollEl.scrollHeight <= galleryScrollEl.clientHeight + 40;
+    }
+    return galleryHasMoreNow() && !loadedContentFillsViewport();
   }
 
   async function fillViewportIfNeeded() {
@@ -197,7 +214,13 @@
 
   $: gridCellTargetPx = galleryGridCellPx(thumbScale);
   $: gridCellPx = Math.max(72, Number(gridCellTargetPx.toFixed(2)));
-  $: galleryGridItems = expandTimelineDayBreaks($galleryItems, timelineView, gridCellPx);
+  $: useFullVirtualScroll =
+    thumbsPerPage === 0 && Number($galleryState?.total ?? 0) > 0;
+  $: galleryGridItems = expandTimelineDayBreaks(
+    $galleryItems,
+    timelineView && !useFullVirtualScroll,
+    gridCellPx
+  );
   $: liveSelectedCount = countSelectedGalleryItems($galleryItems);
 
   $: galleryHasSelection = liveSelectedCount > 0;
@@ -245,7 +268,16 @@
       const out = await bridge.galleryLoadMore();
       if (!isGalleryNavigationCurrent(navGen)) return false;
       const extra = Array.isArray(out?.items) ? out.items : [];
-      if (extra.length > 0) {
+      if (out?.replaceWindow) {
+        if (extra.length > 0 || out?.state) {
+          applyGalleryWindowItems(extra, out?.state);
+          void requestGalleryThumbHqHydration(
+            thumbScale,
+            getGalleryThumbHydrationToken(),
+            galleryThumbHydrateOpts()
+          );
+        }
+      } else if (extra.length > 0) {
         updateGalleryItems((items) => [...items, ...extra]);
         void requestGalleryThumbHqHydration(
           thumbScale,
@@ -254,7 +286,7 @@
         );
       }
       if (out?.state) setGalleryStateFromApi(out.state);
-      else syncSelectedCountFromItems();
+      else if (!out?.replaceWindow) syncSelectedCountFromItems();
       const afterEnd = Number(getGalleryState()?.endIndex ?? 0);
       return afterEnd > beforeEnd || extra.length > 0;
     } finally {
@@ -264,8 +296,127 @@
 
   export function cancelBackgroundWork() {
     galleryAutoLoadRunId++;
+    loadUntilGeneration++;
     galleryLoadingMore = false;
+    loadUntilPending = -1;
+    if (loadUntilTimer !== null) {
+      clearTimeout(loadUntilTimer);
+      loadUntilTimer = null;
+    }
   }
+
+  /** Invalida cargas por scroll en curso (arrastre rápido); no cancela salto por rail. */
+  export function cancelScrollLoads() {
+    loadUntilGeneration++;
+    loadUntilPending = -1;
+    if (loadUntilTimer !== null) {
+      clearTimeout(loadUntilTimer);
+      loadUntilTimer = null;
+    }
+  }
+
+  async function loadUntilGalleryIndex(
+    targetIndex: number,
+    opts: { jump?: boolean } = {}
+  ) {
+    if (thumbsPerPage !== 0) return;
+    const jump = Boolean(opts.jump);
+    const requestGen = loadUntilGeneration;
+    const total = Number($galleryState?.total ?? 0);
+    const loaded = Number($galleryState?.endIndex ?? 0);
+    const windowStart = Number($galleryState?.windowStart ?? 0);
+    const target = Math.max(0, Math.min(total - 1, targetIndex));
+
+    if (total <= 0 || loaded >= total) return;
+    if (windowStart > 0 && !jump && target >= windowStart && target < loaded) return;
+    if (windowStart === 0 && !jump && target < loaded) return;
+
+    let apiTarget = target;
+    let apiJump = jump;
+    if (jump) {
+      apiTarget = target;
+      apiJump = true;
+    } else if (windowStart > 0 && target < windowStart) {
+      // Expansión hacia atrás: pedir el índice visible, no prefetch hacia adelante.
+      apiTarget = target;
+      apiJump = false;
+    } else {
+      apiTarget = Math.min(total - 1, Math.max(target, loaded) + 128);
+      apiJump = false;
+    }
+
+    if (!apiJump && galleryLoadingMore) {
+      loadUntilPending = Math.max(loadUntilPending, target);
+      return;
+    }
+    const navGen = getGalleryNavigationGeneration();
+    galleryLoadingMore = true;
+    try {
+      const out = await bridge.galleryLoadUntilIndex(apiTarget, apiJump);
+      if (!isGalleryNavigationCurrent(navGen)) return;
+      if (requestGen !== loadUntilGeneration) return;
+      const extra = Array.isArray(out?.items) ? out.items : [];
+      if (out?.replaceWindow) {
+        if (extra.length > 0) {
+          applyGalleryWindowItems(extra, out?.state);
+          void requestGalleryThumbHqHydration(
+            thumbScale,
+            getGalleryThumbHydrationToken(),
+            galleryThumbHydrateOpts()
+          );
+        } else if (out?.state) {
+          setGalleryStateFromApi(out.state);
+        }
+      } else if (extra.length > 0) {
+        updateGalleryItems((items) => [...items, ...extra]);
+        void requestGalleryThumbHqHydration(
+          thumbScale,
+          getGalleryThumbHydrationToken(),
+          galleryThumbHydrateOpts()
+        );
+        if (out?.state) setGalleryStateFromApi(out.state);
+        else syncSelectedCountFromItems();
+      } else if (out?.state) {
+        setGalleryStateFromApi(out.state);
+      }
+    } finally {
+      galleryLoadingMore = false;
+      if (loadUntilPending >= 0) {
+        const retryTarget = loadUntilPending;
+        loadUntilPending = -1;
+        void loadUntilGalleryIndex(retryTarget, { jump: false });
+      }
+    }
+  }
+
+  let loadUntilGeneration = 0;
+  let loadUntilPending = -1;
+  let loadUntilTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleLoadUntilGalleryIndex(targetIndex: number, jump = false) {
+    if (targetIndex < 0) return;
+    if (jump) {
+      loadUntilGeneration += 1;
+      loadUntilPending = -1;
+      if (loadUntilTimer !== null) {
+        clearTimeout(loadUntilTimer);
+        loadUntilTimer = null;
+      }
+      void loadUntilGalleryIndex(targetIndex, { jump: true });
+      return;
+    }
+    loadUntilPending = Math.max(loadUntilPending, targetIndex);
+    if (galleryLoadingMore) return;
+    void loadUntilGalleryIndex(targetIndex, { jump: false });
+  }
+
+  $: layoutMode = String($galleryState?.layoutMode ?? "flat");
+  $: layoutSpans = Array.isArray($galleryState?.layoutSpans)
+    ? ($galleryState.layoutSpans as import("../lib/galleryFullVirtualLayout").GalleryLayoutSpan[])
+    : [];
+  $: totalMediaCount = Number($galleryState?.total ?? 0);
+  $: galleryWindowStart = Number($galleryState?.windowStart ?? 0);
+  $: unlimitedScroll = thumbsPerPage === 0;
 
   async function onGalleryScroll(e: Event) {
     const el = e.currentTarget as HTMLElement | null;
@@ -278,8 +429,10 @@
       galleryScrollingStore.set(false);
       galleryScrollIdleTimer = null;
       void hydrateVisibleThumbsAfterScrollIdle();
-    }, 280);
+    }, 320);
     if (thumbsPerPage !== 0 || galleryLoadingMore || !galleryHasMoreNow()) return;
+    // Con scroll virtual, GalleryGrid dispara loadUntil; evitar loadMore duplicado.
+    if (unlimitedScroll && totalMediaCount > 0) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 280;
     if (!nearBottom) return;
     await loadMoreGalleryBatch();
@@ -552,6 +705,8 @@
   onDestroy(() => {
     if (galleryScrollIdleTimer !== null) clearTimeout(galleryScrollIdleTimer);
     if (galleryAutoLoadTimer !== null) clearTimeout(galleryAutoLoadTimer);
+    if (loadUntilTimer !== null) clearTimeout(loadUntilTimer);
+    loadUntilGeneration++;
     galleryScrollingStore.set(false);
     galleryChromeBusy.set(false);
     disposeGalleryThumbs();
@@ -615,6 +770,15 @@
     {onDestDrop}
     {destinationsMode}
     {galleryMasonryView}
+    {unlimitedScroll}
+    {layoutMode}
+    {layoutSpans}
+    {totalMediaCount}
+    {galleryWindowStart}
+    galleryLoadedEnd={Number($galleryState?.endIndex ?? 0)}
+    onRequestLoadUntilIndex={scheduleLoadUntilGalleryIndex}
+    onCancelBackgroundLoad={cancelBackgroundWork}
+    onCancelScrollLoads={cancelScrollLoads}
     {messSuggestionsEnabled}
     messFolder={messFolder}
     galleryTargetFolder={galleryFolder}

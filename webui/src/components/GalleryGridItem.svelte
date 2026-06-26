@@ -63,6 +63,15 @@
   <div class="timeline-day-break gallery-virtual-item" class:gallery-masonry-span={masonrySpan} role="separator" aria-label={it.name} {style}>
     <span class="timeline-day-break__n">{it.name}</span>
   </div>
+{:else if it.kind === "placeholder"}
+  <div
+    class="tile tile--placeholder gallery-virtual-item"
+    class:tile--masonry={masonryLayout}
+    aria-hidden="true"
+    {style}
+  >
+    <span class="tile-placeholder__shimmer"></span>
+  </div>
 {:else}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_interactive_supports_focus -->
