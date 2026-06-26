@@ -35,5 +35,5 @@ Documento de seguimiento para las mejoras solicitadas. Las fases son orientativa
 
 ## Notas
 
-- La **interfaz Tk** quedó fuera del flujo principal; solo web + mensajes de error.
+- La **interfaz Tk** fue eliminada del repositorio; solo queda la UI web (Svelte) y mensajes de error si PyWebView no arranca.
 - **Vídeo / codecs** en Windows suele apoyarse en WebView2 / elementos `<video>` y formatos que el motor soporte; extensiones raras pueden requerir transcodificación en backend (futuro).

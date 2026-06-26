@@ -1,47 +1,39 @@
-"""Entrypoint principal: interfaz web (Svelte) vía PyWebView; sin fallback a Tk salvo variable de entorno."""
+"""Entrypoint principal: interfaz web (Svelte) vía PyWebView."""
 
 from __future__ import annotations
 
-import os
 import sys
 import traceback
 
-from .app_tk import main as main_tk
 from .app_webview import main as main_webview
 
 
 def _notify_ui_failure(exc: BaseException) -> None:
-    """Muestra el error real; la UI Tk legacy ya no se usa por defecto."""
+    """Muestra el error real al usuario cuando la UI web no arranca."""
     tb = traceback.format_exc()
     msg = (
         "No se pudo iniciar la interfaz web (PyWebView + Svelte).\n\n"
         "Comprueba en Windows:\n"
-        "• .NET Framework 4.7.2 o superior (Panel de control → Programas → Activar características de Windows).\n"
-        "• Si el zip se descargó de internet: clic derecho en el .zip → Propiedades → marcar «Desbloquear» "
-        "→ Aceptar → volver a extraer en una carpeta nueva.\n"
+        "• .NET Framework 4.7.2 o superior.\n"
+        "• Si el zip se descargó de internet: clic derecho en el .zip → Propiedades → «Desbloquear» "
+        "→ volver a extraer.\n"
         "• Runtime WebView2 instalado (Edge WebView2).\n"
-        "• El zip descomprimido entero en una carpeta real (Escritorio, etc.); "
-        "no ejecutar el .exe desde dentro del .zip.\n"
+        "• Descomprimir el zip completo en una carpeta real; no ejecutar el .exe desde dentro del zip.\n"
         "• Antivirus sin bloquear la carpeta del programa.\n\n"
         f"Detalle técnico:\n{tb[:1600]}"
     )
     try:
-        import tkinter as tk
-        from tkinter import messagebox
+        if sys.platform == "win32":
+            import ctypes
 
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("Galería AYN — error al iniciar", msg)
-        root.destroy()
+            ctypes.windll.user32.MessageBoxW(0, msg, "Galería AYN — error al iniciar", 0x10)
+            return
     except Exception:
-        print(msg, file=sys.stderr)
+        pass
+    print(msg, file=sys.stderr)
 
 
 def main() -> None:
-    # Solo desarrollo / depuración: UI antigua en Tk (ORGANIZADOR_LEGACY_TK_UI=1).
-    if os.environ.get("ORGANIZADOR_LEGACY_TK_UI"):
-        main_tk()
-        return
     try:
         main_webview()
     except Exception as e:
