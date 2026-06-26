@@ -53,6 +53,7 @@ def load_app_settings() -> dict:
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_masonry_view": False,
+            "gallery_masonry_tight_spacing": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
             "video_transcode_preset": "fast",
@@ -197,6 +198,10 @@ def load_app_settings() -> dict:
             data["gallery_masonry_view"] = False
         else:
             data["gallery_masonry_view"] = bool(data["gallery_masonry_view"])
+        if "gallery_masonry_tight_spacing" not in data:
+            data["gallery_masonry_tight_spacing"] = False
+        else:
+            data["gallery_masonry_tight_spacing"] = bool(data["gallery_masonry_tight_spacing"])
         if "gallery_section_dominant_color" not in data:
             data["gallery_section_dominant_color"] = True
         else:
@@ -359,6 +364,7 @@ def load_app_settings() -> dict:
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
             "gallery_masonry_view": False,
+            "gallery_masonry_tight_spacing": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
             "video_transcode_preset": "fast",

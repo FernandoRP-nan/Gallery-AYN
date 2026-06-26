@@ -426,7 +426,7 @@
   }
 .grid-masonry .gallery-masonry-span {
     width: 100%;
-    margin-bottom: var(--thumb-gap);
+    margin-bottom: var(--masonry-v-gap, var(--thumb-gap));
   }
 .grid-masonry-cols {
     display: flex;
@@ -439,7 +439,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--thumb-gap);
+    gap: var(--masonry-v-gap, var(--thumb-gap));
   }
 .grid-masonry .tile {
     display: block;
@@ -451,7 +451,7 @@
 .grid-masonry .tile.tile--masonry {
     aspect-ratio: auto;
     height: auto;
-    padding: var(--om-space-1);
+    padding: var(--masonry-tile-pad, var(--om-space-1));
   }
 .grid-masonry .tile.tile--masonry .thumb-stack {
     position: relative;

@@ -9,12 +9,12 @@ type Bucket = Map<number, number>;
 
 const byLayout = new Map<string, Bucket>();
 
-function layoutKey(colWidth: number, maxH: number): string {
-  return `${Math.round(colWidth)}|${Math.round(maxH)}`;
+function layoutKey(colWidth: number, maxH: number, tilePadding: number): string {
+  return `${Math.round(colWidth)}|${Math.round(maxH)}|${Math.round(tilePadding)}`;
 }
 
-function bucket(colWidth: number, maxH: number): Bucket {
-  const key = layoutKey(colWidth, maxH);
+function bucket(colWidth: number, maxH: number, tilePadding: number): Bucket {
+  const key = layoutKey(colWidth, maxH, tilePadding);
   let b = byLayout.get(key);
   if (!b) {
     b = new Map();
@@ -27,8 +27,9 @@ export function getMasonryCachedHeight(
   mediaIndex: number,
   colWidth: number,
   maxH: number,
+  tilePadding = MASONRY_TILE_PAD_PX,
 ): number | null {
-  const h = bucket(colWidth, maxH).get(mediaIndex);
+  const h = bucket(colWidth, maxH, tilePadding).get(mediaIndex);
   return h != null && h > 0 ? h : null;
 }
 
@@ -37,9 +38,10 @@ export function setMasonryCachedHeight(
   colWidth: number,
   maxH: number,
   height: number,
+  tilePadding = MASONRY_TILE_PAD_PX,
 ): void {
   if (mediaIndex < 0 || height <= 0) return;
-  bucket(colWidth, maxH).set(mediaIndex, height);
+  bucket(colWidth, maxH, tilePadding).set(mediaIndex, height);
 }
 
 /** Altura de slot: proporción real del ítem o estimación pseudo-aleatoria. */
@@ -64,16 +66,17 @@ export function resolveMasonrySlotHeight(
   mediaIndex: number,
   colWidth: number,
   maxH: number,
+  tilePadding = MASONRY_TILE_PAD_PX,
 ): number {
-  const cached = getMasonryCachedHeight(mediaIndex, colWidth, maxH);
+  const cached = getMasonryCachedHeight(mediaIndex, colWidth, maxH, tilePadding);
   if (cached != null) return cached;
 
-  const height = masonrySlotHeightForItem(item, colWidth, maxH, mediaIndex);
+  const height = masonrySlotHeightForItem(item, colWidth, maxH, mediaIndex, tilePadding);
   if (item.kind === "image" || item.kind === "video") {
     const tw = item.thumbW;
     const th = item.thumbH;
     if (typeof tw === "number" && typeof th === "number" && tw > 0 && th > 0) {
-      setMasonryCachedHeight(mediaIndex, colWidth, maxH, height);
+      setMasonryCachedHeight(mediaIndex, colWidth, maxH, height, tilePadding);
     }
   }
   return height;
@@ -83,6 +86,7 @@ export function seedMasonryHeightsFromItems(
   items: GalleryItem[],
   colWidth: number,
   maxH: number,
+  tilePadding = MASONRY_TILE_PAD_PX,
 ): void {
   for (const it of items) {
     if (it.kind !== "image" && it.kind !== "video") continue;
@@ -98,7 +102,8 @@ export function seedMasonryHeightsFromItems(
       idx,
       colWidth,
       maxH,
-      masonrySlotHeightForItem(it, colWidth, maxH, idx),
+      masonrySlotHeightForItem(it, colWidth, maxH, idx, tilePadding),
+      tilePadding,
     );
   }
 }

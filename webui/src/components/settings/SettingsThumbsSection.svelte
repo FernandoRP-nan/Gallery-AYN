@@ -2,6 +2,7 @@
   import { t } from "../../lib/i18n";
 
   export let thumbsPerPage: number;
+  export let galleryMasonryTightSpacing = false;
   export let settingsThumbPresetIdx: number;
   export let settingsThumbScaleDraft: number;
   export let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
@@ -99,6 +100,13 @@
   </select>
   <p class="settings-hint">{t("settings.thumbQualityHint")}</p>
 
+  <p class="settings-hint settings-hint--section">{t("settings.masonrySpacingTitle")}</p>
+  <label class="check settings-check">
+    <input type="checkbox" bind:checked={galleryMasonryTightSpacing} />
+    {t("settings.masonryTightSpacing")}
+  </label>
+  <p class="settings-hint settings-hint--indent">{t("settings.masonryTightSpacingHint")}</p>
+
   <p class="settings-hint settings-hint--section">{t("settings.thumbsSpacingTitle")}</p>
   <label class="field-label" for="set-thumb-gap"
     >{t("settings.thumbGap")} {Math.round(thumbGapPx)}px</label
@@ -157,5 +165,18 @@
     margin-top: 0.35rem;
     font-weight: 600;
     color: var(--om-text-secondary);
+  }
+
+  .settings-check {
+    display: flex;
+    align-items: center;
+    gap: var(--om-space-2);
+    margin-top: var(--om-space-1);
+    cursor: pointer;
+  }
+
+  .settings-hint--indent {
+    margin-left: 1.5rem;
+    margin-top: 0.25rem;
   }
 </style>

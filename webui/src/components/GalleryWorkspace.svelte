@@ -56,6 +56,7 @@
   export let destinationsMode = false;
   export let timelineView = false;
   export let galleryMasonryView = false;
+  export let galleryMasonryTightSpacing = false;
   export let messSuggestionsEnabled = false;
   export let messFolder = "";
   export let galleryFolder = "";
@@ -972,6 +973,7 @@
     {onDestDrop}
     {destinationsMode}
     {galleryMasonryView}
+    {galleryMasonryTightSpacing}
     {unlimitedScroll}
     {layoutMode}
     {layoutSpans}

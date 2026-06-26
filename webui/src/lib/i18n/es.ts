@@ -348,6 +348,10 @@ export const es = {
     thumbsPagingTitle: "Carga de la galería",
     thumbsSizeTitle: "Tamaño y nitidez",
     thumbsSpacingTitle: "Separación y bordes",
+    masonrySpacingTitle: "Masonry (muro)",
+    masonryTightSpacing: "Masonry compacto (sin hueco vertical)",
+    masonryTightSpacingHint:
+      "Elimina el espacio vertical entre filas y el relleno interno de cada celda. La separación horizontal entre columnas sigue usando el control de abajo. Desactiva para volver al espaciado actual. No afecta al rendimiento.",
     organizationLead: "Destinos para mover archivos y marcadores para rutas frecuentes. Los cambios se aplican al pulsar «Guardar».",
     messLead: "Fotos sugeridas desde la carpeta desorden al final de la galería.",
     videoLead: "Transcodificación al reproducir vídeos dentro del visor integrado.",

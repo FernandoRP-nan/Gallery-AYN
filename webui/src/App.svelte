@@ -281,6 +281,7 @@
   /** Vista calendario: secciones por mes; marcas por día según zoom (solo cliente). */
   let timelineView = false;
   let galleryMasonryView = false;
+  let galleryMasonryTightSpacing = false;
   let gallerySortMode = "name,mtime,type";
   /** Resaltado al arrastrar sobre encabezado de sección (agrupar por carpeta). */
   let dragOverSectionPath: string | null = null;
@@ -317,6 +318,7 @@
   let thumbImageRadiusPx = 6;
   let thumbTileRadiusPx = 12;
   let thumbGapPxBackup = 12;
+  let galleryMasonryTightSpacingBackup = false;
   let showThumbLabelsBackup = true;
   let thumbCardStyleBackup: "soft" | "flat" | "outlined" = "soft";
   let thumbFrameVisibleBackup = true;
@@ -761,6 +763,7 @@
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
     galleryMasonryView = Boolean(data.settings?.gallery_masonry_view ?? false);
+    galleryMasonryTightSpacing = Boolean(data.settings?.gallery_masonry_tight_spacing ?? false);
     gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
     {
       const vp = String(data.settings?.video_transcode_preset ?? "fast").toLowerCase();
@@ -1245,6 +1248,7 @@
     uiThemeBackup = uiTheme;
     thumbsPerPageBackup = thumbsPerPage;
     thumbGapPxBackup = thumbGapPx;
+    galleryMasonryTightSpacingBackup = galleryMasonryTightSpacing;
     showThumbLabelsBackup = showThumbLabels;
     thumbCardStyleBackup = thumbCardStyle;
     thumbFrameVisibleBackup = thumbFrameVisible;
@@ -1289,6 +1293,7 @@
     uiTheme = uiThemeBackup;
     thumbsPerPage = thumbsPerPageBackup;
     thumbGapPx = thumbGapPxBackup;
+    galleryMasonryTightSpacing = galleryMasonryTightSpacingBackup;
     showThumbLabels = showThumbLabelsBackup;
     thumbCardStyle = thumbCardStyleBackup;
     thumbFrameVisible = thumbFrameVisibleBackup;
@@ -1401,6 +1406,7 @@
         mess_suggestions_enabled: Boolean(messSuggestionsEnabled),
         mess_pinterest_masonry: Boolean(messPinterestMasonry),
         mess_scan_max_files: Math.max(50, Math.min(2000, Math.round(Number(messScanMaxFiles) || 400))),
+        gallery_masonry_tight_spacing: Boolean(galleryMasonryTightSpacing),
       });
       if (selectedPreview?.mediaType === "video" && selectedPreview.path) {
         previewVideoMode = "auto";
@@ -4538,6 +4544,7 @@
           {destinationsMode}
           {timelineView}
           {galleryMasonryView}
+          {galleryMasonryTightSpacing}
           messSuggestionsEnabled={messSuggestionsEnabled}
           messFolder={messFolderSetting}
           galleryFolder={folder}
@@ -5219,6 +5226,7 @@
       bind:thumbGapPx
       bind:thumbImageRadiusPx
       bind:thumbTileRadiusPx
+      bind:galleryMasonryTightSpacing
       bind:uiTheme
       bind:showThumbLabels
       bind:thumbFrameVisible

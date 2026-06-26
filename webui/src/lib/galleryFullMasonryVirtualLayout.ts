@@ -60,6 +60,8 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
   containerWidth: number;
   cellTargetPx: number;
   gapPx: number;
+  rowGapPx?: number;
+  tilePaddingPx?: number;
   edgePadPx: number;
   extraBottomPx?: number;
 }): GalleryFullVirtualLayout {
@@ -72,6 +74,8 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
     containerWidth,
     cellTargetPx,
     gapPx,
+    rowGapPx = gapPx,
+    tilePaddingPx = 8,
     edgePadPx,
     extraBottomPx = 0,
   } = opts;
@@ -128,7 +132,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
       sectionLabel: label,
     });
     markers.push({ label, kind, top, height, startIndex });
-    syncColsTo(top + height + gapPx);
+    syncColsTo(top + height + rowGapPx);
   };
 
   for (const folder of folderItems) {
@@ -143,7 +147,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
       width: colWidth,
       height,
     });
-    colTops[col] = top + height + gapPx;
+    colTops[col] = top + height + rowGapPx;
   }
 
   const emitMediaRange = (
@@ -161,7 +165,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
       const item = mediaByIndex.get(mediaIndex) ?? placeholderItem(mediaIndex);
       const col = shortestCol();
       const top = colTops[col];
-      const height = resolveMasonrySlotHeight(item, mediaIndex, colWidth, maxH);
+      const height = resolveMasonrySlotHeight(item, mediaIndex, colWidth, maxH, tilePaddingPx);
       entries.push({
         item,
         index: entryIndex++,
@@ -171,7 +175,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
         height,
         mediaIndex,
       });
-      colTops[col] = top + height + gapPx;
+      colTops[col] = top + height + rowGapPx;
     }
   };
 

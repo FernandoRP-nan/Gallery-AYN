@@ -63,6 +63,7 @@
   export let onPickMarkerFolder: () => Promise<string | null>;
 
   export let themeNameLabel: (id: UiThemeId) => string;
+  export let galleryMasonryTightSpacing = false;
   export let onCancel: () => void;
   export let onSave: () => void;
 
@@ -148,6 +149,7 @@
           bind:thumbGapPx
           bind:thumbImageRadiusPx
           bind:thumbTileRadiusPx
+          bind:galleryMasonryTightSpacing
         />
       {:else if activeTab === "appearance"}
         <SettingsAppearanceSection
