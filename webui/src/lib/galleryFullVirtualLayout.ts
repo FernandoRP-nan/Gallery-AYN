@@ -1,5 +1,6 @@
 import type { GalleryItem } from "./api";
 import type { VirtualLayoutEntry } from "./galleryVirtualLayout";
+import { resolveVirtualLayoutSpans } from "./galleryLayoutSpans";
 
 export type GalleryLayoutSpan = {
   start: number;
@@ -137,10 +138,17 @@ export function buildGalleryFullVirtualLayout(opts: {
   let rowStartY = 0;
   let entryIndex = 0;
 
-  const spans =
-    layoutSpans.length > 0 && layoutMode !== "flat"
-      ? layoutSpans
-      : [];
+  const { spans, railOnlyTimeline } = resolveVirtualLayoutSpans(layoutMode, layoutSpans);
+
+  const pushTimelineMarker = (label: string, startIndex: number) => {
+    markers.push({
+      label,
+      kind: "timeline",
+      top: y,
+      height: cellSize,
+      startIndex,
+    });
+  };
 
   const pushSection = (label: string, path: string, kind: GalleryLayoutSpan["kind"], startIndex: number) => {
     if (col > 0) {
@@ -196,7 +204,9 @@ export function buildGalleryFullVirtualLayout(opts: {
   }
 
   const emitMediaRange = (start: number, end: number, sectionPath?: string, sectionLabel?: string) => {
-    if (sectionLabel && sectionPath) {
+    if (railOnlyTimeline && sectionLabel) {
+      pushTimelineMarker(sectionLabel, start);
+    } else if (sectionLabel && sectionPath) {
       pushSection(sectionLabel, sectionPath, layoutMode === "grouped" ? "folder" : layoutMode, start);
     }
     for (let mediaIndex = start; mediaIndex < end; mediaIndex += 1) {
@@ -226,7 +236,12 @@ export function buildGalleryFullVirtualLayout(opts: {
         span.kind === "timeline"
           ? `section:timeline:${span.key ?? span.label}`
           : `section:${span.key ?? span.start}`;
-      emitMediaRange(span.start, Math.min(span.end, totalMediaCount), sectionPath, span.label);
+      emitMediaRange(
+        span.start,
+        Math.min(span.end, totalMediaCount),
+        railOnlyTimeline ? undefined : sectionPath,
+        span.label,
+      );
     }
   } else {
     emitMediaRange(0, totalMediaCount);
@@ -257,6 +272,19 @@ export function virtualLoadedBottomY(
     bottom = Math.max(bottom, e.top + e.height);
   }
   return bottom;
+}
+
+/** Y superior del tramo virtual ya cargado (índices >= loadedStart). */
+export function virtualLoadedTopY(
+  entries: VirtualLayoutEntry[],
+  loadedStart: number,
+): number {
+  let top = Number.POSITIVE_INFINITY;
+  for (const e of entries) {
+    if (e.mediaIndex == null || e.mediaIndex < loadedStart) continue;
+    top = Math.min(top, e.top);
+  }
+  return Number.isFinite(top) ? top : 0;
 }
 
 /** Índice de medio más alto visible + cola de precarga. */
