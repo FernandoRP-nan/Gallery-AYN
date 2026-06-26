@@ -12,6 +12,27 @@ export type GalleryThumbHqEntry = {
 
 const hqByPath = new Map<string, GalleryThumbHqEntry>();
 const pathStores = new Map<string, ReturnType<typeof writable<GalleryThumbHqEntry | null>>>();
+/** Incrementa al vaciar caché para que ThumbImage re-suscriba stores vivos. */
+export const galleryThumbHqCacheRevision = writable(0);
+/** Tamaño en px para el que la caché HQ es válida; null = hay que re-hidratar. */
+let hqValidForThumbPx: number | null = null;
+
+function ensurePathStore(key: string) {
+  let store = pathStores.get(key);
+  if (!store) {
+    store = writable<GalleryThumbHqEntry | null>(hqByPath.get(key) ?? null);
+    pathStores.set(key, store);
+  }
+  return store;
+}
+
+export function getGalleryThumbHqValidPx(): number | null {
+  return hqValidForThumbPx;
+}
+
+export function setGalleryThumbHqValidPx(px: number | null) {
+  hqValidForThumbPx = px;
+}
 
 function lqFromItem(it: GalleryItem): string | null {
   if (it.thumbLqDataUrl) return it.thumbLqDataUrl;
@@ -25,20 +46,14 @@ function hqFromItem(it: GalleryItem): string | null {
 }
 
 function notifyPath(path: string, entry: GalleryThumbHqEntry | null) {
-  const store = pathStores.get(path);
-  if (store) store.set(entry);
+  ensurePathStore(path).set(entry);
 }
 
 /** Suscripción fina por ruta: solo la tile afectada re-renderiza al llegar HQ. */
 export function galleryThumbHqFor(path: string): Readable<GalleryThumbHqEntry | null> {
   const key = String(path ?? "").trim();
   if (!key) return writable<GalleryThumbHqEntry | null>(null);
-  let store = pathStores.get(key);
-  if (!store) {
-    store = writable<GalleryThumbHqEntry | null>(hqByPath.get(key) ?? null);
-    pathStores.set(key, store);
-  }
-  return derived(store, (x) => x);
+  return derived(ensurePathStore(key), (x) => x);
 }
 
 export function getGalleryThumbHq(path: string): GalleryThumbHqEntry | null {
@@ -48,6 +63,10 @@ export function getGalleryThumbHq(path: string): GalleryThumbHqEntry | null {
 
 export function hasGalleryThumbHq(path: string): boolean {
   return getGalleryThumbHq(path) !== null;
+}
+
+export function isGalleryThumbHqValidForPx(px: number): boolean {
+  return hqValidForThumbPx === px;
 }
 
 export function setGalleryThumbHq(path: string, hqUrl: string, lqUrl?: string | null) {
@@ -82,14 +101,19 @@ export function removeGalleryThumbHq(paths: Iterable<string>) {
     const key = String(raw ?? "").trim();
     if (!key) continue;
     hqByPath.delete(key);
-    pathStores.delete(key);
+    const store = pathStores.get(key);
+    if (store) {
+      store.set(null);
+      pathStores.delete(key);
+    }
   }
 }
 
 export function clearGalleryThumbHqCache() {
   hqByPath.clear();
+  hqValidForThumbPx = null;
   for (const store of pathStores.values()) store.set(null);
-  pathStores.clear();
+  galleryThumbHqCacheRevision.update((n) => n + 1);
 }
 
 /** Ítem con thumb LQ en el store reactivo; HQ vive en la caché externa. */

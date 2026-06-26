@@ -144,22 +144,9 @@ def _img_to_data_url_contain(path: Path, max_w: int, max_h: int) -> str | None:
         return None
 
 def _thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 90) -> str | None:
-    """Miniatura cuadrada para la rejilla; JPEG reduce mucho el tamaño frente a PNG."""
-    if Image is None:
-        return None
-    try:
-        with Image.open(path) as im:
-            im = im.convert("RGB")
-            if ImageOps is not None:
-                im = ImageOps.fit(im, (size, size), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-            else:
-                im.thumbnail((size, size), Image.Resampling.LANCZOS)
-            bio = io.BytesIO()
-            im.save(bio, format="JPEG", quality=quality, optimize=True)
-            payload = base64.b64encode(bio.getvalue()).decode("ascii")
-            return f"data:image/jpeg;base64,{payload}"
-    except Exception:
-        return None
+    from ..core.thumbs import thumb_jpeg_data_url_square
+
+    return thumb_jpeg_data_url_square(path, size, quality=quality)
 
 def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) -> str | None:
     """Miniatura modal destino: encaja en size×size manteniendo proporción."""
@@ -198,6 +185,41 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
                 "-i", str(path),
                 "-vframes", "1",
                 "-vf", f"scale={thumb}:{thumb}:force_original_aspect_ratio=decrease,pad={thumb}:{thumb}:(ow-iw)/2:(oh-ih)/2:black",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "-q:v", str(max(2, min(31, int((100 - quality) / 3)))),
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return None
+        payload = base64.b64encode(result.stdout).decode("ascii")
+        return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        return None
+
+def _video_thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quality: int = 80) -> str | None:
+    """Primer fotograma del vídeo con proporción original (vista masonry)."""
+    import subprocess
+
+    from ..core.thumbs import ffmpeg_masonry_scale_filter
+    from ..core.video_tools import resolve_ffmpeg
+
+    ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        return None
+
+    try:
+        vf = ffmpeg_masonry_scale_filter(max_w, max_h)
+        result = subprocess.run(
+            [
+                ffmpeg, "-y",
+                "-ss", "0.5",
+                "-i", str(path),
+                "-vframes", "1",
+                "-vf", vf,
                 "-f", "image2pipe",
                 "-vcodec", "mjpeg",
                 "-q:v", str(max(2, min(31, int((100 - quality) / 3)))),
@@ -265,6 +287,17 @@ class EditorBridgeMixin:
 
         jobs = list_active_transcode_jobs()
         return {"jobs": jobs, "count": len(jobs)}
+
+    def gallery_transcode_cancel(self, path: str) -> dict:
+        from ..core.fs_path import resolve_file_path
+        from ..core.video_transcode import cancel_transcode_for_path
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        cancelled = cancel_transcode_for_path(p)
+        return {"ok": True, "cancelled": cancelled, "path": str(p)}
 
     def gallery_video_profiles(self, path: str) -> dict:
         from ..core.fs_path import resolve_file_path
@@ -520,7 +553,8 @@ class EditorBridgeMixin:
             if raw_preset in ("balanced", "sharp", "hidpi", "performance")
             else "balanced"
         )
-        key = (str(path.resolve()), thumb_px, profile, preset_key)
+        masonry = bool(self.settings.get("gallery_masonry_view", False))
+        key = (str(path.resolve()), thumb_px, profile, preset_key, masonry, "portrait-v2")
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -531,7 +565,15 @@ class EditorBridgeMixin:
                 return hit[1]
         enc = thumb_encode_params(thumb_px, profile)
         if path.suffix.lower() in MediaOrganizer.VIDEO_EXTENSIONS:
-            data = _video_thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
+            if masonry:
+                from .bridge_gallery import MASONRY_THUMB_HEIGHT_FACTOR
+
+                max_h = max(48, int(round(enc.size_px * MASONRY_THUMB_HEIGHT_FACTOR)))
+                data = _video_thumb_jpeg_data_url_masonry(
+                    path, enc.size_px, max_h, quality=enc.jpeg_quality
+                )
+            else:
+                data = _video_thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
             if data is not None:
                 with self._thumb_cache_lock:
                     self._thumb_cache[key] = (mtime, data)
@@ -539,7 +581,15 @@ class EditorBridgeMixin:
         # Pillow no rasteriza SVG de forma fiable; la UI usa `file://` en vista previa.
         if path.suffix.lower() == ".svg":
             return None
-        data = _thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
+        if masonry:
+            from .bridge_gallery import MASONRY_THUMB_HEIGHT_FACTOR, _thumb_jpeg_data_url_masonry
+
+            max_h = max(48, int(round(enc.size_px * MASONRY_THUMB_HEIGHT_FACTOR)))
+            data = _thumb_jpeg_data_url_masonry(
+                path, enc.size_px, max_h, quality=enc.jpeg_quality
+            )
+        else:
+            data = _thumb_jpeg_data_url_square(path, enc.size_px, quality=enc.jpeg_quality)
         with self._thumb_cache_lock:
             self._thumb_cache[key] = (mtime, data)
         return data

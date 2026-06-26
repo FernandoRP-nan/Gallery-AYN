@@ -122,6 +122,8 @@ class MediaOrganizer:
         include_pending_scan: bool = False,
         remove_duplicate_images: bool = False,
         group_similar_images: bool = False,
+        group_similar_visual: bool = False,
+        visual_similarity_min: float = 0.82,
         max_workers: int | None = None,
     ) -> None:
         self.source_root = source_root.resolve()
@@ -133,6 +135,8 @@ class MediaOrganizer:
         self.include_pending_scan = include_pending_scan
         self.remove_duplicate_images = remove_duplicate_images
         self.group_similar_images = group_similar_images
+        self.group_similar_visual = group_similar_visual
+        self.visual_similarity_min = max(0.5, min(0.98, float(visual_similarity_min)))
         self.max_workers = max_workers or max(4, min(32, (os.cpu_count() or 4) * 4))
         self.stats = OrganizeStats()
         self.cancel_requested = False
@@ -193,10 +197,15 @@ class MediaOrganizer:
                 progress_callback(processed, total_files, "Postproceso: buscando imagenes duplicadas...")
             self.stats.deleted_duplicate_images = self._remove_duplicate_images(cancel_event)
 
+        if not self.cancel_requested and self.group_similar_visual:
+            if progress_callback:
+                progress_callback(processed, total_files, "Postproceso: IA visual (similitud)...")
+            self.stats.grouped_similar_images += self._group_similar_visual_images(cancel_event)
+
         if not self.cancel_requested and self.group_similar_images:
             if progress_callback:
-                progress_callback(processed, total_files, "Postproceso: agrupando imagenes similares...")
-            self.stats.grouped_similar_images = self._group_similar_named_images(cancel_event)
+                progress_callback(processed, total_files, "Postproceso: agrupando por nombre...")
+            self.stats.grouped_similar_images += self._group_similar_named_images(cancel_event)
 
         self.stats.deleted_dirs = self._delete_empty_legacy_dirs()
         return self.stats
@@ -409,6 +418,62 @@ class MediaOrganizer:
                 for source_file in grouped_files:
                     try:
                         self._move_with_collision_handling(source_file, target_folder)
+                        moved_count += 1
+                    except Exception:
+                        self.stats.errors += 1
+        return moved_count
+
+    def _group_similar_visual_images(self, cancel_event: threading.Event | None) -> int:
+        """Agrupa por similitud visual (aHash) en Organizado/AAAA/MM/Agrupadas/Visual-NNN/."""
+        from ..ia.mess_clusters import cluster_paths_list
+
+        moved_count = 0
+        month_roots: set[Path] = set()
+        for image_path in self.target_media_root.rglob("*"):
+            if not image_path.is_file():
+                continue
+            if image_path.suffix.lower() not in self.IMAGE_EXTENSIONS:
+                continue
+            month_root = self._extract_month_root(image_path)
+            if month_root is not None:
+                month_roots.add(month_root)
+
+        for month_root in sorted(month_roots):
+            if cancel_event and cancel_event.is_set():
+                self.cancel_requested = True
+                return moved_count
+
+            candidates: list[Path] = []
+            for p in month_root.rglob("*"):
+                if not p.is_file() or p.suffix.lower() not in self.IMAGE_EXTENSIONS:
+                    continue
+                rel = p.relative_to(month_root).parts
+                if rel and rel[0] == "Agrupadas":
+                    continue
+                candidates.append(p)
+
+            if len(candidates) < 2:
+                continue
+
+            result = cluster_paths_list(
+                candidates,
+                self.visual_similarity_min,
+                cancel_event=cancel_event,
+            )
+            if result.get("cancelled"):
+                self.cancel_requested = True
+                return moved_count
+
+            multi = [c for c in result.get("clusters", []) if int(c.get("count", 0)) >= 2]
+            for idx, cluster in enumerate(multi, start=1):
+                if cancel_event and cancel_event.is_set():
+                    self.cancel_requested = True
+                    return moved_count
+                target_folder = month_root / "Agrupadas" / f"Visual-{idx:03d}"
+                target_folder.mkdir(parents=True, exist_ok=True)
+                for path_str in cluster.get("paths", []):
+                    try:
+                        self._move_with_collision_handling(Path(path_str), target_folder)
                         moved_count += 1
                     except Exception:
                         self.stats.errors += 1

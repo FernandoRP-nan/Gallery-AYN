@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pathlib import Path
 
+from ..core.fs_path import resolve_dir_path, resolve_existing_path, resolve_file_path
 from ..core.fs_utils import ensure_unique_destination
 
 from ..core.gallery_images import make_thumbnail_photoimage
@@ -242,7 +243,10 @@ class SelectionBridgeMixin:
         with self.lock:
             for raw in unique_raw:
                 try:
-                    src = Path(raw).expanduser().resolve()
+                    try:
+                        src = resolve_file_path(raw)
+                    except ValueError:
+                        src = resolve_dir_path(raw)
                     if src.is_dir():
                         shutil.rmtree(src)
                         deleted += 1
@@ -311,9 +315,7 @@ class SelectionBridgeMixin:
         raw_name = str(new_name or "").strip()
         if not raw_name:
             raise ValueError("El nombre no puede estar vacío.")
-        src = Path(path).expanduser().resolve()
-        if not src.exists():
-            raise ValueError("No se encontró el elemento.")
+        src = resolve_existing_path(path)
         if src.is_file() and "." not in raw_name and src.suffix:
             raw_name = raw_name + src.suffix
         target = src.parent / raw_name
@@ -329,9 +331,7 @@ class SelectionBridgeMixin:
 
     def gallery_delete_folder(self, path: str) -> dict:
         """Elimina una carpeta y todo su contenido."""
-        folder = Path(path).expanduser().resolve()
-        if not folder.is_dir():
-            raise ValueError("La ruta no es una carpeta.")
+        folder = resolve_dir_path(path)
         try:
             shutil.rmtree(folder)
         except OSError as exc:

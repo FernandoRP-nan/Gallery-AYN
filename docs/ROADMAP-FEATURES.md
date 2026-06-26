@@ -20,8 +20,8 @@ Documento de seguimiento para las mejoras solicitadas. Las fases son orientativa
 
 ## Fase C — Organización e IA
 
-| Pendiente | **Organizar con IA** en el modal de organizar (además de reglas actuales) |
-| Pendiente | Carpeta **desorden**: sugerencias por similitud (estilo Pinterest) y mover a la carpeta actual con un clic |
+| Hecho (parcial) | **Organizar con IA**: checkbox «Agrupar similares por contenido (IA visual)» en modal Organizar; post-proceso aHash → `Organizado/AAAA/MM/Agrupadas/Visual-NNN/` (umbral compartido con pestaña Desorden) |
+| Hecho (parcial) | **Sugerencias Pinterest** al final de la galería (carpeta desorden → mover a carpeta actual); masonry adaptado a escala de miniaturas; panel Desorden clásico aparte |
 | Pendiente | **Recibir archivos** del móvil hacia la carpeta de desorden (diseño: WebDAV, carpeta compartida, QR, etc.) |
 
 ## Fase D — UX y sistema

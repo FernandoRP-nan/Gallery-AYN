@@ -14,10 +14,12 @@
   export let groupByFolder: boolean;
   export let sectionDominantColor: boolean;
   export let timelineView: boolean;
+  export let galleryMasonryView: boolean;
   export let gallerySortMode: string;
   export let orgPath: string;
   export let folder: string;
   export let orgPanelOpen: boolean;
+  export let messPanelOpen: boolean;
   export let routePathEl: HTMLInputElement | null;
   export let routePickerOpen: boolean;
 
@@ -30,6 +32,7 @@
   export let onGroupByFolderChange: (val: boolean) => void;
   export let onSectionDominantColorChange: (val: boolean) => void;
   export let onTimelineViewChange: (val: boolean) => void;
+  export let onGalleryMasonryViewChange: (val: boolean) => void;
   export let onGallerySortApply: (val: string) => void | Promise<void>;
   export let goBackFolder: () => void;
   export let goForwardFolder: () => void;
@@ -138,6 +141,15 @@
             />
             <span>{t("view.timelineView")}</span>
           </label>
+          <label class="view-menu__row" title={t("view.masonryViewHint")}>
+            <input
+              type="checkbox"
+              checked={galleryMasonryView}
+              on:change={(e) =>
+                void onGalleryMasonryViewChange((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>{t("view.masonryView")}</span>
+          </label>
           <div class="view-menu__divider" aria-hidden="true"></div>
           <div class="view-menu__sort-head">
             <span class="view-menu__legend">{t("view.sortLabel")}</span>
@@ -210,6 +222,13 @@
         orgPanelOpen = true;
       }}
     >{t("tabs.organize")}</button>
+    <button
+      type="button"
+      class="om-btn om-btn--tab"
+      on:click={() => {
+        messPanelOpen = true;
+      }}
+    >{t("tabs.mess")}</button>
   </nav>
   <div class="route__row route__row--inline">
     <button type="button" class="om-btn om-btn--ghost om-btn--icon" title={t("route.back")} on:click={goBackFolder} disabled={folderBackStack.length === 0}>←</button>
@@ -314,13 +333,13 @@
     gap: 8px;
     padding-top: 2px;
   }
-.view-menu__legend {
+  .view-menu__legend {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--om-text-muted);
   }
-.view-menu__sort-badge {
+  .view-menu__sort-badge {
     font-size: 0.65rem;
     color: var(--om-accent, #007acc);
     opacity: 0.9;

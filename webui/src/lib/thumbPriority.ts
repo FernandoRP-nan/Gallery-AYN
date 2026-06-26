@@ -56,6 +56,23 @@ function isInScrollViewport(
   );
 }
 
+function isNearScrollViewport(rect: DOMRect, bounds: DOMRect): boolean {
+  const pad = Math.max(bounds.height, 420);
+  return (
+    rect.bottom > bounds.top - pad &&
+    rect.top < bounds.bottom + pad &&
+    rect.right > bounds.left - 48 &&
+    rect.left < bounds.right + 48
+  );
+}
+
+function readPathFromNode(n: HTMLElement, attrName: string): string | null {
+  const fromAttr = n.getAttribute("data-item-path")?.trim();
+  if (fromAttr) return fromAttr;
+  const fromDataset = n.dataset[attrName]?.trim();
+  return fromDataset || null;
+}
+
 function indexDistance(path: string, anchorPath: string | null | undefined, pathOrder: string[]): number {
   if (!pathOrder.length) return Number.MAX_SAFE_INTEGER;
   const idx = pathOrder.indexOf(path);
@@ -77,7 +94,7 @@ export function prioritizeThumbPaths(paths: string[], opts: ThumbPriorityOpts): 
   const nodeByPath = new Map<string, HTMLElement>();
   const scope = opts.scrollContainer ?? document;
   for (const n of scope.querySelectorAll<HTMLElement>(opts.selector)) {
-    const p = n.dataset[opts.attrName];
+    const p = readPathFromNode(n, opts.attrName);
     if (p) nodeByPath.set(p, n);
   }
 
@@ -93,8 +110,9 @@ export function prioritizeThumbPaths(paths: string[], opts: ThumbPriorityOpts): 
       const cx = r.left + r.width / 2;
       const cy = r.top + r.height / 2;
       const dist = (cx - anchor.x) ** 2 + (cy - anchor.y) ** 2;
-      const visible = isInScrollViewport(r, bounds);
-      return { path, score: visible ? dist : dist + 1e12 };
+      if (isInScrollViewport(r, bounds)) return { path, score: dist };
+      if (isNearScrollViewport(r, bounds)) return { path, score: dist + 5e11 };
+      return { path, score: dist + 1e12 };
     }
     const idxDist = indexDistance(path, cursorPath, pathOrder);
     return { path, score: 1e12 + idxDist * 1e6 };

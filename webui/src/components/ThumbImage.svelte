@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { galleryThumbHqFor } from "../lib/galleryThumbHqCache";
+  import { galleryThumbHqFor, galleryThumbHqCacheRevision } from "../lib/galleryThumbHqCache";
 
   /** Miniatura con capas LQ→HQ estilo Google Photos: la LQ permanece hasta que la HQ decodifica. */
   export let itemPath = "";
@@ -11,7 +11,8 @@
   let hqDecoded = false;
   let trackedHqUrl = "";
 
-  $: hqStore = itemPath ? galleryThumbHqFor(itemPath) : null;
+  $: cacheRevision = $galleryThumbHqCacheRevision;
+  $: hqStore = itemPath && cacheRevision >= 0 ? galleryThumbHqFor(itemPath) : null;
   $: cached = hqStore ? $hqStore : null;
 
   $: hqUrl = cached?.hqUrl ?? (thumbQuality === "hq" ? thumbDataUrl : null);
@@ -54,7 +55,7 @@
       src={hqUrl}
       alt=""
       draggable={false}
-      loading="lazy"
+      loading="eager"
       decoding="async"
       on:load={onHqLoad}
     />

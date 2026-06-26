@@ -52,12 +52,20 @@ def load_app_settings() -> dict:
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
+            "gallery_masonry_view": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
             "video_transcode_preset": "fast",
             "video_transcode_max_height": 1080,
             "video_transcode_max_width": 1920,
             "video_transcode_hw": "auto",
+            "mess_folder_path": "",
+            "mess_similarity_min": 0.82,
+            "mess_pinterest_masonry": False,
+            "mess_pinterest_more_like": False,
+            "mess_pinterest_drag_groups": False,
+            "mess_suggestions_enabled": False,
+            "mess_scan_max_files": 400,
         }
     try:
         with path.open(encoding="utf-8") as f:
@@ -172,6 +180,10 @@ def load_app_settings() -> dict:
             data["gallery_timeline_view"] = False
         else:
             data["gallery_timeline_view"] = bool(data["gallery_timeline_view"])
+        if "gallery_masonry_view" not in data:
+            data["gallery_masonry_view"] = False
+        else:
+            data["gallery_masonry_view"] = bool(data["gallery_masonry_view"])
         if "gallery_section_dominant_color" not in data:
             data["gallery_section_dominant_color"] = True
         else:
@@ -204,6 +216,42 @@ def load_app_settings() -> dict:
             data["video_transcode_hw"] = "auto"
         elif str(data["video_transcode_hw"]).lower() not in ("auto", "off"):
             data["video_transcode_hw"] = "auto"
+        if "mess_folder_path" not in data:
+            data["mess_folder_path"] = ""
+        else:
+            data["mess_folder_path"] = str(data.get("mess_folder_path") or "").strip()
+        if "mess_similarity_min" not in data:
+            data["mess_similarity_min"] = 0.82
+        else:
+            try:
+                sim = float(data["mess_similarity_min"])
+                data["mess_similarity_min"] = max(0.5, min(0.98, sim))
+            except (TypeError, ValueError):
+                data["mess_similarity_min"] = 0.82
+        if "mess_pinterest_masonry" not in data:
+            data["mess_pinterest_masonry"] = False
+        else:
+            data["mess_pinterest_masonry"] = bool(data["mess_pinterest_masonry"])
+        if "mess_pinterest_more_like" not in data:
+            data["mess_pinterest_more_like"] = False
+        else:
+            data["mess_pinterest_more_like"] = bool(data["mess_pinterest_more_like"])
+        if "mess_pinterest_drag_groups" not in data:
+            data["mess_pinterest_drag_groups"] = False
+        else:
+            data["mess_pinterest_drag_groups"] = bool(data["mess_pinterest_drag_groups"])
+        if "mess_scan_max_files" not in data:
+            data["mess_scan_max_files"] = 400
+        else:
+            try:
+                mf = int(data["mess_scan_max_files"])
+                data["mess_scan_max_files"] = max(50, min(2000, mf))
+            except (TypeError, ValueError):
+                data["mess_scan_max_files"] = 400
+        if "mess_suggestions_enabled" not in data:
+            data["mess_suggestions_enabled"] = False
+        else:
+            data["mess_suggestions_enabled"] = bool(data["mess_suggestions_enabled"])
         return data
     except (OSError, json.JSONDecodeError):
         return {
@@ -239,12 +287,20 @@ def load_app_settings() -> dict:
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_timeline_view": False,
+            "gallery_masonry_view": False,
             "gallery_section_dominant_color": True,
             "web_prefer_qt_engine": True,
             "video_transcode_preset": "fast",
             "video_transcode_max_height": 1080,
             "video_transcode_max_width": 1920,
             "video_transcode_hw": "auto",
+            "mess_folder_path": "",
+            "mess_similarity_min": 0.82,
+            "mess_pinterest_masonry": False,
+            "mess_pinterest_more_like": False,
+            "mess_pinterest_drag_groups": False,
+            "mess_suggestions_enabled": False,
+            "mess_scan_max_files": 400,
         }
 
 

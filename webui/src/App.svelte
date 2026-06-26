@@ -19,7 +19,8 @@
     panFromMiniMapNorm,
   } from "./lib/zoomMiniMap";
   import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
-  import { canTranscodeVideo, tryAutoplayVideo } from "./lib/videoPlayback";
+  import { canTranscodeVideo, tryAutoplayVideo, waitForTranscodeCache } from "./lib/videoPlayback";
+  import { transcodeProgressForPath } from "./lib/videoTranscodeUi";
   import { scheduleNextZoomVideoWarm, cancelZoomVideoWarm } from "./lib/videoCarouselWarm";
   import {
     formatVideoDiagnosticReport,
@@ -28,9 +29,10 @@
     probeVideoHttpUrl,
     type VideoBackendDiagnostics,
   } from "./lib/videoDiagnostics";
-  import { galleryGridCellPx, thumbQualityRefreshNeeded } from "./lib/thumbScale";
+  import { galleryGridCellPx, thumbQualityRefreshNeeded, galleryThumbPx } from "./lib/thumbScale";
   import GalleryWorkspace from "./components/GalleryWorkspace.svelte";
   import DestPreviewModal from "./components/DestPreviewModal.svelte";
+  import MessPanel from "./components/MessPanel.svelte";
   import DestMoveCtxTree from "./components/DestMoveCtxTree.svelte";
   import DestMoveFlyoutPortals from "./components/DestMoveFlyoutPortals.svelte";
   import {
@@ -62,6 +64,7 @@
     bumpGalleryThumbHydrationToken,
     disposeGalleryThumbs,
     galleryThumbHydrating,
+    invalidateGalleryThumbHqForScale,
     refreshGalleryThumbsForScale,
   } from "./lib/galleryThumbs";
   import { cancelZoomCarouselHydration, hydrateZoomCarouselThumbs } from "./lib/zoomCarouselThumbs";
@@ -72,7 +75,7 @@
     primaryGallerySortKey,
   } from "./lib/gallerySort";
   import type { ActiveProcess } from "./components/PagerBar.svelte";
-  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems, hasGalleryThumbHq } from "./lib/galleryThumbHqCache";
+  import { removeGalleryThumbHq, seedGalleryThumbHqFromItems, stripHqFromGalleryItems, hasGalleryThumbHq, getGalleryThumbHqValidPx } from "./lib/galleryThumbHqCache";
   import {
     bumpGalleryNavigationGeneration,
     getGalleryNavigationGeneration,
@@ -201,6 +204,8 @@
   let previewVideoLaunching = false;
   let previewVideoPlayLocked = false;
   let previewVideoSession = 0;
+  /** Evita que respuestas tardías de galleryPreview sobrescriban otro elemento. */
+  let previewLoadGeneration = 0;
   let previewZoomVideoArmed = false;
   let previewZoomVideoLaunching = false;
   let previewZoomVideoPlayLocked = false;
@@ -243,11 +248,23 @@
   let deferredZoomMoveRefresh: GalleryMutationResponse | null = null;
   let galleryScrollAtTop = true;
   let previewVisible = true;
+  /** Vista previa visible antes de abrir fullscreen; null = no había zoom abierto. */
+  let previewVisibleBeforeZoom: boolean | null = null;
+  let prevPreviewZoomOpen = false;
   let destinationsMode = false;
   let folderBackStack: string[] = [];
   let folderForwardStack: string[] = [];
   /** Panel organizador en ventana flotante (tarea por lotes). */
   let orgPanelOpen = false;
+  let messPanelOpen = false;
+  let messFolderSetting = "";
+  let messSimilaritySetting = 0.82;
+  let messSuggestionsEnabled = false;
+  let messPinterestMasonry = false;
+  let messScanMaxFiles = 400;
+  let messSuggestionsEnabledBackup = false;
+  let messPinterestMasonryBackup = false;
+  let messScanMaxFilesBackup = 400;
   /** Menú Vista (subcarpetas, orden, futuro agrupar). */
   let viewMenuOpen = false;
   let includeSubfolders = false;
@@ -256,6 +273,7 @@
   let sectionDominantColor = true;
   /** Vista calendario: secciones por mes; marcas por día según zoom (solo cliente). */
   let timelineView = false;
+  let galleryMasonryView = false;
   let gallerySortMode = "name,mtime,type";
   /** Resaltado al arrastrar sobre encabezado de sección (agrupar por carpeta). */
   let dragOverSectionPath: string | null = null;
@@ -324,7 +342,8 @@
     includeComics: false,
     includePending: false,
     removeDuplicates: false,
-    groupSimilarImages: false
+    groupSimilarImages: false,
+    groupSimilarVisual: false
   };
 
   /** Rutas recientes (persistidas en settings) para acceso rápido si el campo está vacío. */
@@ -433,14 +452,65 @@
     return list;
   })();
 
-  $: if (!previewZoomOpen) {
-    cancelZoomCarouselHydration();
+  $: previewZoomTranscodeProgress = (() => {
+    if (!previewZoomVideoPreparing) return null;
+    const jobPct = transcodeProgressForPath(previewZoomPath, videoTranscodeJobs);
+    if (jobPct !== null) return jobPct;
+    if (previewZoomFileUrl) return 100;
+    return 0;
+  })();
+
+  function stopZoomVideoElement() {
+    const el = zoomVideoEl;
+    if (!el) return;
+    try {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function teardownPreviewZoom() {
+    const path = String(previewZoomPath ?? "").trim();
+    previewZoomVideoSession += 1;
+    stopVideoPreparePoll();
     cancelZoomVideoWarm();
+    cancelZoomCarouselHydration();
+    stopZoomVideoElement();
+    previewZoomVideoArmed = false;
+    previewZoomVideoLaunching = false;
+    previewZoomVideoPlayLocked = false;
+    previewZoomVideoPreparing = false;
+    previewZoomFileUrl = null;
+    previewPanPointerDown = false;
+    previewPanDrag = false;
+    previewPanMoved = false;
+    if (confirmDeleteOpen) closeConfirmDelete();
+    if (path) {
+      try {
+        await bridge.galleryTranscodeCancel(normalizePathForApi(path));
+      } catch {
+        /* ignore */
+      }
+      void pollVideoTranscodeJobs();
+    }
   }
 
   /** Evita clics encolados mientras corre una operación de galería (Qt WebEngine + Python). */
   let galleryActionBusy = false;
   let thumbScaleDebounce: ReturnType<typeof setTimeout> | null = null;
+  let prevThumbScaleForHq = thumbScale;
+
+  $: {
+    if (thumbScale !== prevThumbScaleForHq) {
+      prevThumbScaleForHq = thumbScale;
+      if (invalidateGalleryThumbHqForScale(thumbScale)) {
+        void galleryWorkspace?.refreshThumbsAtScale(thumbScale);
+      }
+    }
+  }
 
   const isDevMock = () =>
     typeof import.meta !== "undefined" && Boolean((import.meta as any).env?.DEV) && !window.pywebview?.api;
@@ -638,6 +708,11 @@
     const last = normalizePathForApi(String(data.settings?.gallery_last_folder ?? ""));
     folder = normalizePathForApi(String(data.gallery?.folder ?? last) || "");
     orgPath = folder || orgPath;
+    messFolderSetting = String(data.settings?.mess_folder_path ?? "").trim();
+    messSimilaritySetting = Number(data.settings?.mess_similarity_min ?? 0.82);
+    messSuggestionsEnabled = Boolean(data.settings?.mess_suggestions_enabled ?? false);
+    messPinterestMasonry = Boolean(data.settings?.mess_pinterest_masonry ?? false);
+    messScanMaxFiles = Math.max(50, Math.min(2000, Number(data.settings?.mess_scan_max_files ?? 400) || 400));
     if (data.gallery) setGalleryState(data.gallery);
     recentFolders = Array.isArray(data.settings?.gallery_recent_folders)
       ? (data.settings.gallery_recent_folders as string[]).map((p) => normalizePathForApi(String(p))).filter(Boolean)
@@ -656,6 +731,7 @@
     groupByFolder = Boolean(data.settings?.gallery_group_by_folder ?? false);
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
+    galleryMasonryView = Boolean(data.settings?.gallery_masonry_view ?? false);
     gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
     {
       const vp = String(data.settings?.video_transcode_preset ?? "fast").toLowerCase();
@@ -735,6 +811,18 @@
     await persistViewAndReload();
   }
 
+  async function onGalleryMasonryViewChange(checked: boolean) {
+    galleryMasonryView = checked;
+    try {
+      await trackLoad(bridge.settingsPatch({ gallery_masonry_view: checked }));
+      bumpGalleryThumbHydrationToken(true);
+      await reload({ silent: false });
+      status = t("status.viewUpdated");
+    } catch (e: unknown) {
+      status = e instanceof Error ? e.message : t("status.viewApplyError");
+    }
+  }
+
   async function onGallerySortApply(mode: string) {
     gallerySortMode = mode;
     const primary = primaryGallerySortKey(mode);
@@ -743,6 +831,11 @@
     }
     viewMenuOpen = false;
     await persistViewAndReload();
+  }
+
+  async function onMessSuggestionMoved() {
+    await reload({ silent: true });
+    status = t("suggestions.movedOk");
   }
 
   /** Cancela trabajo en curso de la carpeta anterior (miniaturas HQ, colas, scroll infinito). */
@@ -1049,7 +1142,10 @@
         !x.thumbDataUrl &&
         !hasGalleryThumbHq(x.path)
     );
-    const navGen = beginGalleryRefresh(Boolean(opts?.invalidateThumbCache || brokenThumbs));
+    const thumbPxStale = getGalleryThumbHqValidPx() !== galleryThumbPx(thumbScale);
+    const navGen = beginGalleryRefresh(
+      Boolean(opts?.invalidateThumbCache || brokenThumbs || thumbPxStale)
+    );
     const p = bridge.galleryReload();
     const silent = opts?.silent !== false;
     const out = silent ? await p : await trackLoad(p, opts?.loadingMessage ?? t("load.loading"));
@@ -1057,6 +1153,8 @@
     setGalleryPayload(out.state, out.items ?? []);
     await afterGalleryDataLoaded();
   };
+
+  const reloadGalleryFresh = () => reload({ invalidateThumbCache: true, silent: false });
 
   const goPage = async (page: number) => {
     const navGen = beginGalleryRefresh();
@@ -1101,6 +1199,9 @@
     videoTranscodeMaxHeightBackup = videoTranscodeMaxHeight;
     videoTranscodeHwBackup = videoTranscodeHw;
     galleryThumbQualityPresetBackup = galleryThumbQualityPreset;
+    messPinterestMasonryBackup = messPinterestMasonry;
+    messSuggestionsEnabledBackup = messSuggestionsEnabled;
+    messScanMaxFilesBackup = messScanMaxFiles;
     settingsOpen = true;
   };
 
@@ -1120,6 +1221,9 @@
     videoTranscodeMaxHeight = videoTranscodeMaxHeightBackup;
     videoTranscodeHw = videoTranscodeHwBackup;
     galleryThumbQualityPreset = galleryThumbQualityPresetBackup;
+    messPinterestMasonry = messPinterestMasonryBackup;
+    messSuggestionsEnabled = messSuggestionsEnabledBackup;
+    messScanMaxFiles = messScanMaxFilesBackup;
     settingsOpen = false;
   };
 
@@ -1170,6 +1274,9 @@
       video_transcode_preset: videoTranscodePreset,
       video_transcode_max_height: Math.max(0, Math.min(2160, Math.round(Number(videoTranscodeMaxHeight) || 1080))),
       video_transcode_hw: videoTranscodeHw,
+      mess_suggestions_enabled: Boolean(messSuggestionsEnabled),
+      mess_pinterest_masonry: Boolean(messPinterestMasonry),
+      mess_scan_max_files: Math.max(50, Math.min(2000, Math.round(Number(messScanMaxFiles) || 400))),
     });
     if (selectedPreview?.mediaType === "video" && selectedPreview.path) {
       previewVideoMode = "auto";
@@ -1429,12 +1536,14 @@
     const isSvg = row.path.toLowerCase().endsWith(".svg");
     const fallbackUrl = isVideo ? null : buildMediaFileUrl(row.path);
     const thumbPlaceholder = row.thumbDataUrl ?? null;
+    previewLoadGeneration += 1;
+    const loadGeneration = previewLoadGeneration;
     previewVideoSession += 1;
     resetPreviewVideoPlaybackUi();
     selectedPreview = {
       path: row.path,
       name: row.name,
-      dataUrl: isVideo ? null : thumbPlaceholder,
+      dataUrl: null,
       placeholderUrl: thumbPlaceholder,
       mediaType: isVideo ? "video" : isSvg ? "svg" : "image",
       fileUrl: isVideo ? null : fallbackUrl,
@@ -1454,7 +1563,7 @@
     if (isSvg) {
       void resolveMediaPlaybackInfo(row.path)
         .then((info) => {
-          if (!selectedPreview || selectedPreview.path !== row.path) return;
+          if (loadGeneration !== previewLoadGeneration || !selectedPreview || selectedPreview.path !== row.path) return;
           previewVideoPlayback = info;
           const url = pickInitialPlaybackUrl(info);
           if (!url) return;
@@ -1467,7 +1576,7 @@
           };
         })
         .catch(() => {
-          if (!selectedPreview || selectedPreview.path !== row.path || !fallbackUrl) return;
+          if (loadGeneration !== previewLoadGeneration || !selectedPreview || selectedPreview.path !== row.path || !fallbackUrl) return;
           previewVideoSrc = fallbackUrl;
           selectedPreview = { ...selectedPreview, fileUrl: fallbackUrl };
         });
@@ -1477,6 +1586,7 @@
         bridge
           .galleryPreview(row.path, 1200, 900)
           .then((pr) => {
+            if (loadGeneration !== previewLoadGeneration || selectedPreview?.path !== row.path) return;
             selectedPreview = mergePreviewApiResult(selectedPreview ?? {}, pr, row.path, row.kind);
           })
           .catch(() => undefined);
@@ -1994,12 +2104,15 @@
     const nextScale = thumbScale;
     try {
       await bridge.settingsPatch({ gallery_thumb_scale: Number(nextScale.toFixed(3)) });
+      appliedThumbScale = nextScale;
       if (thumbQualityRefreshNeeded(prevScale, nextScale)) {
+        invalidateGalleryThumbHqForScale(nextScale);
         await reload({ silent: true, invalidateThumbCache: true });
-        appliedThumbScale = nextScale;
         return;
       }
-      appliedThumbScale = nextScale;
+      if (invalidateGalleryThumbHqForScale(nextScale)) {
+        await galleryWorkspace?.refreshThumbsAtScale(nextScale);
+      }
     } catch {
       status = t("status.thumbScaleError");
     }
@@ -2312,13 +2425,18 @@
     previewZoomVideoStatus = t("preview.videoStarting");
     previewZoomFileUrl = null;
 
-    void runZoomVideoPlayback(path);
+    void runZoomVideoPlayback(path, previewZoomVideoSession);
   }
 
-  async function runZoomVideoPlayback(pathAtStart: string) {
+  async function runZoomVideoPlayback(pathAtStart: string, sessionAtStart: number) {
+    const isZoomVideoActive = () =>
+      previewZoomOpen &&
+      previewZoomPath === pathAtStart &&
+      previewZoomVideoSession === sessionAtStart;
+
     try {
       const info = await resolveMediaPlaybackInfo(pathAtStart, { warm: true, tryBlob: false });
-      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+      if (!isZoomVideoActive()) return;
 
       if (!canTranscodeVideo(info)) {
         previewZoomVideoPlayLocked = false;
@@ -2327,6 +2445,34 @@
         previewZoomVideoPreparing = false;
         status = t("preview.videoFfmpegMissing");
         return;
+      }
+
+      previewZoomPlayback = info;
+      previewZoomVideoLaunching = false;
+      const needsTranscodeWait = Boolean(info.needsTranscode && !info.transcodeCached);
+
+      if (needsTranscodeWait) {
+        previewZoomVideoPreparing = true;
+        previewZoomFileUrl = null;
+        void pollVideoTranscodeJobs();
+        startVideoPreparePoll();
+
+        const ready = await waitForTranscodeCache(
+          pathAtStart,
+          () => !isZoomVideoActive()
+        );
+        if (!isZoomVideoActive()) return;
+        if (!ready) {
+          stopVideoPreparePoll();
+          previewZoomVideoPlayLocked = false;
+          previewZoomVideoLaunching = false;
+          previewZoomVideoArmed = false;
+          previewZoomVideoPreparing = false;
+          status = t("preview.videoTranscodeTimeout");
+          return;
+        }
+        stopVideoPreparePoll();
+        void pollVideoTranscodeJobs();
       }
 
       const url = pickInitialPlaybackUrl(info);
@@ -2338,17 +2484,17 @@
         return;
       }
 
-      previewZoomVideoLaunching = false;
-      previewZoomPlayback = info;
       previewZoomFileUrl = url;
-      previewZoomVideoStatus = playbackPrepareMessage(info);
-      previewZoomVideoPreparing = Boolean(info.needsTranscode && !info.transcodeCached);
-      void pollVideoTranscodeJobs();
-      if (previewZoomVideoPreparing) startVideoPreparePoll();
-      else previewZoomVideoPlayLocked = false;
-      void tick().then(() => tryAutoplayVideo(zoomVideoEl));
+      if (!needsTranscodeWait) {
+        previewZoomVideoPreparing = false;
+        previewZoomVideoPlayLocked = false;
+      }
+      void tick().then(() => {
+        if (!isZoomVideoActive()) return;
+        tryAutoplayVideo(zoomVideoEl);
+      });
     } catch {
-      if (previewZoomPath !== pathAtStart || !previewZoomOpen) return;
+      if (!isZoomVideoActive()) return;
       previewZoomVideoPlayLocked = false;
       previewZoomVideoLaunching = false;
       previewZoomVideoArmed = false;
@@ -2360,6 +2506,7 @@
   function onZoomVideoCanPlay() {
     previewZoomVideoPreparing = false;
     previewZoomVideoPlayLocked = false;
+    previewZoomVideoLaunching = false;
     stopVideoPreparePoll();
     tryAutoplayVideo(zoomVideoEl);
   }
@@ -2417,7 +2564,13 @@
   function syncZoomMediaTransform() {
     const tf = buildZoomImgTransform();
     if (zoomImgEl) zoomImgEl.style.transform = tf;
-    if (zoomVideoEl && previewZoomMediaType === "video") zoomVideoEl.style.transform = tf;
+    if (zoomVideoEl && previewZoomMediaType === "video") {
+      if (previewZoomMode === "fit" && previewZoomScale === 1 && previewPanX === 0 && previewPanY === 0) {
+        zoomVideoEl.style.transform = "translate(-50%, -50%)";
+      } else {
+        zoomVideoEl.style.transform = tf;
+      }
+    }
   }
 
   function zoomStep(delta: number) {
@@ -2478,7 +2631,7 @@
   }
 
   // Siempre mantenemos pan dentro de los límites reales del DOM (overflow vs stage).
-  $: if (previewZoomOpen && !previewPanDrag && zoomStageEl && (zoomImgEl || zoomVideoEl)) {
+  $: if (previewZoomOpen && !previewPanDrag && zoomStageEl && zoomImgEl) {
     clampPanToStage();
     if (previewFillWidthAlignPending) {
       alignFillWidthToTop();
@@ -2488,7 +2641,19 @@
   $: zoomImgTransform = buildZoomImgTransform();
 
   // Aplica transform al DOM cuando cambia escala/pan (excepto durante drag activo).
-  $: if (previewZoomOpen && !previewPanDrag && (zoomImgEl || zoomVideoEl)) {
+  $: if (previewZoomOpen && !previewPanDrag && zoomImgEl) {
+    syncZoomMediaTransform();
+  }
+
+  // Vídeo en modo fit: sin transform reactivo (evita parpadeos con controles nativos).
+  $: if (
+    previewZoomOpen &&
+    !previewPanDrag &&
+    zoomVideoEl &&
+    previewZoomMediaType === "video" &&
+    previewZoomMode === "fillWidth"
+  ) {
+    clampPanToStage();
     syncZoomMediaTransform();
   }
 
@@ -2640,7 +2805,7 @@
     if (previewZoomMediaType === "video") return;
     if (zoomCropMode) return;
     const el = e.target as HTMLElement;
-    if (el.closest("button, a, video, .zoom-dest-chips, .zoom-mini")) return;
+    if (el.closest("button, a, video, .zoom-modal__dest-bar, .zoom-mini")) return;
     // Si la imagen no desborda el stage, no hay nada que “panear”.
     const limits = getPanLimits();
     if (limits.x <= 0.5 && limits.y <= 0.5) return;
@@ -2707,6 +2872,21 @@
     toggleZoomCarousel();
   }
 
+  /** Clic en el área del vídeo (no en la banda de controles nativos) alterna el carrusel. */
+  function onZoomVideoClick(e: MouseEvent) {
+    e.stopPropagation();
+    if (zoomCropMode) return;
+    if (previewPanMoved) {
+      previewPanMoved = false;
+      return;
+    }
+    const video = e.currentTarget as HTMLVideoElement;
+    const rect = video.getBoundingClientRect();
+    const controlsBandPx = 56;
+    if (e.clientY > rect.bottom - controlsBandPx) return;
+    toggleZoomCarousel();
+  }
+
   function onZoomStageClick(e: MouseEvent) {
     if (zoomCropMode) return;
     if (previewPanMoved) {
@@ -2721,6 +2901,13 @@
   async function moveCurrentZoomToDestination(destPath: string) {
     if (!previewZoomPath) return;
     const currentPath = previewZoomPath;
+    stopZoomVideoElement();
+    previewZoomVideoSession += 1;
+    previewZoomVideoArmed = false;
+    previewZoomVideoLaunching = false;
+    previewZoomVideoPlayLocked = false;
+    previewZoomVideoPreparing = false;
+    previewZoomFileUrl = null;
     const currentIdx = zoomNavItems.findIndex((x) => x.path === currentPath);
     const remainingNav = zoomNavItems.filter((x) => x.path !== currentPath);
     // Fluidez: avanzar de inmediato en fullscreen y procesar move en cola.
@@ -3035,7 +3222,10 @@
   };
 
   const startOrganizer = async () => {
-    const out = await bridge.organizerStart(orgPath, orgOptions);
+    const out = await bridge.organizerStart(orgPath, {
+      ...orgOptions,
+      visualSimilarityMin: messSimilaritySetting
+    });
     if (!out.ok) {
       status = out.error ?? t("status.organizerStartError");
       return;
@@ -3060,7 +3250,8 @@
         : t("status.organizerDoneOk")
             .replace("{moved}", String(stats.moved_media ?? 0))
             .replace("{cbz}", String(stats.moved_cbz ?? 0))
-            .replace("{other}", String(stats.moved_other ?? 0));
+            .replace("{other}", String(stats.moved_other ?? 0))
+            .replace("{grouped}", String(stats.grouped_similar_images ?? 0));
     }
   };
 
@@ -3555,7 +3746,7 @@
             .replace("{errPart}", "")
             .replace("{queue}", "0");
         } catch (e: unknown) {
-          status = e instanceof Error ? e.message : t("contextGallery.renameError");
+          status = e instanceof Error ? e.message : t("status.deleteQueueError");
         }
       },
       { confirmLabel: t("contextGallery.confirmDeleteBtn") }
@@ -3760,11 +3951,12 @@
 
   function openEditFromCtx() {
     if (destCtxMenu === null) return;
-    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
+    const idx = destCtxMenu.idx;
+    const node = destNodeAtToolbarIdx(idx);
     closeDestCtxMenu();
     if (!node || !isDestNode(node)) return;
     destFormMode = "edit";
-    destFormIdx = destCtxMenu.idx;
+    destFormIdx = idx;
     destFormLabel = node.label;
     destFormPath = node.path;
     destFormOpen = true;
@@ -3817,6 +4009,18 @@
 
   $: if (!previewZoomOpen) {
     previewZoomSkipMoveConfirm = false;
+  }
+
+  $: {
+    if (previewZoomOpen && !prevPreviewZoomOpen) {
+      previewVisibleBeforeZoom = previewVisible;
+      if (previewVisible) previewVisible = false;
+    } else if (!previewZoomOpen && prevPreviewZoomOpen) {
+      if (previewVisibleBeforeZoom) previewVisible = true;
+      previewVisibleBeforeZoom = null;
+      void teardownPreviewZoom();
+    }
+    prevPreviewZoomOpen = previewZoomOpen;
   }
 
   $: if (previewZoomOpen && previewZoomCarouselVisible && zoomCarouselEl && previewZoomPath) {
@@ -3969,6 +4173,7 @@
       !viewMenuOpen &&
       !settingsOpen &&
       !orgPanelOpen &&
+      !messPanelOpen &&
       !destFormOpen &&
       !routePickerOpen &&
       isGalleryNavKey
@@ -3998,6 +4203,7 @@
       !viewMenuOpen &&
       !settingsOpen &&
       !orgPanelOpen &&
+      !messPanelOpen &&
       !destFormOpen &&
       !routePickerOpen &&
       shortcutMatchesSingle(e as KeyboardEvent, " ")
@@ -4075,6 +4281,7 @@
     else if (previewOpen) previewOpen = false;
     else if (routePickerOpen) routePickerOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
+    else if (messPanelOpen) messPanelOpen = false;
   }}
 />
 
@@ -4096,10 +4303,12 @@
     bind:groupByFolder
     bind:sectionDominantColor
     bind:timelineView
+    bind:galleryMasonryView
     bind:gallerySortMode
     bind:orgPath
     bind:folder
     bind:orgPanelOpen
+    bind:messPanelOpen
     bind:routePathEl
     bind:routePickerOpen
     bind:folderBackStack
@@ -4110,13 +4319,14 @@
     {onGroupByFolderChange}
     {onSectionDominantColorChange}
     {onTimelineViewChange}
+    {onGalleryMasonryViewChange}
     {onGallerySortApply}
     {goBackFolder}
     {goForwardFolder}
     {goUpFolder}
     {unpinFolder}
     {openPinMarkerModal}
-    {reload}
+    reload={reloadGalleryFresh}
     {pickGalleryFolder}
     {loadFolder}
     {openSettingsModal}
@@ -4133,7 +4343,7 @@
   >
     <div class="destinos-work__top">
       <section
-        class="content"
+        class="content content--gallery-shell"
         style={previewVisible
           ? `grid-template-columns:minmax(0,${(1 - previewRatio).toFixed(4)}fr) 10px minmax(0,${previewRatio.toFixed(4)}fr)`
           : "grid-template-columns:minmax(0,1fr)"}
@@ -4153,6 +4363,11 @@
           bind:showThumbLabels
           {destinationsMode}
           {timelineView}
+          {galleryMasonryView}
+          messSuggestionsEnabled={messSuggestionsEnabled}
+          messFolder={messFolderSetting}
+          galleryFolder={folder}
+          messSuggestionsMasonry={galleryMasonryView || messPinterestMasonry}
           {thumbScale}
           {thumbsPerPage}
           {previewVisible}
@@ -4175,6 +4390,7 @@
           {destToolbarCanGoBack}
           onDestToolbarBack={() => void destToolbarBack()}
           onDestToolbarOpenFolder={(id) => void navigateDestToolbarFolder(id)}
+          onMessSuggestionMoved={onMessSuggestionMoved}
           on:preview={(e) => setSelectedPreviewFromPath(e.detail.path)}
         />
 
@@ -4269,13 +4485,15 @@
                 alt={selectedPreview.name}
               />
             {:else if selectedPreview?.dataUrl || selectedPreview?.fileUrl || selectedPreview?.placeholderUrl}
-              <PreviewZoomPanel
-                path={selectedPreview.path}
-                name={selectedPreview.name}
-                fileUrl={selectedPreview.fileUrl ?? null}
-                dataUrl={selectedPreview.dataUrl ?? null}
-                placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl ?? null}
-              />
+              {#key selectedPreview.path}
+                <PreviewZoomPanel
+                  path={selectedPreview.path}
+                  name={selectedPreview.name}
+                  fileUrl={selectedPreview.fileUrl ?? null}
+                  dataUrl={selectedPreview.dataUrl ?? null}
+                  placeholderUrl={selectedPreview.placeholderUrl ?? selectedPreview.dataUrl ?? null}
+                />
+              {/key}
             {:else}
               <div class="preview__empty">{t("preview.emptySelect")}</div>
             {/if}
@@ -4378,6 +4596,7 @@
           <label class="check"><input type="checkbox" bind:checked={orgOptions.includeComics} /> {t("organizer.includeComics")}</label>
           <label class="check"><input type="checkbox" bind:checked={orgOptions.includePending} /> {t("organizer.includePending")}</label>
           <label class="check"><input type="checkbox" bind:checked={orgOptions.removeDuplicates} /> {t("organizer.removeDuplicates")}</label>
+          <label class="check"><input type="checkbox" bind:checked={orgOptions.groupSimilarVisual} /> {t("organizer.groupSimilarVisual")}</label>
           <label class="check"><input type="checkbox" bind:checked={orgOptions.groupSimilarImages} /> {t("organizer.groupSimilar")}</label>
         </div>
         <div class="org-row org-row--footer">
@@ -4389,6 +4608,17 @@
       </div>
     </div>
   {/if}
+
+  <MessPanel
+    open={messPanelOpen}
+    galleryFolder={folder}
+    initialMessFolder={messFolderSetting}
+    initialSimilarity={messSimilaritySetting}
+    onClose={() => (messPanelOpen = false)}
+    onMoved={async () => {
+      await reload({ silent: true });
+    }}
+  />
 
   {#if destCtxMenu}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -4803,6 +5033,9 @@
       bind:thumbFrameVisible
       bind:thumbCardStyle
       bind:keyboardShortcuts
+      bind:pinterestMasonry={messPinterestMasonry}
+      bind:suggestionsEnabled={messSuggestionsEnabled}
+      bind:messScanMaxFiles
       defaultShortcuts={defaultKeyboardShortcuts}
       destTree={destTreeSettingsDraft}
       markerTree={markerTreeSettingsDraft}
@@ -4911,6 +5144,7 @@
     {endPan}
     {onZoomStageClick}
     {onZoomImageClick}
+    {onZoomVideoClick}
     {onZoomVideoMeta}
     {onZoomVideoError}
     onZoomVideoCanPlay={onZoomVideoCanPlay}
@@ -4931,7 +5165,7 @@
     previewZoomVideoPlayLocked={previewZoomVideoPlayLocked}
     previewZoomThumbUrl={previewZoomThumbUrl}
     previewZoomVideoPreparing={previewZoomVideoPreparing}
-    previewZoomVideoStatus={previewZoomVideoStatus}
+    previewZoomTranscodeProgress={previewZoomTranscodeProgress}
     onZoomVideoPlay={requestZoomVideoPlay}
   />
 </main>

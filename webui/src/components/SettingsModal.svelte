@@ -8,6 +8,7 @@
   import SettingsMarkersSection from "./settings/SettingsMarkersSection.svelte";
   import SettingsPerformanceSection from "./settings/SettingsPerformanceSection.svelte";
   import SettingsVideoSection from "./settings/SettingsVideoSection.svelte";
+  import SettingsMessSection from "./settings/SettingsMessSection.svelte";
   import SettingsShortcutsSection from "./settings/SettingsShortcutsSection.svelte";
   import SettingsThumbsSection from "./settings/SettingsThumbsSection.svelte";
 
@@ -29,6 +30,9 @@
   export let thumbCardStyle: "soft" | "flat" | "outlined";
   export let keyboardShortcuts: Record<string, string>;
   export let defaultShortcuts: Record<string, string>;
+  export let pinterestMasonry = false;
+  export let suggestionsEnabled = false;
+  export let messScanMaxFiles = 400;
   export let destTree: TreeNode[];
   export let markerTree: TreeNode[];
   export let onDestTreeChange: (next: TreeNode[]) => void;
@@ -90,6 +94,11 @@
         {themeNameLabel}
       />
       <SettingsShortcutsSection bind:keyboardShortcuts {defaultShortcuts} />
+      <SettingsMessSection
+        bind:suggestionsEnabled
+        bind:suggestionsMasonry={pinterestMasonry}
+        bind:messScanMaxFiles
+      />
       <SettingsDestinationsSection {destTree} {onDestTreeChange} {onPickDestFolder} />
       <SettingsMarkersSection {markerTree} {onMarkerTreeChange} {onPickMarkerFolder} />
     </section>

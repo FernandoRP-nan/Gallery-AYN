@@ -6,6 +6,8 @@
 
   export let it: any;
   export let style = "";
+  export let masonryLayout = false;
+  export let masonrySpan = false;
   export let dragOverSectionPath: string | null;
   export let galleryKeyboardNavHintActive: boolean;
   export let galleryCursorPath: string | null;
@@ -31,6 +33,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="gallery-section-head gallery-virtual-item"
+    class:gallery-masonry-span={masonrySpan}
     class:gallery-section-head--timeline={it.path.includes("section:timeline:")}
     class:gallery-section-head--tinted={Boolean(it.sectionTintHex) && !it.path.includes("section:timeline:")}
     class:gallery-section-head--drop={Boolean(it.sectionFolder) && dragOverSectionPath === it.sectionFolder}
@@ -57,8 +60,17 @@
     {/if}
   </div>
 {:else if it.kind === "day_break"}
-  <div class="timeline-day-break gallery-virtual-item" role="separator" aria-label={it.name} {style}>
+  <div class="timeline-day-break gallery-virtual-item" class:gallery-masonry-span={masonrySpan} role="separator" aria-label={it.name} {style}>
     <span class="timeline-day-break__n">{it.name}</span>
+  </div>
+{:else if it.kind === "placeholder"}
+  <div
+    class="tile tile--placeholder gallery-virtual-item"
+    class:tile--masonry={masonryLayout}
+    aria-hidden="true"
+    {style}
+  >
+    <span class="tile-placeholder__shimmer"></span>
   </div>
 {:else}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -67,6 +79,7 @@
     role="button"
     tabindex="0"
     class="tile gallery-virtual-item"
+    class:tile--masonry={masonryLayout}
     class:tile--active={galleryKeyboardNavHintActive && galleryCursorPath === it.path}
     data-item-path={it.path}
     class:selected={

@@ -149,3 +149,11 @@ def resolve_file_path(raw: str) -> Path:
                 pass
 
     raise ValueError(f"Archivo no encontrado: {raw}")
+
+
+def resolve_existing_path(raw: str) -> Path:
+    """Archivo o carpeta existente con la misma tolerancia Unicode."""
+    try:
+        return resolve_file_path(raw)
+    except ValueError:
+        return resolve_dir_path(raw)

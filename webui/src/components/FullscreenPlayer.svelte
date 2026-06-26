@@ -3,6 +3,8 @@
   import type { DestToolbarItem } from '../lib/itemTree';
   import { pickImageDisplaySrc } from '../lib/imageZoomView';
   import PreviewVideoIdle from './PreviewVideoIdle.svelte';
+  import VideoTranscodeOverlay from './VideoTranscodeOverlay.svelte';
+  import { onDestroy } from 'svelte';
 
   // Bindings y estado
   export let previewZoomOpen: boolean;
@@ -62,6 +64,7 @@
   export let endPan: (e: PointerEvent) => void;
   export let onZoomStageClick: (e: MouseEvent) => void;
   export let onZoomImageClick: (e: MouseEvent) => void;
+  export let onZoomVideoClick: (e: MouseEvent) => void;
   export let onZoomVideoMeta: () => void;
   export let onZoomVideoError: (e: Event) => void;
   export let onZoomVideoCanPlay: () => void = () => undefined;
@@ -82,6 +85,7 @@
   export let previewZoomVideoPlayLocked = false;
   export let previewZoomThumbUrl: string | null = null;
   export let previewZoomVideoPreparing = false;
+  export let previewZoomTranscodeProgress: number | null = null;
   export let previewZoomVideoStatus = "";
   export let onZoomVideoPlay: () => void;
 
@@ -94,6 +98,18 @@
           previewZoomDataUrl
         )
       : null;
+
+  onDestroy(() => {
+    if (zoomVideoEl) {
+      try {
+        zoomVideoEl.pause();
+        zoomVideoEl.removeAttribute("src");
+        zoomVideoEl.load();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
 </script>
 
 {#if previewZoomOpen}
@@ -117,6 +133,8 @@
     <div
       class="zoom-modal"
       class:zoom-modal--carousel-hidden={!previewZoomCarouselVisible}
+      class:zoom-modal--dest-mode={previewZoomDestMode}
+      class:zoom-modal--carousel-visible={previewZoomCarouselVisible}
       role="dialog"
       aria-modal="true"
       tabindex="-1"
@@ -226,7 +244,7 @@
         </div>
       </header>
       <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
-        {#if (previewZoomMediaType === "video" && (previewZoomVideoArmed ? previewZoomFileUrl : previewZoomThumbUrl)) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
+        {#if (previewZoomMediaType === "video" && (previewZoomThumbUrl || previewZoomFileUrl || previewZoomVideoArmed || previewZoomVideoLaunching || previewZoomVideoPlayLocked)) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
@@ -240,7 +258,20 @@
             on:pointercancel={endPan}
             on:click={onZoomStageClick}
           >
-            {#if previewZoomMediaType === "video" && !previewZoomVideoArmed && !previewZoomVideoLaunching && !previewZoomVideoPlayLocked}
+            {#if previewZoomMediaType === "video" && previewZoomVideoPreparing && !previewZoomVideoArmed && !previewZoomVideoLaunching && !previewZoomVideoPlayLocked}
+              <div class="zoom-modal__video-shell zoom-modal__video-shell--preparing">
+                {#if previewZoomThumbUrl}
+                  <img
+                    class="zoom-modal__video-poster"
+                    src={previewZoomThumbUrl}
+                    alt=""
+                    decoding="async"
+                    draggable={false}
+                  />
+                {/if}
+                <VideoTranscodeOverlay progress={previewZoomTranscodeProgress} />
+              </div>
+            {:else if previewZoomMediaType === "video" && !previewZoomVideoArmed && !previewZoomVideoLaunching && !previewZoomVideoPlayLocked}
               <PreviewVideoIdle
                 posterUrl={previewZoomThumbUrl}
                 name={previewZoomName}
@@ -251,30 +282,42 @@
                 onPlay={onZoomVideoPlay}
               />
             {:else if previewZoomMediaType === "video" && (previewZoomVideoArmed || previewZoomVideoLaunching || previewZoomVideoPlayLocked)}
-              <div class="zoom-modal__video-shell">
-                <!-- svelte-ignore a11y_media_has_caption -->
-                <video
-                  class="zoom-modal__img"
-                  class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
-                  class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
-                  class:zoom-modal__img--interacting={previewPanDrag}
-                  bind:this={zoomVideoEl}
-                  src={previewZoomFileUrl || undefined}
-                  poster={previewZoomThumbUrl ?? undefined}
-                  controls={Boolean(previewZoomFileUrl)}
-                  playsinline
-                  preload="auto"
-                  on:loadedmetadata={onZoomVideoMeta}
-                  on:canplay={onZoomVideoCanPlay}
-                  on:error={onZoomVideoError}
-                ></video>
+              {#key previewZoomPath}
+              <div class="zoom-modal__video-shell" class:zoom-modal__video-shell--preparing={previewZoomVideoPreparing}>
                 {#if previewZoomVideoPreparing}
-                  <div class="zoom-modal__video-busy" aria-live="polite">
-                    <div class="zoom-modal__video-busy__spinner" aria-hidden="true"></div>
-                    <p>{previewZoomVideoStatus || t("preview.videoStarting")}</p>
-                  </div>
+                  {#if previewZoomThumbUrl}
+                    <img
+                      class="zoom-modal__video-poster"
+                      src={previewZoomThumbUrl}
+                      alt=""
+                      decoding="async"
+                      draggable={false}
+                    />
+                  {/if}
+                  <VideoTranscodeOverlay progress={previewZoomTranscodeProgress} />
+                {/if}
+                {#if previewZoomFileUrl}
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  <video
+                    class="zoom-modal__img"
+                    class:zoom-modal__img--hidden={previewZoomVideoPreparing}
+                    class:zoom-modal__img--fill-width={previewZoomMode === "fillWidth"}
+                    class:zoom-modal__img--pannable={previewZoomScale > 1 || previewZoomMode === "fillWidth"}
+                    class:zoom-modal__img--interacting={previewPanDrag}
+                    bind:this={zoomVideoEl}
+                    src={previewZoomFileUrl}
+                    poster={previewZoomThumbUrl ?? undefined}
+                    controls={Boolean(previewZoomFileUrl) && !previewZoomVideoPreparing}
+                    playsinline
+                    preload="auto"
+                    on:click={onZoomVideoClick}
+                    on:loadedmetadata={onZoomVideoMeta}
+                    on:canplay={onZoomVideoCanPlay}
+                    on:error={onZoomVideoError}
+                  ></video>
                 {/if}
               </div>
+              {/key}
             {:else if previewZoomMediaType === "svg" && previewZoomFileUrl}
               <img
                 class="zoom-modal__img"
@@ -337,62 +380,62 @@
                 {/if}
               </div>
             {/if}
-            {#if previewZoomDestMode}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div
-                class="zoom-dest-chips"
-                class:zoom-dest-chips--carousel-hidden={!previewZoomCarouselVisible}
-                on:pointerdown|stopPropagation={() => undefined}
-                on:click|stopPropagation={() => undefined}
-              >
-                <button
-                  type="button"
-                  class="om-btn om-btn--ghost om-btn--compact zoom-dest-add"
-                  on:pointerdown|stopPropagation={() => undefined}
-                  on:click={openAddDestForm}
-                >+</button>
-                <button
-                  type="button"
-                  class="om-btn om-btn--ghost om-btn--compact"
-                  disabled={!previewZoomCanUndoMove}
-                  on:click={undoLastZoomMove}
-                >Deshacer</button>
-                {#if destToolbarCanGoBack}
-                  <button type="button" class="om-btn om-btn--ghost om-btn--compact zoom-dest-chip" on:click={onDestToolbarBack}>←</button>
-                {/if}
-                {#each destToolbarItems as item (item.kind === "folder" ? item.id : item.path)}
-                  {#if item.kind === "folder"}
-                    <button
-                      type="button"
-                      class="zoom-dest-chip zoom-dest-chip--folder"
-                      title={item.label}
-                      on:click={() => onDestToolbarOpenFolder(item.id)}
-                    >📁 {item.label}</button>
-                  {:else}
-                    <button
-                      type="button"
-                      class="zoom-dest-chip"
-                      class:zoom-dest-chip--dragging={draggedDestIdx === item.index}
-                      data-dest-path={item.path}
-                      title={item.path}
-                      draggable={true}
-                      on:click={() => requestMoveCurrentZoomToDestination(item.path)}
-                      on:contextmenu={(e) => onDestContextMenu(e, item.index, "fullscreen")}
-                      on:dragstart={(e) => onDestChipDragStart(e, item.index)}
-                      on:dragend={onDestChipDragEnd}
-                      on:dragenter|preventDefault
-                      on:dragover|preventDefault
-                      on:drop={(e) => onDestDrop(e, item.path, item.index)}
-                    >{item.label}</button>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
           </div>
         {:else}
           <div class="preview__empty">{t("zoom.previewLoading")}</div>
         {/if}
       </div>
+      {#if previewZoomDestMode}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="zoom-modal__dest-bar"
+          on:pointerdown|stopPropagation={() => undefined}
+          on:click|stopPropagation={() => undefined}
+        >
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--compact zoom-dest-add"
+            on:pointerdown|stopPropagation={() => undefined}
+            on:click={openAddDestForm}
+          >+</button>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--compact"
+            disabled={!previewZoomCanUndoMove}
+            on:click={undoLastZoomMove}
+          >Deshacer</button>
+          {#if destToolbarCanGoBack}
+            <button type="button" class="om-btn om-btn--ghost om-btn--compact zoom-dest-chip" on:click={onDestToolbarBack}>←</button>
+          {/if}
+          {#each destToolbarItems as item (item.kind === "folder" ? item.id : item.path)}
+            {#if item.kind === "folder"}
+              <button
+                type="button"
+                class="zoom-dest-chip zoom-dest-chip--folder"
+                title={item.label}
+                on:click={() => onDestToolbarOpenFolder(item.id)}
+              >📁 {item.label}</button>
+            {:else}
+              <button
+                type="button"
+                class="zoom-dest-chip"
+                class:zoom-dest-chip--dragging={draggedDestIdx === item.index}
+                data-dest-path={item.path}
+                title={item.path}
+                draggable={true}
+                on:click={() => requestMoveCurrentZoomToDestination(item.path)}
+                on:contextmenu={(e) => onDestContextMenu(e, item.index, "fullscreen")}
+                on:dragstart={(e) => onDestChipDragStart(e, item.index)}
+                on:dragend={onDestChipDragEnd}
+                on:dragenter|preventDefault
+                on:dragover|preventDefault
+                on:drop={(e) => onDestDrop(e, item.path, item.index)}
+              >{item.label}</button>
+            {/if}
+          {/each}
+          <span class="zoom-modal__dest-bar-trail" aria-hidden="true"></span>
+        </div>
+      {/if}
       <div
         class="zoom-modal__carousel"
         class:zoom-modal__carousel--hidden={!previewZoomCarouselVisible}
@@ -451,15 +494,20 @@
     max-height: 100vh;
     max-height: 100dvh;
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
-    gap: var(--om-space-1);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 0;
     overflow: hidden;
     min-height: 0;
     min-width: 0;
   }
-.zoom-modal--carousel-hidden {
-    gap: 0;
-    grid-template-rows: auto minmax(0, 1fr);
+.zoom-modal.zoom-modal--carousel-visible:not(.zoom-modal--dest-mode) {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+.zoom-modal.zoom-modal--dest-mode:not(.zoom-modal--carousel-visible) {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+.zoom-modal.zoom-modal--dest-mode.zoom-modal--carousel-visible {
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
   }
 .zoom-modal__head {
     display: flex;
@@ -542,26 +590,32 @@
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45) inset;
     pointer-events: none;
   }
-.zoom-dest-chips {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: var(--om-space-3);
-    z-index: 7;
+.zoom-modal__dest-bar {
     display: flex;
     gap: var(--om-space-1);
     align-items: center;
     flex-wrap: nowrap;
     overflow-x: auto;
-    max-width: min(900px, calc(100% - var(--om-space-4)));
+    overflow-y: hidden;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-height: 2.75rem;
+    flex: 0 0 auto;
     padding: var(--om-space-1) var(--om-space-2);
-    border-radius: var(--om-radius-md);
-    background: rgb(8 10 18 / 0.72);
-    border: 1px solid rgb(255 255 255 / 0.12);
-    backdrop-filter: blur(8px);
+    padding-bottom: max(var(--om-space-1), env(safe-area-inset-bottom, 0px));
+    border-radius: 0;
+    background: rgb(255 255 255 / 0.04);
+    border-top: 1px solid rgb(255 255 255 / 0.08);
+    scroll-padding-inline: var(--om-space-2);
+    scrollbar-width: thin;
+    scrollbar-color: rgb(124 140 255 / 0.38) transparent;
   }
-.zoom-dest-chips--carousel-hidden {
-    bottom: var(--om-space-2);
+.zoom-modal__dest-bar-trail {
+    flex: 0 0 var(--om-space-2);
+    width: var(--om-space-2);
+    min-height: 1px;
+    pointer-events: none;
   }
 .zoom-dest-chip {
     border: 1px solid rgb(255 255 255 / 0.18);
@@ -626,6 +680,7 @@
     padding: var(--om-space-1);
     border-radius: 0;
     background: rgb(255 255 255 / 0.04);
+    border-top: 1px solid rgb(255 255 255 / 0.06);
     flex: 0 0 auto;
     min-height: 6.75rem;
     position: relative;
@@ -698,46 +753,39 @@
     position: relative;
     width: 100%;
     height: 100%;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    box-sizing: border-box;
   }
 
-  .zoom-modal__video-busy {
+  .zoom-modal__video-shell--preparing {
+    min-height: 100%;
+  }
+
+  .zoom-modal__video-poster {
     position: absolute;
     inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.65rem;
-    padding: 1rem;
-    background: rgb(0 0 0 / 0.52);
-    pointer-events: all;
-    z-index: 3;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    filter: brightness(0.72);
+    pointer-events: none;
   }
 
-  .zoom-modal__video-busy p {
-    margin: 0;
-    font-size: 0.82rem;
-    line-height: 1.35;
-    text-align: center;
-    color: var(--om-text-muted);
-    max-width: 20rem;
+  .zoom-modal__video-shell :global(video.zoom-modal__img) {
+    max-height: 100%;
+    cursor: pointer;
   }
 
-  .zoom-modal__video-busy__spinner {
-    width: 2.25rem;
-    height: 2.25rem;
-    border-radius: 999px;
-    border: 3px solid rgb(255 255 255 / 0.22);
-    border-top-color: var(--om-accent, #60a5fa);
-    animation: zoom-video-spin 0.75s linear infinite;
-  }
-
-  @keyframes zoom-video-spin {
-    to {
-      transform: rotate(360deg);
-    }
+  .zoom-modal__img--hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    opacity: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
   }
 </style>

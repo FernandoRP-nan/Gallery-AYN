@@ -21,13 +21,54 @@ _ACTIVE_JOBS: dict[str, dict[str, str]] = {}
 _ACTIVE_GUARD = threading.Lock()
 _RUNNING: dict[str, threading.Thread] = {}
 _RUNNING_GUARD = threading.Lock()
+_FFMPEG_PROCS: dict[str, subprocess.Popen] = {}
+_FFMPEG_PROCS_GUARD = threading.Lock()
+_CANCEL_TOKENS: set[str] = set()
+_CANCEL_GUARD = threading.Lock()
 _PARTIAL_MIN_BYTES = 196_608
 _PROGRESSIVE_MOVFLAGS = ["-movflags", "frag_keyframe+empty_moov+default_base_moof"]
+
+
+class TranscodeCancelledError(RuntimeError):
+    """Transcodificación cancelada por el usuario (p. ej. cerrar fullscreen)."""
 
 
 def list_active_transcode_jobs() -> list[dict[str, str]]:
     with _ACTIVE_GUARD:
         return [j for j in _ACTIVE_JOBS.values() if j.get("status") in ("queued", "running")]
+
+
+def _kill_ffmpeg_for_token(token: str) -> None:
+    with _FFMPEG_PROCS_GUARD:
+        proc = _FFMPEG_PROCS.get(token)
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
+def cancel_transcode_for_path(source: Path, *, playback_mode: str = "auto") -> bool:
+    """Cancela transcodificación activa del vídeo y limpia el job parcial."""
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    targets = [
+        transcode_output_path(resolved, playback_mode=mode),
+        transcode_webm_output_path(resolved),
+    ]
+    cancelled = False
+    for out in targets:
+        token = out.stem
+        with _CANCEL_GUARD:
+            _CANCEL_TOKENS.add(token)
+        _kill_ffmpeg_for_token(token)
+        with _ACTIVE_GUARD:
+            if token in _ACTIVE_JOBS:
+                cancelled = True
+        _clear_active_job(token)
+        if out.suffix.lower() == ".mp4":
+            transcode_partial_path(out).unlink(missing_ok=True)
+    return cancelled
 
 
 def _set_active_job(token: str, source: Path, fmt: str) -> None:
@@ -297,9 +338,15 @@ def _run_ffmpeg(
             encoding="utf-8",
             errors="replace",
         )
+        if token:
+            with _FFMPEG_PROCS_GUARD:
+                _FFMPEG_PROCS[token] = proc
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
+                if token and token in _CANCEL_TOKENS:
+                    proc.kill()
+                    raise TranscodeCancelledError("transcode cancelled")
                 line = line.strip()
                 if line.startswith("out_time_ms="):
                     try:
@@ -312,6 +359,12 @@ def _run_ffmpeg(
         except subprocess.TimeoutExpired as exc:
             proc.kill()
             raise RuntimeError("ffmpeg excedió el tiempo límite") from exc
+        finally:
+            if token:
+                with _FFMPEG_PROCS_GUARD:
+                    _FFMPEG_PROCS.pop(token, None)
+                with _CANCEL_GUARD:
+                    _CANCEL_TOKENS.discard(token)
         if proc.returncode != 0:
             err = (proc.stderr.read() if proc.stderr else "") or "ffmpeg falló"
             raise RuntimeError(err.strip() or "ffmpeg falló")
@@ -566,6 +619,10 @@ def _start_mp4_transcode_async(source: Path, *, playback_mode: str = "auto") -> 
                                 progressive=True,
                             )
                             _finish_active_job(token)
+                        except TranscodeCancelledError:
+                            _fail_active_job(token)
+                            partial = transcode_partial_path(out)
+                            partial.unlink(missing_ok=True)
                         except Exception:
                             _fail_active_job(token)
                             partial = transcode_partial_path(out)

@@ -1,7 +1,7 @@
 import { normalizePathForApi } from "./pathUtils";
 
 export type GalleryItem = {
-  kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break";
+  kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break" | "placeholder";
   name: string;
   path: string;
   /** Carpeta destino de la sección (solo kind === "section"). */
@@ -14,6 +14,11 @@ export type GalleryItem = {
   /** Placeholder LQ conservado durante el crossfade a HQ. */
   thumbLqDataUrl?: string | null;
   thumbQuality?: "lq" | "hq";
+  /** Índice absoluto en ordered_paths (scroll virtual). */
+  mediaIndex?: number;
+  /** Ancho/alto de miniatura masonry en px (proporción real en la UI). */
+  thumbW?: number;
+  thumbH?: number;
   selected?: boolean;
   /** Miniaturas del contenido interior (solo kind === "folder", hasta 4 elementos). */
   folderPreviewUrls?: (string | null)[];
@@ -79,6 +84,7 @@ const devMockApi: WebApi = {
   gallery_load_folder: async () => ({ ...mockGalleryPayload(), recentFolders: [] as string[] }),
   gallery_reload: async () => mockGalleryPayload(),
   gallery_load_more: async () => ({ ...mockGalleryPayload(), hasMore: false }),
+  gallery_load_until_index: async (_target: number) => ({ ...mockGalleryPayload(), hasMore: false, items: [] }),
   gallery_pin_folder: async () => ({ pinnedFolders: [] as string[] }),
   gallery_unpin_folder: async () => ({ pinnedFolders: [] as string[] }),
   gallery_go_page: async () => mockGalleryPayload(),
@@ -110,6 +116,7 @@ const devMockApi: WebApi = {
     playbackFormat: "mp4",
   }),
   gallery_transcode_active: async () => ({ jobs: [] as Array<{ id: string; path: string; name: string; format: string }>, count: 0 }),
+  gallery_transcode_cancel: async (_path: string) => ({ ok: true, cancelled: false, path: _path }),
   gallery_video_playback_blob: async () => ({ ok: false, error: "mock" }),
   gallery_video_diagnostics: async () => ({
     path: "",
@@ -205,6 +212,19 @@ const devMockApi: WebApi = {
     progress: { current: 0, total: 0, detail: "Modo navegador (mock)" },
     done: null,
   }),
+  mess_scan_start: async () => ({ ok: false, error: "Solo disponible con la app Python (PyWebView)." }),
+  mess_scan_cancel: async () => ({ ok: true }),
+  mess_scan_status: async () => ({
+    running: false,
+    progress: { current: 0, total: 0, detail: "Modo navegador (mock)" },
+    result: null,
+    error: null,
+  }),
+  mess_move_cluster: async () => ({ ok: false, moved: 0, errors: 0 }),
+  mess_save_settings: async (_folder: string, _sim?: number) => ({ settings: {} }),
+  mess_thumbs: async () => ({ items: [] }),
+  mess_list_images: async () => ({ ok: true, paths: [], folder: "", total: 0, truncated: false }),
+  mess_similar_paths: async () => ({ ok: true, anchor: "", items: [] }),
   dialog_pick_folder: async () => ({
     path: null as string | null,
     cancelled: true,
@@ -231,6 +251,8 @@ export const bridge = {
   galleryLoadFolder: (path: string) => call<any>("gallery_load_folder", path),
   galleryReload: () => call<any>("gallery_reload"),
   galleryLoadMore: () => call<any>("gallery_load_more"),
+  galleryLoadUntilIndex: (targetIndex: number, jump = false) =>
+    call<any>("gallery_load_until_index", Math.max(0, Math.floor(targetIndex)), Boolean(jump)),
   galleryPinFolder: (path: string) => call<any>("gallery_pin_folder", path),
   galleryUnpinFolder: (path: string) => call<any>("gallery_unpin_folder", path),
   galleryGoPage: (page: number) => call<any>("gallery_go_page", page),
@@ -252,6 +274,7 @@ export const bridge = {
       normalizePathForApi(path)
     ),
   galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }>; count: number }>("gallery_transcode_active"),
+  galleryTranscodeCancel: (path: string) => call<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>("gallery_transcode_cancel", path),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
   galleryVideoPlaybackBlob: (path: string) =>
@@ -269,6 +292,10 @@ export const bridge = {
   galleryDeletePaths: (paths: string[]) => call<any>("gallery_delete_paths", paths),
   galleryMovePath: (srcPath: string, destPath: string) => call<any>("gallery_move_path", srcPath, destPath),
   galleryUndoLastMove: () => call<any>("gallery_undo_last_move"),
+  galleryRenamePath: (path: string, newName: string) =>
+    call<any>("gallery_rename_path", normalizePathForApi(path), newName),
+  galleryDeleteFolder: (path: string) =>
+    call<any>("gallery_delete_folder", normalizePathForApi(path)),
   galleryImageRotate: (path: string, degrees: number) => call<any>("gallery_image_rotate", path, degrees),
   galleryImageCropNormalized: (path: string, left: number, top: number, width: number, height: number) =>
     call<any>("gallery_image_crop_normalized", path, left, top, width, height),
@@ -309,5 +336,17 @@ export const bridge = {
   organizerStart: (path: string, options: Record<string, any>) => call<any>("organizer_start", path, options),
   organizerCancel: () => call<any>("organizer_cancel"),
   organizerStatus: () => call<any>("organizer_status"),
+  messScanStart: (folderPath: string, minSimilarity?: number) =>
+    call<any>("mess_scan_start", folderPath, minSimilarity),
+  messScanCancel: () => call<any>("mess_scan_cancel"),
+  messScanStatus: () => call<any>("mess_scan_status"),
+  messMoveCluster: (paths: string[], destPath: string) => call<any>("mess_move_cluster", paths, destPath),
+  messSaveSettings: (folderPath: string, minSimilarity?: number) =>
+    call<any>("mess_save_settings", folderPath, minSimilarity),
+  messThumbs: (paths: string[], size = 120) => call<any>("mess_thumbs", paths, size),
+  messListImages: (folderPath?: string, limit?: number) =>
+    call<any>("mess_list_images", folderPath ?? "", limit),
+  messSimilarPaths: (anchorPath: string, candidatePaths: string[], minSimilarity?: number, limit = 32) =>
+    call<any>("mess_similar_paths", anchorPath, candidatePaths, minSimilarity, limit),
   dialogPickFolder: (startPath?: string) => call<any>("dialog_pick_folder", startPath ?? ""),
 };

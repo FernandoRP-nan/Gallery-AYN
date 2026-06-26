@@ -81,23 +81,80 @@ def img_to_data_url_contain(path: Path, max_w: int, max_h: int) -> str | None:
     except Exception:
         return None
 
+def _load_rgb_for_thumb(path: Path):
+    """Carga RGB con orientación EXIF aplicada."""
+    with Image.open(path) as im_raw:
+        im = im_raw
+        if ImageOps is not None:
+            im = ImageOps.exif_transpose(im)
+        return im.convert("RGB")
+
+
+def masonry_thumb_target_size(src_w: int, src_h: int, max_w: int, max_h: int) -> tuple[int, int]:
+    """Tamaño objetivo masonry: en vertical fija ancho (UI width:100%) para evitar upscale borroso."""
+    mw, mh = max(1, int(max_w)), max(1, int(max_h))
+    if src_w <= 0 or src_h <= 0:
+        return mw, mh
+    if src_h > src_w:
+        tw = mw
+        th = min(mh, max(1, int(round(mw * src_h / src_w))))
+        return tw, th
+    ratio = min(mw / src_w, mh / src_h)
+    tw = max(1, int(round(src_w * ratio)))
+    th = max(1, int(round(src_h * ratio)))
+    return tw, th
+
+
+def ffmpeg_masonry_scale_filter(max_w: int, max_h: int) -> str:
+    """Filtro scale para vídeo masonry con la misma prioridad de ancho en vertical."""
+    mw, mh = max(48, int(max_w)), max(48, int(max_h))
+    if mw % 2:
+        mw += 1
+    if mh % 2:
+        mh += 1
+    return (
+        f"scale=w='if(gt(ih\\,iw)\\,{mw}\\,-2)':"
+        f"h='if(gt(ih\\,iw)\\,-2\\,{mh})':force_original_aspect_ratio=decrease"
+    )
+
+
 def thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 90) -> str | None:
     """Miniatura JPEG cuadrada."""
     if Image is None:
         return None
     try:
-        with Image.open(path) as im:
-            im = im.convert("RGB")
-            if ImageOps is not None:
-                im = ImageOps.fit(im, (size, size), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-            else:
-                im.thumbnail((size, size), Image.Resampling.LANCZOS)
-            bio = io.BytesIO()
-            im.save(bio, format="JPEG", quality=quality, optimize=True)
-            payload = base64.b64encode(bio.getvalue()).decode("ascii")
-            return f"data:image/jpeg;base64,{payload}"
+        im = _load_rgb_for_thumb(path)
+        side = max(1, int(size))
+        if ImageOps is not None:
+            im = ImageOps.fit(im, (side, side), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+        else:
+            im.thumbnail((side, side), Image.Resampling.LANCZOS)
+        bio = io.BytesIO()
+        im.save(bio, format="JPEG", quality=quality, optimize=True)
+        payload = base64.b64encode(bio.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{payload}"
     except Exception:
         return None
+
+
+def thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quality: int = 90) -> str | None:
+    """Miniatura JPEG masonry: proporción original con ancho completo en retrato."""
+    if Image is None:
+        return None
+    try:
+        mw, mh = max(1, int(max_w)), max(1, int(max_h))
+        im = _load_rgb_for_thumb(path)
+        w, h = im.size
+        tw, th = masonry_thumb_target_size(w, h, mw, mh)
+        if (w, h) != (tw, th):
+            im = im.resize((tw, th), Image.Resampling.LANCZOS)
+        bio = io.BytesIO()
+        im.save(bio, format="JPEG", quality=quality, optimize=True)
+        payload = base64.b64encode(bio.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        return None
+
 
 def dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) -> str | None:
     """Miniatura modal destino (contain)."""

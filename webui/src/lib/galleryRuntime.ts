@@ -12,6 +12,9 @@ export type GalleryMutationResponse = {
   items?: GalleryItem[];
   removedPaths?: string[];
   delta?: boolean;
+  replaceWindow?: boolean;
+  windowStart?: number;
+  windowEnd?: number;
 };
 
 export type GalleryState = {
@@ -113,6 +116,24 @@ export function applyGalleryRemovePathsDelta(state: GalleryState, removedPaths: 
     pruneOrphanGallerySections(items.filter((x) => !removed.has(x.path)))
   );
   galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(getGalleryItems()) });
+}
+
+export function applyGalleryWindowItems(windowItems: GalleryItem[], state?: GalleryState) {
+  if (!Array.isArray(windowItems) || windowItems.length === 0) {
+    if (state) setGalleryStateFromApi(state);
+    return;
+  }
+  const prefix = getGalleryItems().filter(
+    (it) => it.kind === "folder" || it.kind === "folder_up"
+  );
+  seedGalleryThumbHqFromItems(windowItems);
+  const next = stripHqFromGalleryItems([...prefix, ...windowItems]);
+  galleryItems.set(next);
+  if (state) {
+    galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
+  } else {
+    syncSelectedCountFromItems();
+  }
 }
 
 export function applyGalleryMutationResponse(out: GalleryMutationResponse) {
