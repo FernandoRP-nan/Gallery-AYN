@@ -109,6 +109,9 @@ _GALLERY_LOAD_MAX_BATCHES = 2
 _GALLERY_SCAN_CACHE_TTL_S = 300.0
 _GALLERY_SCAN_CACHE_MAX = 8
 _GALLERY_EXTEND_MAX_BATCHES = 16
+# Carpetas pequeñas: tandas LQ más cortas para builds rápidos.
+_GALLERY_SMALL_FOLDER_MAX = 2000
+_GALLERY_SMALL_FOLDER_BATCH_CAP = 32
 MASONRY_THUMB_HEIGHT_FACTOR = 2.4
 
 def _img_to_data_url(path: Path, size: tuple[int, int]) -> str | None:
@@ -220,9 +223,19 @@ class GalleryBridgeMixin:
     def _is_unlimited_mode(self) -> bool:
         return int(self.settings.get("gallery_thumbs_per_page", 48)) <= 0
 
-    def _unlimited_batch_size(self) -> int:
+    def _unlimited_batch_size(self, total: int | None = None, *, for_scroll: bool = False) -> int:
         n = int(self.settings.get("gallery_unlimited_batch_size", 48))
-        return max(24, min(256, n))
+        base = max(24, min(256, n))
+        if total is None:
+            total = len(self.ordered_paths)
+        # Solo acortar tandas en scroll/append; la apertura inicial usa el batch completo.
+        if for_scroll and total > 0 and total <= _GALLERY_SMALL_FOLDER_MAX:
+            return max(24, min(base, _GALLERY_SMALL_FOLDER_BATCH_CAP))
+        return base
+
+    def _is_small_gallery_folder(self) -> bool:
+        total = len(self.ordered_paths)
+        return total > 0 and total <= _GALLERY_SMALL_FOLDER_MAX
 
     def _gallery_window_overscan_before(self) -> int:
         n = int(self.settings.get("gallery_window_overscan_before", _GALLERY_WINDOW_OVERSCAN_BEFORE))
@@ -529,6 +542,7 @@ class GalleryBridgeMixin:
         timeline_meta: bool = False,
         timeline_date_field: str = "mtime",
         jump_fast: bool = False,
+        build_boost: bool = False,
     ) -> list[dict]:
         def _one_image_item(entry: tuple[int, Path]) -> dict:
             i, p = entry
@@ -569,7 +583,7 @@ class GalleryBridgeMixin:
         if not slice_paths:
             return []
         max_workers = min(
-            self._gallery_thumb_build_workers(boost=jump_fast),
+            self._gallery_thumb_build_workers(boost=jump_fast or build_boost),
             max(1, len(slice_paths)),
         )
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -764,7 +778,13 @@ class GalleryBridgeMixin:
             )
         return items
 
-    def _build_timeline_items_for_range(self, range_start: int, range_end: int) -> list[dict]:
+    def _build_timeline_items_for_range(
+        self,
+        range_start: int,
+        range_end: int,
+        *,
+        build_boost: bool = False,
+    ) -> list[dict]:
         """Ítems de línea de tiempo para un rango de índices en ordered_paths (carga progresiva)."""
         items: list[dict] = []
         if range_start >= range_end:
@@ -799,6 +819,7 @@ class GalleryBridgeMixin:
                     base_index=clip_start,
                     timeline_meta=True,
                     timeline_date_field=self._timeline_date_field(),
+                    build_boost=build_boost,
                 )
             )
         return items
@@ -828,7 +849,8 @@ class GalleryBridgeMixin:
         items: list[dict] = []
         if s == 0 and self.gallery_folder is not None:
             items.extend(self._build_folder_items(thumb_px))
-        items.extend(self._build_timeline_items_for_range(s, e))
+        build_boost = self._is_unlimited_mode() and self.gallery_page == 0 and s == 0
+        items.extend(self._build_timeline_items_for_range(s, e, build_boost=build_boost))
         return items
 
     def _build_gallery_items(self) -> list[dict]:
@@ -846,7 +868,16 @@ class GalleryBridgeMixin:
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         slice_paths = self.ordered_paths[s:e]
         selected_frozenset = frozenset(self.selected)
-        items.extend(self._build_image_items(slice_paths, thumb_px, selected_frozenset, base_index=s))
+        build_boost = self._is_unlimited_mode() and self.gallery_page == 0 and s == 0
+        items.extend(
+            self._build_image_items(
+                slice_paths,
+                thumb_px,
+                selected_frozenset,
+                base_index=s,
+                build_boost=build_boost,
+            )
+        )
         return items
 
     def _gallery_items_for_range(
@@ -1095,7 +1126,7 @@ class GalleryBridgeMixin:
             if self._is_grouped_mode():
                 self.gallery_unlimited_loaded = total
             else:
-                batch = self._unlimited_batch_size()
+                batch = self._unlimited_batch_size(total)
                 keep = prev_unlimited_loaded if prev_unlimited_loaded > 0 else batch
                 self.gallery_unlimited_loaded = min(total, max(batch, keep))
                 self.gallery_unlimited_window_start = 0
@@ -1144,6 +1175,12 @@ class GalleryBridgeMixin:
 
     def _extend_batch_count(self, gap: int, batch: int) -> int:
         """Tandas por petición al extender (más si el hueco hasta el target es grande)."""
+        if self._is_small_gallery_folder():
+            if gap <= batch:
+                return 1
+            if gap <= batch * 3:
+                return _GALLERY_LOAD_MAX_BATCHES
+            return min(4, _GALLERY_LOAD_MAX_BATCHES + 2)
         if gap <= batch * 2:
             return _GALLERY_LOAD_MAX_BATCHES
         return min(
@@ -1164,7 +1201,7 @@ class GalleryBridgeMixin:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
             start = max(0, min(total, self.gallery_unlimited_loaded))
-            end = min(total, start + self._unlimited_batch_size())
+            end = min(total, start + self._unlimited_batch_size(total, for_scroll=True))
             if start >= end:
                 return {"state": self._gallery_state(), "items": [], "hasMore": False}
 
@@ -1218,7 +1255,7 @@ class GalleryBridgeMixin:
 
             window_start = int(getattr(self, "gallery_unlimited_window_start", 0) or 0)
             loaded = int(self.gallery_unlimited_loaded or 0)
-            batch = self._unlimited_batch_size()
+            batch = self._unlimited_batch_size(total, for_scroll=True)
 
             # Salto explícito (rail o scroll muy lejos): núcleo rápido + expansión en segundo plano.
             if jump:

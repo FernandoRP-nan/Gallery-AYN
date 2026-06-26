@@ -19,7 +19,7 @@
     appendGalleryItemsFromApi,
   } from "../lib/galleryRuntime";
   import { galleryDbg } from "../lib/galleryDebugLog";
-  import { getGalleryPerfConfig } from "../lib/galleryPerfConfig";
+  import { getGalleryPerfConfig, effectiveUnlimitedBatchSize, isSmallGalleryTotal } from "../lib/galleryPerfConfig";
   import {
     disposeGalleryThumbs,
     galleryThumbHydrating,
@@ -285,8 +285,10 @@
   }
 
   function capLqExpansionTarget(target: number, loadedEnd: number): number {
-    const batch = getGalleryPerfConfig().unlimitedBatchSize;
-    return Math.min(target, loadedEnd + batch * 2);
+    const total = Number($galleryState?.total ?? 0);
+    const batch = effectiveUnlimitedBatchSize(total);
+    const leadMult = isSmallGalleryTotal(total) ? 3 : 2;
+    return Math.min(target, loadedEnd + batch * leadMult);
   }
 
   async function hydrateVisibleThumbsAfterScrollIdle() {
@@ -516,6 +518,23 @@
         const retryTarget = loadUntilPending;
         loadUntilPending = -1;
         void loadUntilGalleryIndex(retryTarget, { jump: false });
+        return;
+      }
+      if (loadUntilCoalesceTarget >= 0) {
+        const coalesced = loadUntilCoalesceTarget;
+        loadUntilCoalesceTarget = -1;
+        if (loadUntilDebounceTimer !== null) {
+          clearTimeout(loadUntilDebounceTimer);
+          loadUntilDebounceTimer = null;
+        }
+        const loadedNow = Number(getGalleryState()?.endIndex ?? 0);
+        if (coalesced >= loadedNow) {
+          void loadUntilGalleryIndex(coalesced, { jump: false });
+          return;
+        }
+      }
+      if (!jump) {
+        void tick().then(() => galleryGrid?.nudgeViewportLoad());
       }
     }
   }
@@ -525,7 +544,7 @@
   let loadUntilCoalesceTarget = -1;
   let loadUntilDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function scheduleLoadUntilGalleryIndex(targetIndex: number, jump = false) {
+  function scheduleLoadUntilGalleryIndex(targetIndex: number, jump = false, urgent = false) {
     if (targetIndex < 0) return;
     if (jump) {
       loadUntilGeneration += 1;
@@ -539,13 +558,30 @@
       return;
     }
     loadUntilCoalesceTarget = Math.max(loadUntilCoalesceTarget, targetIndex);
+    const loaded = Number(getGalleryState()?.endIndex ?? 0);
+    const total = Number(getGalleryState()?.total ?? 0);
+    const batch = effectiveUnlimitedBatchSize(total);
+    const urgentScroll =
+      urgent ||
+      (isSmallGalleryTotal(total) && targetIndex >= loaded + Math.max(12, batch >> 1));
+    if (urgentScroll) {
+      if (loadUntilDebounceTimer !== null) {
+        clearTimeout(loadUntilDebounceTimer);
+        loadUntilDebounceTimer = null;
+      }
+      const t = loadUntilCoalesceTarget;
+      loadUntilCoalesceTarget = -1;
+      if (t >= loaded) void loadUntilGalleryIndex(t, { jump: false });
+      return;
+    }
     if (loadUntilDebounceTimer !== null) clearTimeout(loadUntilDebounceTimer);
+    const debounceMs = isSmallGalleryTotal(total) ? 80 : 220;
     loadUntilDebounceTimer = setTimeout(() => {
       loadUntilDebounceTimer = null;
       const t = loadUntilCoalesceTarget;
       loadUntilCoalesceTarget = -1;
       if (t >= 0) void loadUntilGalleryIndex(t, { jump: false });
-    }, 220);
+    }, debounceMs);
   }
 
   $: layoutMode = String($galleryState?.layoutMode ?? "flat");

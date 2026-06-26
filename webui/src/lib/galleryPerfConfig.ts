@@ -25,6 +25,29 @@ const DEFAULTS: GalleryPerfConfig = {
   thumbHqVisibleSequential: 16,
 };
 
+export const GALLERY_SMALL_FOLDER_MAX = 2000;
+export const GALLERY_SMALL_FOLDER_BATCH_CAP = 32;
+
+export function isSmallGalleryTotal(total: number): boolean {
+  return total > 0 && total <= GALLERY_SMALL_FOLDER_MAX;
+}
+
+/** Tamaño de tanda LQ en scroll/append (carpetas pequeñas → batch corto). */
+export function effectiveUnlimitedBatchSize(
+  total: number,
+  configured = getGalleryPerfConfig().unlimitedBatchSize,
+): number {
+  if (!isSmallGalleryTotal(total)) return configured;
+  return Math.max(24, Math.min(configured, GALLERY_SMALL_FOLDER_BATCH_CAP));
+}
+
+/** Batch inicial de apertura: siempre el configurado (no acortar). */
+export function initialUnlimitedBatchSize(
+  configured = getGalleryPerfConfig().unlimitedBatchSize,
+): number {
+  return configured;
+}
+
 let active: GalleryPerfConfig = { ...DEFAULTS };
 
 function clamp(n: number, lo: number, hi: number): number {

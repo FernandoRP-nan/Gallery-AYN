@@ -29,7 +29,11 @@
   import DestToolbar from "./DestToolbar.svelte";
   import type { DestToolbarItem } from "../lib/itemTree";
   import { galleryDbg } from "../lib/galleryDebugLog";
-  import { getGalleryPerfConfig } from "../lib/galleryPerfConfig";
+  import {
+    effectiveUnlimitedBatchSize,
+    getGalleryPerfConfig,
+    isSmallGalleryTotal,
+  } from "../lib/galleryPerfConfig";
 
   export let galleryGridItems: any[];
   export let gridCellPx: number;
@@ -96,17 +100,27 @@
   export let totalMediaCount = 0;
   export let galleryWindowStart = 0;
   export let galleryLoadedEnd = 0;
-  export let onRequestLoadUntilIndex: (targetIndex: number, jump?: boolean) => void = () => {};
+  export let onRequestLoadUntilIndex: (
+    targetIndex: number,
+    jump?: boolean,
+    urgent?: boolean,
+  ) => void = () => {};
   export let onCancelBackgroundLoad: () => void = () => {};
   export let onCancelScrollLoads: () => void = () => {};
   export let onMessSuggestionMoved: () => void = () => {};
 
   const SCROLL_LOAD_IDLE_MS = 400;
+  const SCROLL_LOAD_IDLE_SMALL_MS = 180;
   const SCROLL_STABLE_MS = 280;
+  const SCROLL_STABLE_SMALL_MS = 140;
   const WINDOW_JUMP_MARGIN = 128;
-  /** Precarga hacia adelante mientras bajas por miniaturas ya cargadas (~1.5 pantallas antes del borde). */
+  /** Precarga hacia adelante mientras bajas por miniaturas ya cargadas. */
   const PREFETCH_LEAD_VIEWPORTS = 1.5;
+  const PREFETCH_LEAD_VIEWPORTS_SMALL = 2.75;
   const PREFETCH_THROTTLE_MS = 280;
+  const PREFETCH_THROTTLE_AGGRESSIVE_MS = 100;
+  /** Índices de hueco scroll→loadedEnd que activan prefetch urgente. */
+  const PREFETCH_AGGRESSIVE_GAP = 40;
 
   let messSuggestionsRefresh = 0;
   function handleMessSuggestionMoved() {
@@ -380,10 +394,36 @@
     ? buildMasonrySegments(masonryDisplayItems, masonryColumnCount)
     : [];
 
-  /** Limita prefetch LQ a una extensión por tanda (evita pedir índice 31626 de golpe). */
+  /** Limita prefetch LQ; en carpetas pequeñas permite más alcance por tanda corta. */
   function capPrefetchIndex(index: number): number {
-    const batch = getGalleryPerfConfig().unlimitedBatchSize;
-    return Math.min(index, galleryLoadedEnd + batch * 2);
+    const batch = effectiveUnlimitedBatchSize(totalMediaCount);
+    const leadMult = isSmallGalleryTotal(totalMediaCount) ? 3 : 2;
+    return Math.min(index, galleryLoadedEnd + batch * leadMult);
+  }
+
+  function prefetchLeadViewports(): number {
+    return isSmallGalleryTotal(totalMediaCount)
+      ? PREFETCH_LEAD_VIEWPORTS_SMALL
+      : PREFETCH_LEAD_VIEWPORTS;
+  }
+
+  function scrollLoadIdleMs(): number {
+    return isSmallGalleryTotal(totalMediaCount) ? SCROLL_LOAD_IDLE_SMALL_MS : SCROLL_LOAD_IDLE_MS;
+  }
+
+  function scrollStableMs(): number {
+    return isSmallGalleryTotal(totalMediaCount) ? SCROLL_STABLE_SMALL_MS : SCROLL_STABLE_MS;
+  }
+
+  /** Hueco entre índice estimado del viewport y borde cargado (scroll adelantado). */
+  function scrollAheadIndexGap(layout: GalleryFullVirtualLayout): number {
+    const est = estimateTargetMediaIndex(
+      layout.entries,
+      scrollTop + scrollViewportH * 0.35,
+      scrollViewportH,
+    );
+    if (est < galleryLoadedEnd) return 0;
+    return est - galleryLoadedEnd;
   }
 
   /** Índice destino para extender hacia adelante según scroll y borde cargado. */
@@ -393,7 +433,7 @@
     if (galleryLoadedEnd >= totalMediaCount) return -1;
 
     const viewBottom = scrollTop + scrollViewportH;
-    const leadPx = scrollViewportH * PREFETCH_LEAD_VIEWPORTS;
+    const leadPx = scrollViewportH * prefetchLeadViewports();
     let target = -1;
 
     const loadedBottom = virtualLoadedBottomY(layout.entries, galleryLoadedEnd);
@@ -412,6 +452,11 @@
       if (viewBottom >= loadedBottom - leadPx) target = galleryLoadedEnd;
     }
 
+    const aheadGap = scrollAheadIndexGap(layout);
+    if (aheadGap >= PREFETCH_AGGRESSIVE_GAP) {
+      target = Math.max(target, capPrefetchIndex(galleryLoadedEnd + aheadGap));
+    }
+
     return target >= 0 ? capPrefetchIndex(target) : -1;
   }
 
@@ -422,7 +467,7 @@
     if (galleryWindowStart <= 0) return -1;
 
     const viewTop = scrollTop;
-    const leadPx = scrollViewportH * PREFETCH_LEAD_VIEWPORTS;
+    const leadPx = scrollViewportH * prefetchLeadViewports();
     let target = -1;
 
     const loadedTop = virtualLoadedTopY(layout.entries, galleryWindowStart);
@@ -457,20 +502,35 @@
     const layout = fullVirtualLayout;
     if (!layout) return;
 
-    const now = Date.now();
-    if (now - lastPrefetchTs < PREFETCH_THROTTLE_MS) return;
-
     const prevTop = lastScrollTopForPrefetch;
-    const delta = scrollTop - prevTop;
+    const scrollDelta = scrollTop - prevTop;
     lastScrollTopForPrefetch = scrollTop;
-    if (Math.abs(delta) < 2) return;
+    if (Math.abs(scrollDelta) < 2) return;
+
+    const aheadGap = scrollDelta > 0 ? scrollAheadIndexGap(layout) : 0;
+    const aggressive =
+      scrollDelta > 0 &&
+      (aheadGap >= PREFETCH_AGGRESSIVE_GAP ||
+        (isSmallGalleryTotal(totalMediaCount) && aheadGap >= 24));
+
+    const now = Date.now();
+    const throttleMs = aggressive ? PREFETCH_THROTTLE_AGGRESSIVE_MS : PREFETCH_THROTTLE_MS;
+    if (now - lastPrefetchTs < throttleMs) return;
 
     let target = -1;
     let jump = false;
 
-    if (delta > 0) {
+    if (scrollDelta > 0) {
       if (galleryLoadedEnd >= totalMediaCount) return;
       target = computeForwardPrefetchTarget(layout);
+      if (aggressive && target < 0) {
+        const est = estimateTargetMediaIndex(
+          layout.entries,
+          scrollTop + scrollViewportH * 0.35,
+          scrollViewportH,
+        );
+        if (est >= galleryLoadedEnd) target = capPrefetchIndex(est);
+      }
     } else {
       target = computeBackwardPrefetchTarget(layout);
       if (target >= 0 && target < galleryWindowStart - WINDOW_JUMP_MARGIN) {
@@ -504,8 +564,8 @@
           return;
         }
         requestLoadForViewport();
-      }, SCROLL_STABLE_MS);
-    }, SCROLL_LOAD_IDLE_MS);
+      }, scrollStableMs());
+    }, scrollLoadIdleMs());
   }
 
   /** Pide más ítems según scroll y huecos visibles (no durante salto por rail). */
@@ -549,7 +609,11 @@
       }
 
       if (target >= 0) {
-        onRequestLoadUntilIndex(target, jump);
+        const aheadGap = scrollAheadIndexGap(layout);
+        const urgent =
+          aheadGap >= PREFETCH_AGGRESSIVE_GAP ||
+          (isSmallGalleryTotal(totalMediaCount) && aheadGap >= 24);
+        onRequestLoadUntilIndex(target, jump, urgent);
         return;
       }
       const loadedBottom = virtualLoadedBottomY(layout.entries, galleryLoadedEnd);
@@ -578,7 +642,19 @@
     const est = estimateTargetMediaIndex(layout.entries, scrollTop, scrollViewportH);
     if (est >= galleryLoadedEnd) target = Math.max(target, est);
 
-    if (target >= 0) onRequestLoadUntilIndex(target, jump);
+    const aheadGap = scrollAheadIndexGap(layout);
+    const urgent =
+      aheadGap >= PREFETCH_AGGRESSIVE_GAP ||
+      (isSmallGalleryTotal(totalMediaCount) && aheadGap >= 24);
+
+    if (target >= 0) onRequestLoadUntilIndex(target, jump, urgent);
+  }
+
+  /** Tras un append LQ: comprobar si el viewport sigue adelantado y pedir más. */
+  export function nudgeViewportLoad() {
+    if (!fullVirtualEnabled) return;
+    if (galleryLoadedEnd >= totalMediaCount) return;
+    requestLoadForViewport();
   }
 
   $: {
