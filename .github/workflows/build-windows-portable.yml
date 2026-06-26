@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main, mi-rama-recuperada]
+    tags:
+      - "v*"
     paths:
       - "webui/**"
       - "org_multimedia/**"
@@ -12,6 +14,9 @@ on:
       - "GaleriaAYN.spec"
       - "requirements.txt"
       - ".github/workflows/build-windows-portable.yml"
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -59,12 +64,40 @@ jobs:
           ./scripts/copy-portable-legal.ps1 -PortableDir dist/GaleriaAYN
 
       - name: Zip portable folder
+        id: zip
+        shell: pwsh
         run: |
-          Compress-Archive -Path dist\GaleriaAYN\* -DestinationPath dist\GaleriaAYN-portable.zip -Force
+          $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $zipName = "GaleriaAYN-$tag-portable.zip"
+          } else {
+            $zipName = "GaleriaAYN-portable.zip"
+          }
+          $zipPath = Join-Path "dist" $zipName
+          Compress-Archive -Path dist/GaleriaAYN/* -DestinationPath $zipPath -Force
+          "zip_path=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "zip_name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
           name: GaleriaAYN-windows-portable
-          path: dist/GaleriaAYN-portable.zip
+          path: ${{ steps.zip.outputs.zip_path }}
           retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.zip.outputs.zip_path }}
+          generate_release_notes: true
+          body: |
+            ## Galería AYN — portable Windows (x64)
+
+            Descarga **`${{ steps.zip.outputs.zip_name }}`**, extrae **toda la carpeta** y ejecuta `GaleriaAYN.exe`.
+
+            Requisitos en el PC destino: Windows 10/11 64 bits, WebView2 y .NET Framework 4.7.2+.
+            Si el zip viene de internet: Propiedades → **Desbloquear** antes de extraer.
+
+            Guía completa: [docs/windows-portable.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/windows-portable.md)

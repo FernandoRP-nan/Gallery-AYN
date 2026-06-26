@@ -136,7 +136,20 @@ python organizador_multimedia.py
 
 Guía completa del portable: **[docs/windows-portable.md](docs/windows-portable.md)**.
 
-### Compilar portable (.exe)
+### Descargar versión estable (Releases)
+
+Los builds oficiales para amigos/usuarios se publican en **GitHub → Releases** al etiquetar una versión:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Actions compila el portable en Windows, genera `GaleriaAYN-v1.0.0-portable.zip` y lo adjunta al release (permanente, a diferencia del artifact de CI que caduca a los 30 días).
+
+Los pushes normales a `main` siguen generando solo un **artifact** de prueba en Actions, sin publicar release.
+
+### Compilar portable (.exe) en local
 
 ```powershell
 .\scripts\build-windows-portable.ps1

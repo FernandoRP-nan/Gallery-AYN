@@ -93,6 +93,39 @@ No es un fallo de WebView2: es **pythonnet** (.NET) al cargar la ventana nativa 
 3. Usar un **build reciente** del portable (el programa desbloquea `_internal` al iniciar; builds viejos no).
 4. Ruta sin rarezas: evitar ejecutar desde `Downloads\GaleriaAYN (1)\` mezclando varias copias; una carpeta limpia p. ej. `C:\GaleriaAYN\` suele ir mejor.
 
+CI: workflow [`.github/workflows/build-windows-portable.yml`](.github/workflows/build-windows-portable.yml) (artifact en `main`; **Release** al pushear un tag `v*`).
+
+## Publicar versión estable (GitHub Releases)
+
+Para que amigos y usuarios descarguen un zip **permanente** desde la pestaña **Releases** del repositorio:
+
+1. Asegúrate de que `main` tiene el código que quieres publicar (`git push`).
+2. Crea un tag semver con prefijo `v`:
+
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+3. GitHub Actions ejecuta el workflow **Build Windows portable** en un runner Windows.
+4. Al terminar, aparece un **Release** `v1.0.0` con el asset **`GaleriaAYN-v1.0.0-portable.zip`**.
+
+Comparte el enlace directo del release, por ejemplo:
+
+`https://github.com/FernandoRP-nan/Gallery-AYN/releases/latest`
+
+(o la URL con tag concreto: `.../releases/tag/v1.0.0`).
+
+### Qué ocurre en cada tipo de push
+
+| Evento | Resultado |
+|--------|-----------|
+| Push a `main` (cambios en código/UI) | Artifact temporal (30 días) en *Actions* — para probar builds |
+| Push de tag `v1.0.0`, `v1.2.3`, … | **Release** público con el zip portable |
+| *Run workflow* manual | Solo artifact (no crea release) |
+
+Para una versión nueva, incrementa el tag (`v1.0.1`, `v1.1.0`, …). No reutilices un tag ya publicado.
+
 ## Actualizar el portable después de cambios en el código
 
 1. `git pull`
