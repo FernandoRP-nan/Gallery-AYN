@@ -30,6 +30,7 @@ hiddenimports = [
     "org_multimedia.settings",
     "org_multimedia.bundle_paths",
     "org_multimedia.windows_gui_env",
+    "org_multimedia.core.win_subprocess",
     "org_multimedia.cli",
     "org_multimedia.linux_gui_env",
     "org_multimedia.pywebview_bridge_return",

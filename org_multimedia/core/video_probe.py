@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+
+from .win_subprocess import run_hidden
 from pathlib import Path
 
 from .video_transcode import (
@@ -41,7 +43,7 @@ def _ffprobe_error(path: Path) -> str | None:
         ffprobe = resolve_ffprobe()
         if not ffprobe:
             return "ffprobe no está instalado o no está en el PATH"
-        result = subprocess.run(
+        result = run_hidden(
             [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
             capture_output=True,
             text=True,

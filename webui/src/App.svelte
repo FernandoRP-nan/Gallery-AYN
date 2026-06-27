@@ -4340,7 +4340,14 @@
     }
     pollTimer = window.setInterval(() => {
       pollOrganizer().catch(() => undefined);
-      pollVideoTranscodeJobs().catch(() => undefined);
+      if (
+        videoTranscodeJobs.length > 0 ||
+        previewVideoPreparing ||
+        previewVideoLaunching ||
+        previewVideoArmed
+      ) {
+        pollVideoTranscodeJobs().catch(() => undefined);
+      }
     }, 1100);
   });
 

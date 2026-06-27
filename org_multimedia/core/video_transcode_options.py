@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+
+from .win_subprocess import run_hidden
 import threading
 from dataclasses import dataclass
 from typing import Literal
@@ -97,7 +99,7 @@ def _detect_hw_encoder(ffmpeg: str) -> str | None:
             return _HW_ENCODER
         enc: str | None = None
         try:
-            out = subprocess.run(
+            out = run_hidden(
                 [ffmpeg, "-hide_banner", "-encoders"],
                 capture_output=True,
                 text=True,

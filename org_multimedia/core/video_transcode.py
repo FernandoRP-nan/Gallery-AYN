@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from .video_playback_mode import PlaybackMode, normalize_playback_mode, resolve_transcode_plan, transcode_cache_suffix
+from .win_subprocess import popen_hidden, run_hidden
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -211,7 +212,7 @@ def _ffprobe_streams(path: Path) -> tuple[dict | None, dict | None]:
     if not ffprobe:
         return None, None
     try:
-        result = subprocess.run(
+        result = run_hidden(
             [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
             capture_output=True,
             text=True,
@@ -330,7 +331,7 @@ def _run_ffmpeg(
         )
     if token and duration_us and duration_us > 0:
         cmd = [ffmpeg, "-hide_banner", "-nostats", "-progress", "pipe:1", "-loglevel", "error", *args]
-        proc = subprocess.Popen(
+        proc = popen_hidden(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -370,7 +371,7 @@ def _run_ffmpeg(
             raise RuntimeError(err.strip() or "ffmpeg falló")
         return
 
-    result = subprocess.run(
+    result = run_hidden(
         [ffmpeg, "-hide_banner", "-loglevel", "error", *args],
         capture_output=True,
         timeout=timeout,

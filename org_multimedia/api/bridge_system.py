@@ -282,20 +282,31 @@ class SystemBridgeMixin:
     def gallery_open_external(self, path: str) -> dict:
         """Abre el archivo con la aplicación predeterminada del sistema (p. ej. Dragon Player)."""
         import subprocess
+        import sys
 
         from ..core.fs_path import resolve_file_path
+        from ..core.win_subprocess import popen_hidden
 
         try:
             p = resolve_file_path(path)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         try:
-            subprocess.Popen(
-                ["xdg-open", str(p)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            if sys.platform.startswith("win"):
+                os.startfile(str(p))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                popen_hidden(
+                    ["open", str(p)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                popen_hidden(
+                    ["xdg-open", str(p)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
             return {"ok": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}

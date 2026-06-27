@@ -165,9 +165,8 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
 
 def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) -> str | None:
     """Miniatura del primer fotograma de un video usando ffmpeg."""
-    import subprocess
-
     from ..core.video_tools import resolve_ffmpeg
+    from ..core.win_subprocess import run_hidden
 
     ffmpeg = resolve_ffmpeg()
     if not ffmpeg:
@@ -178,7 +177,7 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
     if thumb % 2:
         thumb += 1
     try:
-        result = subprocess.run(
+        result = run_hidden(
             [
                 ffmpeg, "-y",
                 "-ss", "0.5",
@@ -202,10 +201,9 @@ def _video_thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 80) 
 
 def _video_thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quality: int = 80) -> str | None:
     """Primer fotograma del vídeo con proporción original (vista masonry)."""
-    import subprocess
-
     from ..core.thumbs import ffmpeg_masonry_scale_filter
     from ..core.video_tools import resolve_ffmpeg
+    from ..core.win_subprocess import run_hidden
 
     ffmpeg = resolve_ffmpeg()
     if not ffmpeg:
@@ -213,7 +211,7 @@ def _video_thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quali
 
     try:
         vf = ffmpeg_masonry_scale_filter(max_w, max_h)
-        result = subprocess.run(
+        result = run_hidden(
             [
                 ffmpeg, "-y",
                 "-ss", "0.5",
