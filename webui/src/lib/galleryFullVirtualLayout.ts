@@ -190,12 +190,13 @@ export function buildGalleryFullVirtualLayout(opts: {
     rowStartY = y;
   };
 
+  if (folderItems.length > 0 && col > 0) {
+    y = rowStartY + cellSize + gapPx;
+    col = 0;
+    rowStartY = y;
+  }
+
   for (const folder of folderItems) {
-    if (col > 0) {
-      y = rowStartY + cellSize + gapPx;
-      col = 0;
-      rowStartY = y;
-    }
     entries.push({
       item: folder,
       index: entryIndex++,

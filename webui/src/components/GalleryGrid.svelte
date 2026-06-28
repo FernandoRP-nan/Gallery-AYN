@@ -51,6 +51,7 @@
   export let dragOverDestPath: string | null;
   export let draggedDestIdx: number | null = null;
   export let destinationsMode: boolean;
+  export let galleryTileDragEnabled = false;
   export let galleryFloatChromeActive = false;
   export let galleryBusy = false;
   export let galleryScrolling = false;
@@ -95,6 +96,7 @@
   export let destTree: import("../lib/itemTree").TreeNode[] = [];
   export let destTreeHasTargets = false;
   export let onMoveSectionFolderToDest: (folderPath: string, destPath: string, sectionLabel: string) => void = () => {};
+  export let onGroupSelectionInFolder: () => void = () => {};
   export let messSuggestionsMasonry = true;
   export let galleryMasonryView = false;
   export let galleryMasonryTightSpacing = false;
@@ -872,6 +874,13 @@
     {#if galleryFloatChromeActive}
       <div class="selection-float-rail">
         <div class="selection-float selection-float--gallery-tr app-chrome" role="toolbar" aria-label={t("selection.toolbarGalleryAria")}>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--mini"
+            disabled={selectionCount === 0}
+            title={t("selection.groupInFolder")}
+            on:click={onGroupSelectionInFolder}
+          >{t("selection.groupInFolder")}</button>
           <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={selectPage}>{t("selection.page")}</button>
           <button type="button" class="om-btn om-btn--ghost om-btn--mini" on:click={clearSelection}>{t("selection.remove")}</button>
           <button
@@ -916,6 +925,7 @@
               {showThumbLabels}
               {galleryScrolling}
               {galleryBusy}
+              tileDragEnabled={galleryTileDragEnabled}
               {navigateToFolder}
               {onSectionFolderDrop}
               groupByFolder={layoutMode === "grouped"}
@@ -948,9 +958,10 @@
                 {galleryRangeSuppressClick}
                 {galleryRangeDraftSelectedSet}
                 {showThumbLabels}
-                {galleryScrolling}
-                {galleryBusy}
-                {navigateToFolder}
+              {galleryScrolling}
+              {galleryBusy}
+              tileDragEnabled={galleryTileDragEnabled}
+              {navigateToFolder}
                 {onSectionFolderDrop}
                 groupByFolder={layoutMode === "grouped"}
                 galleryRootFolder={galleryTargetFolder}
@@ -982,9 +993,10 @@
                         {galleryRangeSuppressClick}
                         {galleryRangeDraftSelectedSet}
                         {showThumbLabels}
-                        {galleryScrolling}
-                        {galleryBusy}
-                        {navigateToFolder}
+              {galleryScrolling}
+              {galleryBusy}
+              tileDragEnabled={galleryTileDragEnabled}
+              {navigateToFolder}
                         {onSectionFolderDrop}
                         groupByFolder={layoutMode === "grouped"}
                         galleryRootFolder={galleryTargetFolder}
@@ -1028,6 +1040,7 @@
             {showThumbLabels}
             {galleryScrolling}
             {galleryBusy}
+            tileDragEnabled={galleryTileDragEnabled}
             {navigateToFolder}
             {onSectionFolderDrop}
             groupByFolder={layoutMode === "grouped"}

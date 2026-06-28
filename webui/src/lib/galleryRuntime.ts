@@ -20,6 +20,8 @@ import {
   stripHqFromGalleryItems,
 } from "./galleryThumbHqCache";
 import { galleryDbg, logGallerySelectionDelta } from "./galleryDebugLog";
+import { reorderGalleryItemsByLayout } from "./galleryLayoutOrder";
+import type { GalleryLayoutSpan } from "./galleryFullVirtualLayout";
 
 export type GalleryMutationResponse = {
   state?: GalleryState;
@@ -68,6 +70,20 @@ export function getGalleryItems(): GalleryItem[] {
 
 export function getGalleryState(): GalleryState {
   return get(galleryState);
+}
+
+function layoutReorderFromState(state: GalleryState | undefined, items: GalleryItem[]): GalleryItem[] {
+  if (!state) return items;
+  const spans = Array.isArray(state.layoutSpans) ? (state.layoutSpans as GalleryLayoutSpan[]) : [];
+  return reorderGalleryItemsByLayout(items, String(state.layoutMode ?? "flat"), spans);
+}
+
+function mergeGalleryItemsByPath(...groups: GalleryItem[][]): GalleryItem[] {
+  const byPath = new Map<string, GalleryItem>();
+  for (const group of groups) {
+    for (const it of group) byPath.set(it.path, it);
+  }
+  return [...byPath.values()];
 }
 
 export function setGalleryPayload(state: GalleryState, nextItems: GalleryItem[]) {
@@ -141,15 +157,21 @@ export function appendGalleryItemsFromApi(
     return;
   }
   const next = stripHqFromGalleryItems([...prevItems, ...appended]);
-  galleryItems.set(next);
-  logGallerySelectionDelta("window:append", prevItems, next, { appendCount: appended.length });
+  const folders = next.filter((it) => it.kind === "folder" || it.kind === "folder_up");
+  const body = layoutReorderFromState(
+    state,
+    next.filter((it) => it.kind !== "folder" && it.kind !== "folder_up"),
+  );
+  const finalItems = [...folders, ...body];
+  galleryItems.set(finalItems);
+  logGallerySelectionDelta("window:append", prevItems, finalItems, { appendCount: appended.length });
   if (state) {
-    galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(next) });
+    galleryState.set({ ...state, selectedCount: countSelectedGalleryItems(finalItems) });
     galleryDbg("window", "ventana ampliada (append)", {
       windowStart: state.windowStart ?? 0,
       endIndex: state.endIndex ?? 0,
       appendCount: appended.length,
-      itemCount: next.length,
+      itemCount: finalItems.length,
     });
   } else {
     syncSelectedCountFromItems();
@@ -186,7 +208,13 @@ export function applySlidingWindowTrim(state?: GalleryState): number {
   if (removedPaths.length === 0 && ws === prevWs) return 0;
 
   if (removedPaths.length > 0) removeGalleryThumbHq(new Set(removedPaths));
-  const next = stripHqFromGalleryItems(kept);
+  const trimmed = stripHqFromGalleryItems(kept);
+  const folders = trimmed.filter((it) => it.kind === "folder" || it.kind === "folder_up");
+  const body = layoutReorderFromState(
+    st,
+    trimmed.filter((it) => it.kind !== "folder" && it.kind !== "folder_up"),
+  );
+  const next = [...folders, ...body];
   galleryItems.set(next);
   const selectedRemoved = removedPaths.filter((p) =>
     prev.some((x) => x.path === p && isGallerySelectableKind(x.kind) && x.selected),
@@ -239,7 +267,13 @@ export function applySlidingWindowTrimFromEnd(state?: GalleryState): number {
   if (removedPaths.length === 0 && end === prevEnd) return 0;
 
   if (removedPaths.length > 0) removeGalleryThumbHq(new Set(removedPaths));
-  const next = stripHqFromGalleryItems(kept);
+  const trimmed = stripHqFromGalleryItems(kept);
+  const folders = trimmed.filter((it) => it.kind === "folder" || it.kind === "folder_up");
+  const body = layoutReorderFromState(
+    st,
+    trimmed.filter((it) => it.kind !== "folder" && it.kind !== "folder_up"),
+  );
+  const next = [...folders, ...body];
   galleryItems.set(next);
   const selectedRemoved = removedPaths.filter((p) =>
     prev.some((x) => x.path === p && isGallerySelectableKind(x.kind) && x.selected),
@@ -318,7 +352,8 @@ export function applyGalleryWindowItems(windowItems: GalleryItem[], state?: Gall
   );
   seedGalleryThumbHqFromItems(windowItems);
   const windowMerged = enrichItemsFromVisitedCache(prevItems, windowItems);
-  const next = stripHqFromGalleryItems([...prefix, ...windowMerged]);
+  const body = layoutReorderFromState(state, windowMerged);
+  const next = stripHqFromGalleryItems([...prefix, ...body]);
   galleryItems.set(next);
   logGallerySelectionDelta("window:replace", prevItems, next, {
     windowStart: state?.windowStart ?? 0,
@@ -355,17 +390,13 @@ export function applyGalleryWindowExpand(
   const prefix = prevItems.filter(
     (it) => it.kind === "folder" || it.kind === "folder_up",
   );
-  const media = prevItems.filter(
-    (it) =>
-      it.kind !== "folder" &&
-      it.kind !== "folder_up" &&
-      it.kind !== "section" &&
-      it.kind !== "day_break",
-  );
+  const body = prevItems.filter((it) => it.kind !== "folder" && it.kind !== "folder_up");
   seedGalleryThumbHqFromItems([...prep, ...app]);
   const prepMerged = enrichItemsFromVisitedCache(prevItems, prep);
   const appMerged = enrichItemsFromVisitedCache(prevItems, app);
-  const next = stripHqFromGalleryItems([...prefix, ...prepMerged, ...media, ...appMerged]);
+  const merged = mergeGalleryItemsByPath(body, prepMerged, appMerged);
+  const reordered = layoutReorderFromState(state, merged);
+  const next = stripHqFromGalleryItems([...prefix, ...reordered]);
   galleryItems.set(next);
   logGallerySelectionDelta("window:expand", prevItems, next, {
     prependCount: prep.length,

@@ -1,6 +1,8 @@
 """Lógica de escaneo y búsqueda de archivos."""
 
 from pathlib import Path
+
+from .gallery_paths import natural_sort_key, path_natural_sort_key
 from .media_organizer import MediaOrganizer
 
 # Extensiones multimedia para la galería
@@ -18,7 +20,7 @@ def list_subdirs(root: Path) -> list[Path]:
                     out.append(p)
     except OSError:
         pass
-    out.sort(key=lambda x: str(x).lower())
+    out.sort(key=path_natural_sort_key)
     return out
 
 def scan_media_flat(root: Path, extensions: frozenset[str] | None = None) -> list[Path]:
@@ -53,8 +55,8 @@ def sort_paths(paths: list[Path], mode: str) -> list[Path]:
     if m in ("mtime", "date", "fecha"):
         def key(p: Path) -> tuple:
             try:
-                return (p.stat().st_mtime_ns, str(p).lower())
+                return (p.stat().st_mtime_ns, natural_sort_key(str(p)))
             except OSError:
-                return (0, str(p).lower())
+                return (0, natural_sort_key(str(p)))
         return sorted(paths, key=key)
-    return sorted(paths, key=lambda x: str(x).lower())
+    return sorted(paths, key=path_natural_sort_key)

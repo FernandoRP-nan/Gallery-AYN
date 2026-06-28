@@ -54,6 +54,8 @@
   }>();
 
   export let destinationsMode = false;
+  export let groupByFolder = false;
+  export let galleryTileDragEnabled = false;
   export let timelineView = false;
   export let galleryMasonryView = false;
   export let galleryMasonryTightSpacing = false;
@@ -99,6 +101,7 @@
   export let destTree: import("../lib/itemTree").TreeNode[] = [];
   export let destTreeHasTargets = false;
   export let onMoveSectionFolderToDest: (folderPath: string, destPath: string, sectionLabel: string) => void = () => {};
+  export let onGroupSelectionInFolder: () => void = () => {};
 
   export let galleryScrollEl: HTMLDivElement | null = null;
   export let galleryGridEl: HTMLDivElement | null = null;
@@ -984,6 +987,7 @@
     {onDestChipDragEnd}
     {onDestDrop}
     {destinationsMode}
+    {galleryTileDragEnabled}
     {galleryMasonryView}
     {galleryMasonryTightSpacing}
     {unlimitedScroll}
@@ -1003,6 +1007,7 @@
     {destTree}
     {destTreeHasTargets}
     {onMoveSectionFolderToDest}
+    {onGroupSelectionInFolder}
   />
 </div>
 

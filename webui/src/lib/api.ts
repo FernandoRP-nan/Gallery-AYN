@@ -150,6 +150,10 @@ const devMockApi: WebApi = {
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
   }),
+  destination_move_paths_new_folder: async () => ({
+    ...mockGalleryPayload(),
+    moveResult: { moved: 0, errors: 0, destFolder: "" },
+  }),
   destination_move_folder: async () => ({
     ...mockGalleryPayload(),
     moveResult: { moved: 0, errors: 0 },
@@ -296,6 +300,8 @@ export const bridge = {
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMovePaths: (paths: string[], destPath: string) =>
     call<any>("destination_move_paths", paths, destPath),
+  destinationMovePathsNewFolder: (paths: string[], parentPath: string, folderName: string) =>
+    call<any>("destination_move_paths_new_folder", paths, parentPath, folderName),
   destinationMoveFolder: (folderPath: string, destPath: string) =>
     call<any>("destination_move_folder", normalizePathForApi(folderPath), destPath),
   destinationMoveFromPreview: (paths: string[]) => call<any>("destination_move_from_preview", paths),

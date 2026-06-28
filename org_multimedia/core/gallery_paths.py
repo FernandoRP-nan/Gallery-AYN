@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -14,6 +15,24 @@ GALLERY_MEDIA_EXTENSIONS: frozenset[str] = frozenset(
 )
 
 
+def natural_sort_key(text: str) -> tuple:
+    """Clave de orden numérico natural (p. ej. img2 antes que img10)."""
+    parts = re.split(r"(\d+)", str(text).casefold())
+    key: list[tuple[int, int | str]] = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part))
+    return tuple(key)
+
+
+def path_natural_sort_key(path: Path) -> tuple:
+    return natural_sort_key(str(path))
+
+
 def list_subdirs(root: Path) -> list[Path]:
     out: list[Path] = []
     try:
@@ -22,7 +41,7 @@ def list_subdirs(root: Path) -> list[Path]:
                 out.append(p)
     except OSError:
         pass
-    out.sort(key=lambda x: str(x).lower())
+    out.sort(key=path_natural_sort_key)
     return out
 
 
@@ -43,7 +62,7 @@ def list_subdirs_recursive(root: Path) -> list[Path]:
             out.append(p)
     except OSError:
         pass
-    out.sort(key=lambda x: str(x.relative_to(base)).lower())
+    out.sort(key=lambda p: natural_sort_key(str(p.relative_to(base))))
     return out
 
 
@@ -67,7 +86,7 @@ def scan_images_flat(root: Path, image_extensions: frozenset[str] | None = None)
                 out.append(p)
     except OSError:
         pass
-    out.sort(key=lambda x: str(x).lower())
+    out.sort(key=path_natural_sort_key)
     return out
 
 
@@ -81,7 +100,7 @@ def scan_images_recursive(root: Path, image_extensions: frozenset[str] | None = 
                 out.append(p)
     except OSError:
         pass
-    out.sort(key=lambda x: str(x).lower())
+    out.sort(key=path_natural_sort_key)
     return out
 
 
@@ -111,7 +130,7 @@ def scan_media_recursive(root: Path, extensions: frozenset[str] | None = None) -
                 out.append(p)
     except OSError:
         pass
-    out.sort(key=lambda x: str(x).lower())
+    out.sort(key=path_natural_sort_key)
     return out
 
 
@@ -144,7 +163,7 @@ def sort_image_paths(paths: list[Path], mode: str, *, stat_workers: int | None =
     Criterios:
       - `type`: Agrupa videos primero y luego imágenes (o viceversa). 0 para imágenes, 1 para videos.
       - `mtime`/`date`/`fecha`: Fecha de modificación (de menor a mayor).
-      - `name`: Nombre del archivo / ruta completa (case insensitive).
+      - `name`: Nombre / ruta con orden numérico natural (img2 antes que img10).
     """
     # Procesar la lista de prioridades de ordenamiento y su dirección
     raw_modes = [x.strip().lower() for x in (mode or "name").split(",")]
@@ -215,7 +234,8 @@ def sort_image_paths(paths: list[Path], mode: str, *, stat_workers: int | None =
             result.sort(key=get_type)
         elif sk == "name":
             def get_name(p: Path, _desc=is_desc):
-                return str(p).lower()
+                return natural_sort_key(str(p))
+
             result.sort(key=get_name, reverse=is_desc)
 
     return result

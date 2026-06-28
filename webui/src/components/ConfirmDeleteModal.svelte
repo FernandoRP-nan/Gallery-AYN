@@ -12,8 +12,11 @@
   /** Enlace bidireccional con el estado del checkbox en el padre */
   export let bypassChecked = false;
 
+  /** Etiqueta opcional de acción secundaria (p. ej. mover en carpeta nueva). */
+  export let secondaryLabel = "";
   export let onClose: () => void;
   export let onConfirm: () => void | Promise<void>;
+  export let onSecondary: (() => void | Promise<void>) | null = null;
 </script>
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -54,6 +57,9 @@
     {/if}
     <div class="settings-actions">
       <button type="button" class="om-btn om-btn--ghost" on:click={onClose}>{t("common.cancel")}</button>
+      {#if secondaryLabel && onSecondary}
+        <button type="button" class="om-btn" on:click={() => void onSecondary()}>{secondaryLabel}</button>
+      {/if}
       <button type="button" class="om-btn om-btn--primary" on:click={() => void onConfirm()}>{confirmLabel}</button>
     </div>
   </div>

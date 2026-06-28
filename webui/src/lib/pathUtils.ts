@@ -10,6 +10,25 @@ function repairMojibake(raw: string): string {
   }
 }
 
+const INVALID_FOLDER_NAME = /[\\/:*?"<>|]/;
+
+/** Nombre de carpeta válido para crear en el destino (sin separadores de ruta). */
+export function isValidFolderName(raw: string): boolean {
+  const name = String(raw ?? "").trim();
+  if (!name || name === "." || name === "..") return false;
+  return !INVALID_FOLDER_NAME.test(name);
+}
+
+/** Une una carpeta base con un nombre hijo respetando el separador predominante. */
+export function joinChildPath(base: string, childName: string): string {
+  const parent = normalizePathForApi(base).replace(/[/\\]+$/, "");
+  const child = String(childName ?? "").trim();
+  if (!parent) return child;
+  if (!child) return parent;
+  const sep = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
+  return `${parent}${sep}${child}`;
+}
+
 /** Normaliza rutas antes de enviarlas al backend (NFC + mojibake). */
 export function normalizePathForApi(raw: string): string {
   let s = String(raw ?? "").trim();

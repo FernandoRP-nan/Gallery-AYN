@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pathlib import Path
 
-from ..core.fs_utils import ensure_unique_destination
+from ..core.fs_utils import ensure_unique_destination, ensure_unique_folder_path
 
 from ..core.gallery_images import make_thumbnail_photoimage
 
@@ -237,6 +237,22 @@ class DestinationsBridgeMixin:
         else:
             data = self.gallery_reindex_delta(moved_paths)
         data["moveResult"] = {"moved": moved, "errors": errors}
+        return data
+
+    def destination_move_paths_new_folder(
+        self, src_paths: list[str], parent_path: str, folder_name: str
+    ) -> dict:
+        """Mueve rutas a una subcarpeta nueva (sufijo (n) si el nombre ya existe)."""
+        raw_name = str(folder_name or "").strip()
+        if not raw_name:
+            raise ValueError("El nombre de carpeta no puede estar vacío.")
+        if any(c in raw_name for c in '\\/:*?"<>|'):
+            raise ValueError("Nombre de carpeta no válido.")
+        parent = Path(str(parent_path or "").strip()).expanduser().resolve()
+        dest_dir = ensure_unique_folder_path(parent, raw_name)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        data = self.destination_move_paths(src_paths, str(dest_dir))
+        data["moveResult"]["destFolder"] = str(dest_dir)
         return data
 
     def destination_move_folder(self, src_folder_path: str, dest_path: str) -> dict:

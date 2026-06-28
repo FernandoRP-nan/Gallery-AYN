@@ -14,6 +14,12 @@ export const es = {
     bypassMoveFullscreen: "No volver a preguntar en esta sesión de fullscreen",
     moveSelectionTitle: "Mover selección",
     moveSelectionDetail: "¿Mover {count} imágenes al destino seleccionado?",
+    moveAsFolder: "Mover como carpeta",
+    moveAsFolderTitle: "Nueva carpeta en destino",
+    moveAsFolderDetail:
+      "Introduce el nombre de la carpeta. Si ya existe en esa ruta, se usará un sufijo (1), (2), etc.",
+    moveAsFolderPlaceholder: "Nombre de carpeta",
+    moveAsFolderInvalidName: "Nombre de carpeta no válido.",
     moveFolderTitle: "Mover carpeta",
     moveFolderDetail: "¿Mover la carpeta «{folder}» al destino seleccionado? Se moverá con todo su contenido.",
     moveImageTitle: "Mover imagen",
@@ -120,6 +126,7 @@ export const es = {
   },
   selection: {
     toolbarGalleryAria: "Selección",
+    groupInFolder: "Agrupar en carpeta",
     page: "Pág.",
     remove: "Quitar",
     delete: "Eliminar",
@@ -577,7 +584,7 @@ export const es = {
     groupByFolderHint:
       "Muestra subcarpetas (también anidadas) como secciones en la misma vista. Arrastra con Ctrl (modo Edición) sobre el encabezado de otra sección para mover.",
     sortLabel: "Ordenar",
-    sortName: "Nombre",
+    sortName: "Nombre (numérico)",
     sortDate: "Fecha (modificación)",
     sortCreated: "Fecha (creación)",
     sortType: "Tipo (archivo)",

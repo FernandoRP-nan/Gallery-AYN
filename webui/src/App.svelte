@@ -9,7 +9,7 @@
   import { applyGalleryPerfConfig, galleryPerfFromSettings, getGalleryPerfConfig } from "./lib/galleryPerfConfig";
   import { setGalleryDebugLogEnabled, galleryDbg, setGalleryDebugFilters, normalizeGalleryDebugFilters, DEFAULT_GALLERY_DEBUG_FILTERS, logGallerySelectionDelta, type GalleryDebugFilters } from "./lib/galleryDebugLog";
   import { t } from "./lib/i18n";
-  import { normalizePathForApi, buildMediaFileUrl } from "./lib/pathUtils";
+  import { normalizePathForApi, buildMediaFileUrl, isValidFolderName } from "./lib/pathUtils";
   import { copyTextToClipboard } from "./lib/clipboardText";
   import { mergePreviewApiResult } from "./lib/previewUtils";
   import {
@@ -292,7 +292,7 @@
   let galleryMasonryView = false;
   let galleryMasonryTightSpacing = false;
   let gallerySortMode = "name,mtime,type";
-  /** Resaltado al arrastrar sobre encabezado de sección (agrupar por carpeta). */
+  $: galleryTileDragEnabled = destinationsMode || (groupByFolder && !galleryMasonryView);
   let dragOverSectionPath: string | null = null;
   let settingsOpen = false;
   let thumbsPerPage = 48;
@@ -948,6 +948,8 @@
 
   type GalleryMoveJob = GalleryMutationSnapshot & {
     destPath: string;
+    /** Si está definido, crea subcarpeta única bajo destPath (ruta padre). */
+    newFolderName?: string;
   };
 
   type GalleryDeleteJob = GalleryMutationSnapshot;
@@ -1494,6 +1496,8 @@
       bypassEnabled?: boolean;
       bypassLabel?: string;
       bypassSetter?: (enabled: boolean) => void;
+      secondaryLabel?: string;
+      secondaryAction?: () => void | Promise<void>;
     }
   ) {
     confirmDeleteTitle = title;
@@ -1503,6 +1507,8 @@
     confirmDeleteBypassLabel = opts?.bypassLabel ?? t("confirm.bypassOnce");
     confirmDeleteBypassChecked = false;
     confirmDeleteBypassSetter = opts?.bypassSetter ?? null;
+    confirmDeleteSecondaryLabel = opts?.secondaryLabel ?? "";
+    confirmDeleteSecondaryAction = opts?.secondaryAction ?? null;
     confirmDeleteAction = action;
     confirmDeleteOpen = true;
   }
@@ -1513,6 +1519,15 @@
     confirmDeleteBypassEnabled = false;
     confirmDeleteBypassChecked = false;
     confirmDeleteBypassSetter = null;
+    confirmDeleteSecondaryLabel = "";
+    confirmDeleteSecondaryAction = null;
+  }
+
+  async function runConfirmSecondary() {
+    if (!confirmDeleteSecondaryAction) return;
+    const fn = confirmDeleteSecondaryAction;
+    closeConfirmDelete();
+    await fn();
   }
 
   async function runConfirmDelete() {
@@ -2207,7 +2222,9 @@
         const [job, ...rest] = galleryMoveQueue;
         galleryMoveQueue = rest;
         try {
-          const out = await bridge.destinationMovePaths(job.srcPaths, job.destPath);
+          const out = job.newFolderName
+            ? await bridge.destinationMovePathsNewFolder(job.srcPaths, job.destPath, job.newFolderName)
+            : await bridge.destinationMovePaths(job.srcPaths, job.destPath);
           if (!isGalleryNavigationCurrent(job.navGen)) continue;
           const moved = Number(out.moveResult?.moved ?? 0);
           const errors = Number(out.moveResult?.errors ?? 0);
@@ -2247,8 +2264,52 @@
       async () => {
         await moveToDest(destPath);
       },
-      { confirmLabel: t("common.move") }
+      {
+        confirmLabel: t("common.move"),
+        secondaryLabel: t("confirm.moveAsFolder"),
+        secondaryAction: () => openMoveAsFolderModal(destPath),
+      }
     );
+  }
+
+  let moveAsFolderModalOpen = false;
+  let moveAsFolderDestPath = "";
+  let moveAsFolderDraft = "";
+
+  function openMoveAsFolderModal(parentPath: string) {
+    moveAsFolderDestPath = parentPath;
+    moveAsFolderDraft = "";
+    moveAsFolderModalOpen = true;
+  }
+
+  function askGroupSelectionInFolder() {
+    const selectedPaths = getSelectedGalleryPaths();
+    if (selectedPaths.length === 0) {
+      status = t("status.noImagesToMove");
+      return;
+    }
+    if (!folder.trim()) {
+      status = t("status.loadFolderForDrop");
+      return;
+    }
+    openMoveAsFolderModal(folder);
+  }
+
+  function closeMoveAsFolderModal() {
+    moveAsFolderModalOpen = false;
+    moveAsFolderDestPath = "";
+    moveAsFolderDraft = "";
+  }
+
+  async function confirmMoveAsFolder() {
+    const name = moveAsFolderDraft.trim();
+    if (!isValidFolderName(name)) {
+      status = t("confirm.moveAsFolderInvalidName");
+      return;
+    }
+    const parent = moveAsFolderDestPath;
+    closeMoveAsFolderModal();
+    await moveSelectionToNewFolder(parent, name);
   }
 
   function sectionFolderMoveLabel(folderPath: string): string {
@@ -2305,6 +2366,24 @@
     const snapshot = createGalleryMoveJobSnapshot(selectedPaths);
     await applyOptimisticGalleryRemove(snapshot);
     const job: GalleryMoveJob = { ...snapshot, destPath: path };
+    galleryMoveQueue = [...galleryMoveQueue, job];
+    status = t("status.imagesMoving")
+      .replace("{n}", String(selectedPaths.length))
+      .replace("{queue}", String(galleryMoveQueue.length));
+    if (!galleryMoveWorkerRunning) {
+      void processGalleryMoveQueue();
+    }
+  };
+
+  const moveSelectionToNewFolder = async (parentPath: string, folderName: string) => {
+    const selectedPaths = getSelectedGalleryPaths();
+    if (selectedPaths.length === 0) {
+      status = t("status.noImagesToMove");
+      return;
+    }
+    const snapshot = createGalleryMoveJobSnapshot(selectedPaths);
+    await applyOptimisticGalleryRemove(snapshot);
+    const job: GalleryMoveJob = { ...snapshot, destPath: parentPath, newFolderName: folderName };
     galleryMoveQueue = [...galleryMoveQueue, job];
     status = t("status.imagesMoving")
       .replace("{n}", String(selectedPaths.length))
@@ -3576,6 +3655,8 @@
   let confirmDeleteBypassLabel = "No volver a preguntar por ahora";
   let confirmDeleteBypassSetter: ((enabled: boolean) => void) | null = null;
   let confirmDeleteAction: (() => Promise<void>) | null = null;
+  let confirmDeleteSecondaryLabel = "";
+  let confirmDeleteSecondaryAction: (() => void | Promise<void>) | null = null;
 
   /** Menú contextual (clic derecho) en un chip de destino. */
   let destCtxMenu: { x: number; y: number; idx: number; source: "gallery" | "fullscreen" } | null = null;
@@ -3653,9 +3734,14 @@
   }
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
-    if (!destinationsMode || !isGalleryMediaKind(it.kind)) return;
-    // Interacción: solo permitir arrastre cuando Ctrl está presionado.
-    if (galleryRangeSelecting || !(e as DragEvent).ctrlKey) {
+    const groupedRouteDrag = groupByFolder && !galleryMasonryView && !destinationsMode;
+    if ((!destinationsMode && !groupedRouteDrag) || !isGalleryMediaKind(it.kind)) return;
+    if (galleryRangeSelecting) {
+      e.preventDefault();
+      return;
+    }
+    // Modo edición: arrastre con Ctrl. Agrupar por carpeta (vista normal): arrastre directo.
+    if (destinationsMode && !(e as DragEvent).ctrlKey) {
       e.preventDefault();
       return;
     }
@@ -3706,6 +3792,31 @@
     document.addEventListener("dragend", dragWinEnd, dragOpts);
   }
 
+  function resolveDragOrSelectedPaths(e: DragEvent): string[] {
+    const selected = getSelectedGalleryPaths();
+    if (selected.length > 0) return selected;
+    const raw = String(e.dataTransfer?.getData("text/plain") ?? "").trim();
+    return raw ? [raw] : [];
+  }
+
+  async function movePathsToRouteFolder(folderPath: string, paths: string[]) {
+    const fp = normalizePathForApi(folderPath);
+    if (!fp || paths.length === 0) {
+      status = t("status.noImagesToMove");
+      return;
+    }
+    const snapshot = createGalleryMoveJobSnapshot(paths);
+    await applyOptimisticGalleryRemove(snapshot);
+    const job: GalleryMoveJob = { ...snapshot, destPath: fp };
+    galleryMoveQueue = [...galleryMoveQueue, job];
+    status = t("status.imagesMoving")
+      .replace("{n}", String(paths.length))
+      .replace("{queue}", String(galleryMoveQueue.length));
+    if (!galleryMoveWorkerRunning) {
+      void processGalleryMoveQueue();
+    }
+  }
+
   function onSectionFolderDrop(e: DragEvent, folderPath: string) {
     e.preventDefault();
     e.stopPropagation();
@@ -3713,6 +3824,11 @@
     endDragSessionAfterGesture();
     const fp = String(folderPath ?? "").trim();
     if (!fp) return;
+    if (groupByFolder && !galleryMasonryView) {
+      const paths = resolveDragOrSelectedPaths(e);
+      void movePathsToRouteFolder(fp, paths);
+      return;
+    }
     askConfirmMoveSelected(fp);
   }
 
@@ -4385,6 +4501,15 @@
       // Evita que flechas, Supr, espacio u otros atajos actúen sobre la galería/vistas detrás del diálogo.
       return;
     }
+    if (moveAsFolderModalOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMoveAsFolderModal();
+        return;
+      }
+      return;
+    }
     if (pinMarkerOpen) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -4568,6 +4693,7 @@
     else if (galleryItemCtxMenu) closeGalleryItemCtxMenu();
     else if (destPreviewCtxMenu) closeDestPreviewCtxMenu();
     else if (renameModalOpen) closeRenameModal();
+    else if (moveAsFolderModalOpen) closeMoveAsFolderModal();
     else if (galleryFileInfoModal) galleryFileInfoModal = null;
     else if (destCtxMenu) closeDestCtxMenu();
     else if (destFormOpen) closeDestForm();
@@ -4665,6 +4791,8 @@
           bind:thumbGapPx
           bind:showThumbLabels
           {destinationsMode}
+          {groupByFolder}
+          {galleryTileDragEnabled}
           {timelineView}
           {galleryMasonryView}
           {galleryMasonryTightSpacing}
@@ -4699,6 +4827,7 @@
           {destTree}
           {destTreeHasTargets}
           onMoveSectionFolderToDest={askConfirmMoveSectionFolder}
+          onGroupSelectionInFolder={askGroupSelectionInFolder}
         />
 
         {#if previewVisible}
@@ -4820,7 +4949,7 @@
                 onRemove={(path) => void deselectGalleryPath(path)}
               />
             {/if}
-            <div class="preview__meta">{selectedPreview?.path ?? ""}</div>
+            <div class="preview__meta">{selectedPreview?.name ?? ""}</div>
           </aside>
         {/if}
       </section>
@@ -5203,6 +5332,47 @@
     />
   {/if}
 
+  {#if moveAsFolderModalOpen}
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <div class="overlay overlay--dim overlay--confirm" role="presentation" on:click|self={closeMoveAsFolderModal}>
+      <div
+        class="modal modal--confirm om-panel om-panel--lift"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="move-as-folder-title"
+        tabindex="-1"
+        on:click|stopPropagation
+      >
+        <header class="modal__head">
+          <strong id="move-as-folder-title">{t("confirm.moveAsFolderTitle")}</strong>
+          <button
+            type="button"
+            class="om-btn om-btn--ghost om-btn--close"
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            on:click={closeMoveAsFolderModal}>✕</button
+          >
+        </header>
+        <p class="settings-hint">{t("confirm.moveAsFolderDetail")}</p>
+        <label class="field-label" for="move-as-folder-input">{t("confirm.moveAsFolderPlaceholder")}</label>
+        <input
+          id="move-as-folder-input"
+          class="om-input"
+          type="text"
+          bind:value={moveAsFolderDraft}
+          on:keydown={(e) => {
+            if (e.key === "Enter") void confirmMoveAsFolder();
+            if (e.key === "Escape") closeMoveAsFolderModal();
+          }}
+        />
+        <div class="settings-actions">
+          <button type="button" class="om-btn om-btn--ghost" on:click={closeMoveAsFolderModal}>{t("common.cancel")}</button>
+          <button type="button" class="om-btn om-btn--primary" on:click={() => void confirmMoveAsFolder()}>{t("common.move")}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if renameModalOpen}
     <!-- svelte-ignore a11y-click-events-have-key-events -->
     <div class="overlay overlay--dim overlay--confirm" role="presentation" on:click|self={closeRenameModal}>
@@ -5401,6 +5571,8 @@
       bypassEnabled={confirmDeleteBypassEnabled}
       bypassLabel={confirmDeleteBypassLabel}
       bind:bypassChecked={confirmDeleteBypassChecked}
+      secondaryLabel={confirmDeleteSecondaryLabel}
+      onSecondary={confirmDeleteSecondaryAction ? runConfirmSecondary : null}
       onClose={closeConfirmDelete}
       onConfirm={runConfirmDelete}
     />

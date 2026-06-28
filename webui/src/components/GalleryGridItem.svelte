@@ -26,6 +26,7 @@
   export let showThumbLabels: boolean;
   export let galleryScrolling: boolean;
   export let galleryBusy: boolean;
+  export let tileDragEnabled = false;
   export let groupByFolder = false;
   export let galleryRootFolder = "";
   export let destTree: TreeNode[] = [];
@@ -134,7 +135,7 @@
         : Boolean(it.selected))
     }
     {style}
-    draggable={isGalleryMediaKind(it.kind) && !galleryRangeSelecting}
+    draggable={isGalleryMediaKind(it.kind) && !galleryRangeSelecting && tileDragEnabled}
     on:pointerdown={(e) => onGalleryTilePointerDown(e, it)}
     on:pointerenter={() => onGalleryTilePointerEnter(it.path)}
     on:dragstart={(e) => onTileDragStart(e, it)}

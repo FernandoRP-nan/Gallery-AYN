@@ -29,6 +29,7 @@ from ..core.gallery_paths import (
     grouped_section_label,
     list_subdirs,
     list_subdirs_recursive,
+    path_natural_sort_key,
     scan_images_flat,
     scan_media_flat,
     scan_media_recursive,
@@ -203,7 +204,7 @@ def _folder_preview_thumbs(
                 candidates.append(p)
     except OSError:
         return []
-    candidates.sort(key=lambda x: str(x).lower())
+    candidates.sort(key=path_natural_sort_key)
     urls: list[str | None] = []
     for p in candidates[:count]:
         ext = p.suffix.lower()
