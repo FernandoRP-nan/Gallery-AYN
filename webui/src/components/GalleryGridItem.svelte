@@ -41,6 +41,7 @@
   export let clickItem: (it: any) => void;
   export let openZoomFromGallery: (it: any) => void;
   export let onGalleryItemContextMenu: (e: MouseEvent, it: any) => void;
+  export let onFolderTileDrop: (e: DragEvent, folderPath: string) => void = () => {};
 
   $: sectionDisplay = groupedSectionDisplay(String(it.name ?? ""));
   $: isAlphaSection = it.path.includes("section:alpha:");
@@ -139,10 +140,20 @@
         : Boolean(it.selected))
     }
     {style}
-    draggable={isGalleryMediaKind(it.kind) && !galleryRangeSelecting && tileDragEnabled}
+    draggable={isGallerySelectableKind(it.kind) && !galleryRangeSelecting && tileDragEnabled}
     on:pointerdown={(e) => onGalleryTilePointerDown(e, it)}
     on:pointerenter={() => onGalleryTilePointerEnter(it.path)}
     on:dragstart={(e) => onTileDragStart(e, it)}
+    on:dragover|preventDefault={(e) => {
+      if (it.kind === "folder" && e.dataTransfer) {
+        e.dataTransfer.dropEffect = "move";
+      }
+    }}
+    on:drop={(e) => {
+      if (it.kind === "folder") {
+        onFolderTileDrop(e, it.path);
+      }
+    }}
     on:click={() => {
       if (galleryRangeSuppressClick) return;
       clickItem(it);

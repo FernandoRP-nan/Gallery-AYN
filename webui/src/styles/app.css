@@ -683,10 +683,10 @@
     content: "";
     position: absolute;
     inset: 0;
-    z-index: 0;
+    z-index: 2; /* Capa sobre la imagen para aplicar el tinte */
     pointer-events: none;
     background: color-mix(in oklab, var(--om-accent) 24%, #8fc0ff);
-    opacity: 0.9;
+    opacity: 0.35;
   }
 .gallery--range-selecting .tile,
   .gallery--range-selecting .tile.selected img,
@@ -709,11 +709,14 @@
   }
 .tile.selected img,
   .tile.selected .folder-ph,
+  .tile.selected .folder-mosaic,
   .tile.selected .thumb-stack__lq,
   .tile.selected .thumb-stack__hq {
     transform: scale(0.9);
     transform-origin: center;
     transition: transform var(--om-transition);
+    /* Filtro de color azul para destacar la selección */
+    filter: sepia(0.35) hue-rotate(168deg) saturate(1.85) contrast(1.1) brightness(0.95);
   }
 .tile img {
     width: 100%;

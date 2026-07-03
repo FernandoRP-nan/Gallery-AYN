@@ -151,6 +151,7 @@ const devMockApi: WebApi = {
     error: "Solo disponible con la app Python (PyWebView).",
   }),
   gallery_open_external: async () => ({ ok: true }),
+  gallery_show_in_explorer: async () => ({ ok: true }),
   gallery_file_base64: async () => ({
     dataUrl: null as string | null,
     error: null as string | null,
@@ -321,6 +322,7 @@ export const bridge = {
   galleryVideoPlaybackBlob: (path: string) =>
     call<any>("gallery_video_playback_blob", normalizePathForApi(path)),
   galleryOpenExternal: (path: string) => call<any>("gallery_open_external", normalizePathForApi(path)),
+  galleryShowInExplorer: (path: string) => call<any>("gallery_show_in_explorer", normalizePathForApi(path)),
   galleryFileBase64: (path: string) => call<any>("gallery_file_base64", path),
   galleryCopyToClipboard: (path: string) => call<any>("gallery_copy_to_clipboard", path),
   galleryCopyTextToClipboard: (text: string) => call<any>("gallery_copy_text_to_clipboard", text),

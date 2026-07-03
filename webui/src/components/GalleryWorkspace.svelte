@@ -78,6 +78,7 @@
   export let openZoomFromGallery: (it: GalleryItem) => void;
   export let onGalleryItemContextMenu: (e: MouseEvent, it: GalleryItem) => void;
   export let onSectionFolderDrop: (e: DragEvent, folder: string) => void;
+  export let onFolderTileDrop: (e: DragEvent, folderPath: string) => void = () => {};
   export let onTileDragStart: (e: DragEvent, it: GalleryItem) => void;
   export let openConfirmDelete: (
     title: string,
@@ -966,6 +967,7 @@
     {onGalleryScroll}
     onGalleryScrollPointerMove={onGalleryScrollPointerMove}
     {onSectionFolderDrop}
+    {onFolderTileDrop}
     {navigateToFolder}
     {isGalleryTileSelected}
     {isGalleryMediaKind}

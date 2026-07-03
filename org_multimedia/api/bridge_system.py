@@ -310,3 +310,61 @@ class SystemBridgeMixin:
             return {"ok": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def gallery_show_in_explorer(self, path: str) -> dict:
+        """Abre el explorador de archivos del sistema y resalta/muestra el elemento especificado."""
+        import subprocess
+        import sys
+        from pathlib import Path
+        from ..core.fs_path import resolve_file_path, resolve_dir_path
+        from ..core.win_subprocess import popen_hidden
+
+        p = None
+        try:
+            p = resolve_file_path(path)
+        except Exception:
+            try:
+                p = resolve_dir_path(path)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        if p is None or not p.exists():
+            return {"ok": False, "error": "El archivo o carpeta no existe"}
+
+        abs_path = str(p.resolve())
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.run(["explorer.exe", "/select,", abs_path], check=False)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", "-R", abs_path], check=False)
+            else:
+                # En Linux (Dolphin / Nautilus) intentamos usar DBus para seleccionar el archivo
+                file_url = p.resolve().as_uri()
+                try:
+                    res = subprocess.run([
+                        "dbus-send",
+                        "--session",
+                        "--print-reply",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems",
+                        f"array:string:{file_url}",
+                        "string:"
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                    if res.returncode == 0:
+                        return {"ok": True}
+                except Exception:
+                    pass
+
+                # Fallback: abrir la carpeta contenedora si es un archivo, o la carpeta misma si es directorio
+                target_dir = abs_path if p.is_dir() else str(p.parent)
+                popen_hidden(
+                    ["xdg-open", target_dir],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}

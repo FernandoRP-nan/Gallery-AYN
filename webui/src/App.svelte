@@ -2276,7 +2276,7 @@
   }
 
   function getSelectedGalleryPaths(): string[] {
-    return getGalleryItems().filter((x) => isGalleryMediaKind(x.kind) && x.selected).map((x) => x.path);
+    return getGalleryItems().filter((x) => isGallerySelectableKind(x.kind) && x.selected).map((x) => x.path);
   }
 
   function askConfirmMoveSelected(destPath: string) {
@@ -3762,7 +3762,7 @@
 
   function onTileDragStart(e: DragEvent, it: GalleryItem) {
     const groupedRouteDrag = groupByFolder && !galleryMasonryView && !destinationsMode;
-    if ((!destinationsMode && !groupedRouteDrag) || !isGalleryMediaKind(it.kind)) return;
+    if ((!destinationsMode && !groupedRouteDrag) || !isGallerySelectableKind(it.kind)) return;
     if (galleryRangeSelecting) {
       e.preventDefault();
       return;
@@ -3857,6 +3857,51 @@
       return;
     }
     askConfirmMoveSelected(fp);
+  }
+
+  // Maneja cuando se suelta un arrastre sobre una carpeta de la rejilla
+  async function onFolderTileDrop(e: DragEvent, folderPath: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    ignoreDestCardClickUntil = Date.now() + 450;
+    endDragSessionAfterGesture();
+    const fp = String(folderPath ?? "").trim();
+    if (!fp) return;
+    const paths = resolveDragOrSelectedPaths(e);
+    if (paths.length === 0) return;
+
+    // Solo mover si e.ctrlKey está presionado (para mover elementos a carpetas con Ctrl)
+    if (e.ctrlKey) {
+      await movePathsToFolderTile(fp, paths);
+    }
+  }
+
+  // Mueve una lista de rutas (archivos o carpetas) a la carpeta destino especificada
+  async function movePathsToFolderTile(folderPath: string, paths: string[]) {
+    const fp = normalizePathForApi(folderPath);
+    if (!fp || paths.length === 0) return;
+
+    // Evita mover una carpeta dentro de sí misma o de un descendiente
+    const validPaths = paths.filter((p) => {
+      const pNorm = normalizePathForApi(p);
+      return pNorm !== fp && !fp.startsWith(pNorm + "/");
+    });
+
+    if (validPaths.length === 0) {
+      status = "No hay elementos válidos para mover";
+      return;
+    }
+
+    const snapshot = createGalleryMoveJobSnapshot(validPaths);
+    await applyOptimisticGalleryRemove(snapshot);
+    const job: GalleryMoveJob = { ...snapshot, destPath: fp };
+    galleryMoveQueue = [...galleryMoveQueue, job];
+    status = t("status.imagesMoving")
+      .replace("{n}", String(validPaths.length))
+      .replace("{queue}", String(galleryMoveQueue.length));
+    if (!galleryMoveWorkerRunning) {
+      void processGalleryMoveQueue();
+    }
   }
 
   function onDestDrop(e: DragEvent, destPath: string, destIdx: number) {
@@ -4031,6 +4076,20 @@
     closeDestPreviewCtxMenu();
   }
 
+  async function showDestPreviewItemInExplorer() {
+    if (!destPreviewCtxMenu || destPreviewCtxMenu.paths.length === 0) return;
+    const path = destPreviewCtxMenu.primaryPath || destPreviewCtxMenu.paths[0];
+    closeDestPreviewCtxMenu();
+    try {
+      const res = await bridge.galleryShowInExplorer(path);
+      if (!res.ok) {
+        status = res.error || "No se pudo mostrar en el explorador";
+      }
+    } catch (e) {
+      status = e instanceof Error ? e.message : "Error al abrir explorador";
+    }
+  }
+
   async function copyDestPreviewCtxFullImage() {
     if (!destPreviewCtxMenu) return;
     const path = destPreviewCtxMenu.primaryPath;
@@ -4200,6 +4259,20 @@
     closeGalleryItemCtxMenu();
   }
 
+  async function showGalleryItemInExplorer() {
+    if (!galleryItemCtxMenu) return;
+    const path = galleryItemCtxMenu.path;
+    closeGalleryItemCtxMenu();
+    try {
+      const res = await bridge.galleryShowInExplorer(path);
+      if (!res.ok) {
+        status = res.error || "No se pudo mostrar en el explorador";
+      }
+    } catch (e) {
+      status = e instanceof Error ? e.message : "Error al abrir explorador";
+    }
+  }
+
   async function copyGalleryCtxFullImage() {
     if (!galleryItemCtxMenu) return;
     const path = galleryItemCtxMenu.path;
@@ -4315,6 +4388,21 @@
     openPinMarkerModal(p);
   }
 
+  // Muestra el marcador anclado en el explorador de archivos del sistema
+  async function showPinnedInExplorer() {
+    if (!pinnedCtxMenu) return;
+    const path = pinnedCtxMenu.path;
+    closePinnedCtxMenu();
+    try {
+      const res = await bridge.galleryShowInExplorer(path);
+      if (!res.ok) {
+        status = res.error || "No se pudo mostrar en el explorador";
+      }
+    } catch (e) {
+      status = e instanceof Error ? e.message : "Error al abrir explorador";
+    }
+  }
+
   function askUnpinPinnedFromCtx() {
     if (!pinnedCtxMenu) return;
     const p = pinnedCtxMenu.path;
@@ -4407,6 +4495,22 @@
     closeDestCtxMenu();
     if (!node || !isDestNode(node)) return;
     openDestPreview(node.path);
+  }
+
+  // Muestra el destino en el explorador de archivos del sistema
+  async function showDestInExplorer() {
+    if (destCtxMenu === null) return;
+    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
+    closeDestCtxMenu();
+    if (!node || !isDestNode(node)) return;
+    try {
+      const res = await bridge.galleryShowInExplorer(node.path);
+      if (!res.ok) {
+        status = res.error || "No se pudo mostrar en el explorador";
+      }
+    } catch (e) {
+      status = e instanceof Error ? e.message : "Error al abrir explorador";
+    }
   }
 
   async function removeDestFromCtx() {
@@ -4839,6 +4943,7 @@
           {openZoomFromGallery}
           {onGalleryItemContextMenu}
           {onSectionFolderDrop}
+          {onFolderTileDrop}
           {onTileDragStart}
           {openConfirmDelete}
           {deleteSelectedGalleryItems}
@@ -5119,6 +5224,9 @@
       {#if destCtxMenu.source === "gallery"}
         <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openPreviewFromCtx}>{t("menus.viewFolder")}</button>
       {/if}
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={showDestInExplorer}
+        >{t("contextGallery.showInExplorer")}</button
+      >
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditFromCtx}>{t("menus.edit")}</button>
       <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={removeDestFromCtx}
         >{t("menus.delete")}</button
@@ -5139,6 +5247,9 @@
       style={`left:${pinnedCtxMenu.x}px;top:${pinnedCtxMenu.y}px`}
       on:click|stopPropagation
     >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={showPinnedInExplorer}
+        >{t("contextGallery.showInExplorer")}</button
+      >
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditPinnedFromCtx}>{t("menus.edit")}</button>
       <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={askUnpinPinnedFromCtx}
         >{t("menus.unpin")}</button
@@ -5164,6 +5275,9 @@
         <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openRenameFromCtx}
           >{t("contextFolder.rename")}</button
         >
+        <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={showGalleryItemInExplorer}
+          >{t("contextGallery.showInExplorer")}</button
+        >
         <button
           type="button"
           class="dest-ctx-menu__item dest-ctx-menu__item--danger"
@@ -5173,6 +5287,9 @@
       {:else}
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyGalleryCtxPath()}
         >{t("contextGallery.copyPath")}</button
+      >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={showGalleryItemInExplorer}
+        >{t("contextGallery.showInExplorer")}</button
       >
       <button
         type="button"
@@ -5259,6 +5376,9 @@
     >
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void copyDestPreviewCtxPath()}
         >{t("contextGallery.copyPath")}</button
+      >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={showDestPreviewItemInExplorer}
+        >{t("contextGallery.showInExplorer")}</button
       >
       <button
         type="button"

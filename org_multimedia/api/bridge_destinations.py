@@ -219,7 +219,8 @@ class DestinationsBridgeMixin:
             for raw in unique_raw:
                 try:
                     src = Path(raw).expanduser().resolve()
-                    if not src.is_file():
+                    # Soporta archivos y carpetas
+                    if not src.exists():
                         continue
                     target = ensure_unique_destination(dest_dir / src.name)
                     if src.resolve() == target.resolve():

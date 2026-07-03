@@ -659,6 +659,7 @@ export const es = {
     movedOk: "Archivo movido",
     moveFailed: "No se pudo mover el archivo",
     openExternal: "Abrir con reproductor del sistema",
+    showInExplorer: "Mostrar en explorador de archivos",
     rename: "Cambiar nombre…",
     renameTitle: "Cambiar nombre",
     renameFolderTitle: "Renombrar carpeta",

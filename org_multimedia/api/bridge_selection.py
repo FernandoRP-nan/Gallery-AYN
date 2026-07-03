@@ -212,7 +212,11 @@ class SelectionBridgeMixin:
         with self.lock:
             for src in list(self.selected):
                 try:
-                    if src.is_file():
+                    if src.is_dir():
+                        shutil.rmtree(src)
+                        deleted += 1
+                        deleted_paths.append(str(src))
+                    elif src.is_file():
                         src.unlink()
                         deleted += 1
                         deleted_paths.append(str(src))

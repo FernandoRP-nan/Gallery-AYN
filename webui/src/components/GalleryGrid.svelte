@@ -68,6 +68,7 @@
   export let onGalleryScroll: (e: UIEvent) => void;
   export let onGalleryScrollPointerMove: (e: PointerEvent) => void = () => {};
   export let onSectionFolderDrop: (e: DragEvent, folder: string) => void;
+  export let onFolderTileDrop: (e: DragEvent, folderPath: string) => void = () => {};
   export let navigateToFolder: (path: string, opts: any) => void;
   export let isGalleryMediaKind: (kind: string) => boolean;
   export let onGalleryTilePointerDown: (e: PointerEvent, it: any) => void;
@@ -928,6 +929,7 @@
               tileDragEnabled={galleryTileDragEnabled}
               {navigateToFolder}
               {onSectionFolderDrop}
+              {onFolderTileDrop}
               groupByFolder={layoutMode === "grouped"}
               galleryRootFolder={galleryTargetFolder}
               {destTree}
@@ -963,6 +965,7 @@
               tileDragEnabled={galleryTileDragEnabled}
               {navigateToFolder}
                 {onSectionFolderDrop}
+                {onFolderTileDrop}
                 groupByFolder={layoutMode === "grouped"}
                 galleryRootFolder={galleryTargetFolder}
                 {destTree}
@@ -998,6 +1001,7 @@
               tileDragEnabled={galleryTileDragEnabled}
               {navigateToFolder}
                         {onSectionFolderDrop}
+                        {onFolderTileDrop}
                         groupByFolder={layoutMode === "grouped"}
                         galleryRootFolder={galleryTargetFolder}
                         {destTree}
@@ -1043,6 +1047,7 @@
             tileDragEnabled={galleryTileDragEnabled}
             {navigateToFolder}
             {onSectionFolderDrop}
+            {onFolderTileDrop}
             groupByFolder={layoutMode === "grouped"}
             galleryRootFolder={galleryTargetFolder}
             {destTree}
