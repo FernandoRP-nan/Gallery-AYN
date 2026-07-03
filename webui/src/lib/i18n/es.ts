@@ -517,6 +517,7 @@ export const es = {
       window: "Ventana deslizante",
       selection: "Selección (modo edición)",
       selection_reset: "Reinicio de selección",
+      sort: "Ordenamiento / secciones",
     },
   },
   debug: {
@@ -583,10 +584,20 @@ export const es = {
     groupByFolder: "Agrupar por carpeta",
     groupByFolderHint:
       "Muestra subcarpetas (también anidadas) como secciones en la misma vista. Arrastra con Ctrl (modo Edición) sobre el encabezado de otra sección para mover.",
+    groupByAlpha: "Agrupar por letra / carácter",
+    groupByAlphaHint:
+      "Secciones por paquete de obra: series X(Y) por tomo, «Numerados» unificados, prefijos textuales (ESNM-11, FB_IMG_). Incompatible con agrupar por carpeta o línea de tiempo.",
     sortLabel: "Ordenar",
+    dynamicNameRegex: "Normalizar patrones de nombres (Regex dinámico)",
+    dynamicNameRegexHint:
+      "Analiza los nombres de la carpeta, infiere máscaras (n, (n), etc.) y agrupa por patrón. Desactivado por defecto para mejor rendimiento.",
+    sortNameBase: "Número principal (base)",
+    sortNameSuffix: "Número secundario (paréntesis/sufijo)",
     sortName: "Nombre (numérico)",
     sortDate: "Fecha (modificación)",
     sortCreated: "Fecha (creación)",
+    sortExif: "Fecha (EXIF / captura)",
+    sortExifMonth: "Mes (EXIF)",
     sortType: "Tipo (archivo)",
     sortAsc: "Ascendente",
     sortDesc: "Descendente",

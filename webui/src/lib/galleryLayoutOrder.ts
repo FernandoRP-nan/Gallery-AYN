@@ -22,6 +22,10 @@ function sectionMatchesSpan(sec: GalleryItem, span: GalleryLayoutSpan): boolean 
     const key = String(span.key ?? span.label ?? "");
     return sec.path === `section:timeline:${key}` || sec.name === span.label;
   }
+  if (span.kind === "alpha") {
+    const key = String(span.key ?? span.label ?? "");
+    return sec.path === `section:alpha:${key}` || sec.name === span.label;
+  }
   const key = String(span.key ?? span.label ?? "");
   return sec.path === `section:${key}` || sec.name === span.label;
 }

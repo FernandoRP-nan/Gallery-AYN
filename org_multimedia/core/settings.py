@@ -51,7 +51,9 @@ def load_app_settings() -> dict:
             "gallery_include_subfolders": False,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
+            "gallery_group_by_alpha": False,
             "gallery_timeline_view": False,
+            "gallery_dynamic_name_regex": False,
             "gallery_masonry_view": False,
             "gallery_masonry_tight_spacing": False,
             "gallery_section_dominant_color": True,
@@ -92,6 +94,7 @@ def load_app_settings() -> dict:
                 "window": True,
                 "selection": True,
                 "selection_reset": True,
+                "sort": True,
             },
         }
     try:
@@ -192,21 +195,72 @@ def load_app_settings() -> dict:
         if "gallery_sort_mode" not in data:
             data["gallery_sort_mode"] = "name,mtime,type"
         else:
-            # Validar y limpiar la lista de ordenamiento compuesta
+            # Validar y limpiar la lista de ordenamiento compuesta (key:dir)
+            _sort_aliases = {
+                "name": "name",
+                "nombre": "name",
+                "name_base": "name_base",
+                "base": "name_base",
+                "num_base": "name_base",
+                "principal": "name_base",
+                "name_suffix": "name_suffix",
+                "suffix": "name_suffix",
+                "num_suffix": "name_suffix",
+                "secundario": "name_suffix",
+                "parentesis": "name_suffix",
+                "mtime": "mtime",
+                "date": "mtime",
+                "fecha": "mtime",
+                "ctime": "ctime",
+                "creacion": "ctime",
+                "creation": "ctime",
+                "created": "ctime",
+                "exif": "exif",
+                "exifdate": "exif",
+                "photo": "exif",
+                "foto": "exif",
+                "captura": "exif",
+                "exif_month": "exif_month",
+                "month_exif": "exif_month",
+                "mes_exif": "exif_month",
+                "mes": "exif_month",
+                "type": "type",
+                "tipo": "type",
+            }
             sm = str(data["gallery_sort_mode"]).lower()
-            parts = [p.strip() for p in sm.split(",") if p.strip() in ("name", "mtime", "type", "nombre", "fecha", "tipo")]
-            if parts:
-                data["gallery_sort_mode"] = ",".join(parts)
+            normalized: list[str] = []
+            for raw in sm.split(","):
+                part = raw.strip()
+                if not part:
+                    continue
+                key_raw, _, dir_raw = part.partition(":")
+                canon = _sort_aliases.get(key_raw)
+                if not canon:
+                    continue
+                direction = dir_raw if dir_raw in ("asc", "desc") else (
+                    "desc" if canon in ("mtime", "ctime", "exif", "exif_month") else "asc"
+                )
+                normalized.append(f"{canon}:{direction}")
+            if normalized:
+                data["gallery_sort_mode"] = ",".join(normalized)
             else:
-                data["gallery_sort_mode"] = "name,mtime,type"
+                data["gallery_sort_mode"] = "name:asc,mtime:desc,type:asc"
         if "gallery_group_by_folder" not in data:
             data["gallery_group_by_folder"] = False
         else:
             data["gallery_group_by_folder"] = bool(data["gallery_group_by_folder"])
+        if "gallery_group_by_alpha" not in data:
+            data["gallery_group_by_alpha"] = False
+        else:
+            data["gallery_group_by_alpha"] = bool(data["gallery_group_by_alpha"])
         if "gallery_timeline_view" not in data:
             data["gallery_timeline_view"] = False
         else:
             data["gallery_timeline_view"] = bool(data["gallery_timeline_view"])
+        if "gallery_dynamic_name_regex" not in data:
+            data["gallery_dynamic_name_regex"] = False
+        else:
+            data["gallery_dynamic_name_regex"] = bool(data["gallery_dynamic_name_regex"])
         if "gallery_masonry_view" not in data:
             data["gallery_masonry_view"] = False
         else:
@@ -356,6 +410,7 @@ def load_app_settings() -> dict:
             "window": True,
             "selection": True,
             "selection_reset": True,
+            "sort": True,
         }
         raw_filters = data.get("web_debug_log_filters")
         if not isinstance(raw_filters, dict):
@@ -400,7 +455,9 @@ def load_app_settings() -> dict:
             "gallery_include_subfolders": False,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
+            "gallery_group_by_alpha": False,
             "gallery_timeline_view": False,
+            "gallery_dynamic_name_regex": False,
             "gallery_masonry_view": False,
             "gallery_masonry_tight_spacing": False,
             "gallery_section_dominant_color": True,
@@ -441,6 +498,7 @@ def load_app_settings() -> dict:
                 "window": True,
                 "selection": True,
                 "selection_reset": True,
+                "sort": True,
             },
         }
 

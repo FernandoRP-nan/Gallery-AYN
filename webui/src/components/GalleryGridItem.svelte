@@ -43,6 +43,7 @@
   export let onGalleryItemContextMenu: (e: MouseEvent, it: any) => void;
 
   $: sectionDisplay = groupedSectionDisplay(String(it.name ?? ""));
+  $: isAlphaSection = it.path.includes("section:alpha:");
   $: sectionFolderPath = resolveSectionFolderPath(it, groupByFolder);
   $: sectionPathTail = sectionFolderPath ? formatPathTail(sectionFolderPath) : "";
   $: showSectionMove =
@@ -55,7 +56,7 @@
     if (direct) return direct;
     if (!grouped) return "";
     const p = String(item.path ?? "");
-    if (!p.startsWith("section:") || p.includes("section:timeline:")) return "";
+    if (!p.startsWith("section:") || p.includes("section:timeline:") || p.includes("section:alpha:")) return "";
     return p.slice("section:".length).trim();
   }
 </script>
@@ -66,7 +67,8 @@
     class="gallery-section-head gallery-virtual-item"
     class:gallery-masonry-span={masonrySpan}
     class:gallery-section-head--timeline={it.path.includes("section:timeline:")}
-    class:gallery-section-head--tinted={Boolean(it.sectionTintHex) && !it.path.includes("section:timeline:")}
+    class:gallery-section-head--alpha={isAlphaSection}
+    class:gallery-section-head--tinted={Boolean(it.sectionTintHex) && !it.path.includes("section:timeline:") && !isAlphaSection}
     class:gallery-section-head--drop={Boolean(sectionFolderPath) && dragOverSectionPath === sectionFolderPath}
     role="separator"
     data-section-folder={sectionFolderPath}
@@ -83,6 +85,8 @@
   >
     {#if it.path.includes("section:timeline:")}
       <h3 class="gallery-section-head__title gallery-section-head__title--timeline">{it.name}</h3>
+    {:else if isAlphaSection}
+      <h3 class="gallery-section-head__title gallery-section-head__title--alpha">{it.name}</h3>
     {:else}
       <div class="gallery-section-head__row">
         <div class="gallery-section-head__label-wrap">

@@ -13,7 +13,8 @@ export type GalleryDebugKind =
   | "user"
   | "window"
   | "selection"
-  | "selection_reset";
+  | "selection_reset"
+  | "sort";
 
 export const GALLERY_DEBUG_KINDS: GalleryDebugKind[] = [
   "scroll",
@@ -26,6 +27,7 @@ export const GALLERY_DEBUG_KINDS: GalleryDebugKind[] = [
   "window",
   "selection",
   "selection_reset",
+  "sort",
 ];
 
 export type GalleryDebugFilters = Record<GalleryDebugKind, boolean>;
@@ -41,6 +43,7 @@ export const DEFAULT_GALLERY_DEBUG_FILTERS: GalleryDebugFilters = {
   window: true,
   selection: true,
   selection_reset: true,
+  sort: true,
 };
 
 export type GalleryDebugEntry = {

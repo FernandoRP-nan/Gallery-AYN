@@ -364,6 +364,24 @@
     border-radius: 999px;
     background: linear-gradient(90deg, var(--om-accent), color-mix(in oklab, var(--om-accent-2) 70%, transparent));
   }
+.gallery-section-head--alpha {
+    border: none;
+    background: transparent;
+    padding: var(--om-space-4) var(--om-space-1) var(--om-space-2);
+    margin-top: var(--om-space-4);
+    margin-bottom: var(--om-space-1);
+    flex-direction: column;
+    align-items: flex-start;
+}
+.gallery-section-head__title--alpha {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    line-height: 1;
+    color: var(--om-text-primary);
+    font-variant-numeric: tabular-nums;
+}
 .timeline-day-break {
     display: flex;
     align-items: center;

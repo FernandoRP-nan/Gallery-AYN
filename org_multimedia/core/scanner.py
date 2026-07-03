@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from .gallery_paths import natural_sort_key, path_natural_sort_key
+from .gallery_paths import natural_sort_key, normalize_filename_for_sort, path_natural_sort_key
 from .media_organizer import MediaOrganizer
 
 # Extensiones multimedia para la galería
@@ -55,8 +55,8 @@ def sort_paths(paths: list[Path], mode: str) -> list[Path]:
     if m in ("mtime", "date", "fecha"):
         def key(p: Path) -> tuple:
             try:
-                return (p.stat().st_mtime_ns, natural_sort_key(str(p)))
+                return (p.stat().st_mtime_ns, natural_sort_key(normalize_filename_for_sort(p.name)))
             except OSError:
-                return (0, natural_sort_key(str(p)))
+                return (0, natural_sort_key(normalize_filename_for_sort(p.name)))
         return sorted(paths, key=key)
     return sorted(paths, key=path_natural_sort_key)

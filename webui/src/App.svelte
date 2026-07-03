@@ -8,6 +8,7 @@
   import DebugLogPanel from "./components/DebugLogPanel.svelte";
   import { applyGalleryPerfConfig, galleryPerfFromSettings, getGalleryPerfConfig } from "./lib/galleryPerfConfig";
   import { setGalleryDebugLogEnabled, galleryDbg, setGalleryDebugFilters, normalizeGalleryDebugFilters, DEFAULT_GALLERY_DEBUG_FILTERS, logGallerySelectionDelta, type GalleryDebugFilters } from "./lib/galleryDebugLog";
+  import { logGallerySortLayout } from "./lib/gallerySortLayoutLog";
   import { t } from "./lib/i18n";
   import { normalizePathForApi, buildMediaFileUrl, isValidFolderName } from "./lib/pathUtils";
   import { copyTextToClipboard } from "./lib/clipboardText";
@@ -285,6 +286,7 @@
   let viewMenuOpen = false;
   let includeSubfolders = false;
   let groupByFolder = false;
+  let groupByAlpha = false;
   /** Tinte de cabecera según color medio de imágenes (solo vista agrupada por carpeta). */
   let sectionDominantColor = true;
   /** Vista calendario: secciones por mes; marcas por día según zoom (solo cliente). */
@@ -292,6 +294,7 @@
   let galleryMasonryView = false;
   let galleryMasonryTightSpacing = false;
   let gallerySortMode = "name,mtime,type";
+  let dynamicNameRegex = false;
   $: galleryTileDragEnabled = destinationsMode || (groupByFolder && !galleryMasonryView);
   let dragOverSectionPath: string | null = null;
   let settingsOpen = false;
@@ -773,11 +776,13 @@
     pageJumpDraft = Number(data.gallery?.page ?? 1);
     includeSubfolders = Boolean(data.settings?.gallery_include_subfolders ?? false);
     groupByFolder = Boolean(data.settings?.gallery_group_by_folder ?? false);
+    groupByAlpha = Boolean(data.settings?.gallery_group_by_alpha ?? false);
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
     timelineView = Boolean(data.settings?.gallery_timeline_view ?? false);
     galleryMasonryView = Boolean(data.settings?.gallery_masonry_view ?? false);
     galleryMasonryTightSpacing = Boolean(data.settings?.gallery_masonry_tight_spacing ?? false);
     gallerySortMode = String(data.settings?.gallery_sort_mode ?? "name,mtime,type");
+    dynamicNameRegex = Boolean(data.settings?.gallery_dynamic_name_regex ?? false);
     {
       const vp = String(data.settings?.video_transcode_preset ?? "fast").toLowerCase();
       videoTranscodePreset =
@@ -827,7 +832,9 @@
         bridge.settingsPatch({
           gallery_include_subfolders: includeSubfolders,
           gallery_sort_mode: gallerySortMode,
+          gallery_dynamic_name_regex: dynamicNameRegex,
           gallery_group_by_folder: groupByFolder,
+          gallery_group_by_alpha: groupByAlpha,
           gallery_timeline_view: timelineView,
           gallery_section_dominant_color: sectionDominantColor,
         })
@@ -841,7 +848,19 @@
 
   async function onIncludeSubfoldersChange(checked: boolean) {
     includeSubfolders = checked;
-    if (checked) groupByFolder = false;
+    if (checked) {
+      groupByFolder = false;
+      groupByAlpha = false;
+    }
+    await persistViewAndReload();
+  }
+
+  async function onGroupByAlphaChange(checked: boolean) {
+    groupByAlpha = checked;
+    if (checked) {
+      groupByFolder = false;
+      timelineView = false;
+    }
     await persistViewAndReload();
   }
 
@@ -850,6 +869,7 @@
     if (checked) {
       includeSubfolders = false;
       timelineView = false;
+      groupByAlpha = false;
     }
     await persistViewAndReload();
   }
@@ -863,15 +883,21 @@
     timelineView = checked;
     if (checked) {
       groupByFolder = false;
+      groupByAlpha = false;
       const parts = parseGallerySortMode(gallerySortMode);
       const datePart = parts.find((p) => isTimelineDateSortKey(p.key));
       if (datePart) {
         const rest = parts.filter((p) => p.key !== datePart.key);
         gallerySortMode = formatGallerySortMode([datePart, ...rest]);
       } else {
-        gallerySortMode = formatGallerySortMode([{ key: "mtime", dir: "desc" }, ...parts]);
+        gallerySortMode = formatGallerySortMode([{ key: "exif_month", dir: "desc" }, ...parts]);
       }
     }
+    await persistViewAndReload();
+  }
+
+  async function onDynamicNameRegexChange(checked: boolean) {
+    dynamicNameRegex = checked;
     await persistViewAndReload();
   }
 
@@ -930,6 +956,7 @@
     } catch {
       /* La rejilla sigue mostrando LQ si falla la hidratación */
     }
+    void logGallerySortLayout(() => bridge.galleryLayoutReport());
   }
 
   type GalleryScrollAnchor = {
@@ -4730,10 +4757,13 @@
     bind:viewMenuOpen
     bind:includeSubfolders
     bind:groupByFolder
+    bind:groupByAlpha
+    onGroupByAlphaChange={(checked) => void onGroupByAlphaChange(checked)}
     bind:sectionDominantColor
     bind:timelineView
     bind:galleryMasonryView
     bind:gallerySortMode
+    bind:dynamicNameRegex
     bind:orgPath
     bind:folder
     bind:orgPanelOpen
@@ -4750,6 +4780,7 @@
     {onTimelineViewChange}
     {onGalleryMasonryViewChange}
     {onGallerySortApply}
+    onDynamicNameRegexChange={(checked) => void onDynamicNameRegexChange(checked)}
     {goBackFolder}
     {goForwardFolder}
     {goUpFolder}

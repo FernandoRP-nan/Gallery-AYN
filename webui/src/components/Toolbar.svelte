@@ -12,10 +12,12 @@
   export let viewMenuOpen: boolean;
   export let includeSubfolders: boolean;
   export let groupByFolder: boolean;
+  export let groupByAlpha: boolean;
   export let sectionDominantColor: boolean;
   export let timelineView: boolean;
   export let galleryMasonryView: boolean;
   export let gallerySortMode: string;
+  export let dynamicNameRegex: boolean;
   export let orgPath: string;
   export let folder: string;
   export let orgPanelOpen: boolean;
@@ -30,10 +32,12 @@
   export let toggleDestinationsModePreserveScroll: () => void;
   export let onIncludeSubfoldersChange: (val: boolean) => void;
   export let onGroupByFolderChange: (val: boolean) => void;
+  export let onGroupByAlphaChange: (val: boolean) => void;
   export let onSectionDominantColorChange: (val: boolean) => void;
   export let onTimelineViewChange: (val: boolean) => void;
   export let onGalleryMasonryViewChange: (val: boolean) => void;
   export let onGallerySortApply: (val: string) => void | Promise<void>;
+  export let onDynamicNameRegexChange: (val: boolean) => void | Promise<void>;
   export let goBackFolder: () => void;
   export let goForwardFolder: () => void;
   export let goUpFolder: () => void;
@@ -123,6 +127,14 @@
             />
             <span>{t("view.groupByFolder")}</span>
           </label>
+          <label class="view-menu__row" title={t("view.groupByAlphaHint")}>
+            <input
+              type="checkbox"
+              checked={groupByAlpha}
+              on:change={(e) => void onGroupByAlphaChange((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>{t("view.groupByAlpha")}</span>
+          </label>
           <label class="view-menu__row" title={t("view.sectionDominantColorHint")}>
             <input
               type="checkbox"
@@ -157,6 +169,15 @@
               <span class="view-menu__sort-badge">{t("view.sortPendingHint")}</span>
             {/if}
           </div>
+          <label class="view-menu__row" title={t("view.dynamicNameRegexHint")}>
+            <input
+              type="checkbox"
+              checked={dynamicNameRegex}
+              on:change={(e) =>
+                void onDynamicNameRegexChange((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>{t("view.dynamicNameRegex")}</span>
+          </label>
           <ol class="sort-priority-list">
             {#each sortDraftParts as modeObj, index (modeObj.key)}
               <li class="sort-priority-item">

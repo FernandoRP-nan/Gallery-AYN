@@ -35,6 +35,7 @@ from ..core.gallery_paths import (
     scan_media_recursive,
     sort_image_paths,
 )
+from ..core.work_packages import reorder_paths_into_work_packages
 
 from ..core.fs_path import resolve_dir_path
 from ..core.section_color import accent_hex_from_paths
@@ -220,8 +221,20 @@ class GalleryBridgeMixin:
     def _is_grouped_mode(self) -> bool:
         return bool(self.settings.get("gallery_group_by_folder", False))
 
+    def _is_alpha_grouped_mode(self) -> bool:
+        return bool(self.settings.get("gallery_group_by_alpha", False))
+
+    def _is_mask_grouped_mode(self) -> bool:
+        return bool(self.settings.get("gallery_dynamic_name_regex", False))
+
+    def _uses_mask_or_alpha_layout(self) -> bool:
+        return self._is_alpha_grouped_mode() or self._is_mask_grouped_mode()
+
     def _is_timeline_mode(self) -> bool:
         return bool(self.settings.get("gallery_timeline_view", False))
+
+    def _uses_section_layout(self) -> bool:
+        return self._is_grouped_mode() or self._is_timeline_mode() or self._uses_mask_or_alpha_layout()
 
     def _is_unlimited_mode(self) -> bool:
         return int(self.settings.get("gallery_thumbs_per_page", 48)) <= 0
@@ -340,7 +353,7 @@ class GalleryBridgeMixin:
         threading.Thread(target=worker, daemon=True).start()
 
     def _total_pages(self) -> int:
-        if self._is_grouped_mode() or self._is_timeline_mode():
+        if self._uses_section_layout():
             return 1
         total = len(self.ordered_paths)
         if total == 0:
@@ -355,7 +368,7 @@ class GalleryBridgeMixin:
         self.gallery_page = max(0, min(self.gallery_page, tp - 1))
 
     def _slice(self) -> tuple[int, int]:
-        if self._is_grouped_mode() or self._is_timeline_mode():
+        if self._uses_section_layout():
             total = len(self.ordered_paths)
             if not self._is_unlimited_mode():
                 return 0, total
@@ -383,7 +396,16 @@ class GalleryBridgeMixin:
         return s, e
 
     @staticmethod
+    def _path_photo_timestamp_sec(p: Path) -> float:
+        from ..core.image_exif import path_photo_timestamp_ns
+
+        ns = path_photo_timestamp_ns(str(p))
+        return ns / 1_000_000_000 if ns > 0 else 0.0
+
+    @staticmethod
     def _path_date_ts(p: Path, field: str = "mtime") -> float:
+        if field == "exif":
+            return GalleryBridgeMixin._path_photo_timestamp_sec(p)
         try:
             st = p.stat()
             return float(st.st_ctime if field == "ctime" else st.st_mtime)
@@ -408,20 +430,89 @@ class GalleryBridgeMixin:
             return (1970, 1)
 
     def _timeline_date_field(self) -> str:
-        """Campo de fecha para línea de tiempo según el criterio primario de orden."""
+        """Campo de fecha para línea de tiempo; con vista activa usa EXIF obligatorio."""
+        if self._is_timeline_mode():
+            return "exif"
         mode = str(self.settings.get("gallery_sort_mode", "mtime:desc"))
         primary = mode.split(",")[0].strip().split(":")[0].lower()
+        if primary in ("exif_month", "month_exif", "mes_exif", "mes"):
+            return "exif"
         if primary in ("ctime", "creacion", "creation", "created"):
             return "ctime"
+        if primary in ("exif", "exifdate", "photo", "foto", "captura"):
+            return "exif"
         return "mtime"
+
+    @staticmethod
+    def _timeline_months_descending(sort_mode: str) -> bool:
+        for part in str(sort_mode or "").split(","):
+            key, _, direction = part.strip().lower().partition(":")
+            if key in (
+                "exif_month",
+                "month_exif",
+                "mes_exif",
+                "mes",
+                "exif",
+                "exifdate",
+                "photo",
+                "foto",
+                "captura",
+                "mtime",
+                "date",
+                "fecha",
+                "ctime",
+                "creacion",
+                "creation",
+                "created",
+            ):
+                return direction != "asc"
+        return True
+
+    def _sort_timeline_by_exif_months(
+        self,
+        raw: list[Path],
+        sort_mode: str,
+        *,
+        stat_workers: int | None = None,
+    ) -> list[Path]:
+        """Segmenta por mes EXIF; orden de usuario solo dentro de cada mes."""
+        from collections import defaultdict
+
+        from ..core.gallery_paths import sort_image_paths
+        from ..core.image_exif import path_photo_timestamp_ns, prefetch_exif_timestamps
+
+        sort_cfg = self._work_package_sort_config()
+        prefetch_exif_timestamps(raw, max_workers=stat_workers or 8)
+        buckets: dict[tuple[int, int], list[Path]] = defaultdict(list)
+        for path in raw:
+            ns = path_photo_timestamp_ns(str(path))
+            if ns > 0:
+                dt = datetime.datetime.fromtimestamp(ns / 1_000_000_000)
+                ym = (dt.year, dt.month)
+            else:
+                ym = (1970, 1)
+            buckets[ym].append(path)
+
+        month_desc = self._timeline_months_descending(sort_mode)
+        ordered: list[Path] = []
+        for ym in sorted(buckets.keys(), reverse=month_desc):
+            chunk = sort_image_paths(
+                buckets[ym],
+                sort_mode,
+                stat_workers=stat_workers,
+                allow_cluster=False,
+                sort_config=sort_cfg,
+            )
+            ordered.extend(chunk)
+        return ordered
 
     def _timeline_sort_mode(self) -> str:
         """Modo de orden para timeline; fuerza mtime/ctime si el primario no es fecha."""
         mode = str(self.settings.get("gallery_sort_mode", "mtime:desc"))
         primary = mode.split(",")[0].strip().split(":")[0].lower()
-        if primary in ("mtime", "date", "fecha", "ctime", "creacion", "creation", "created"):
+        if primary in ("mtime", "date", "fecha", "ctime", "creacion", "creation", "created", "exif", "exifdate", "photo", "foto", "captura", "exif_month", "month_exif", "mes_exif", "mes"):
             return mode
-        return "mtime:desc,name:asc"
+        return str(self.settings.get("gallery_sort_mode", "name"))
 
     def _compute_timeline_spans(self, ordered: list[Path]) -> list[tuple[int, int, str, str]]:
         """Rangos por (año, mes) sobre una lista ya ordenada por fecha."""
@@ -441,28 +532,6 @@ class GalleryBridgeMixin:
             i = j
         return spans
 
-    @staticmethod
-    def _alpha_bucket(name: str) -> str:
-        raw = str(name or "").strip()
-        if not raw:
-            return "#"
-        ch = raw[0].upper()
-        return ch if ch.isalpha() else "#"
-
-    def _compute_alpha_spans(self, ordered: list[Path]) -> list[tuple[int, int, str, str]]:
-        """Rangos por letra inicial del nombre (A, B, …, #)."""
-        if not ordered:
-            return []
-        spans: list[tuple[int, int, str, str]] = []
-        i = 0
-        while i < len(ordered):
-            letter = self._alpha_bucket(ordered[i].name)
-            j = i + 1
-            while j < len(ordered) and self._alpha_bucket(ordered[j].name) == letter:
-                j += 1
-            spans.append((i, j, letter, letter))
-            i = j
-        return spans
 
     def _is_date_primary_sort(self) -> bool:
         """True si el criterio primario de orden es una fecha (mtime, ctime, etc.)."""
@@ -476,6 +545,15 @@ class GalleryBridgeMixin:
             "creacion",
             "creation",
             "created",
+            "exif",
+            "exifdate",
+            "photo",
+            "foto",
+            "captura",
+            "exif_month",
+            "month_exif",
+            "mes_exif",
+            "mes",
         )
 
     def _layout_mode(self) -> str:
@@ -483,10 +561,10 @@ class GalleryBridgeMixin:
             return "grouped"
         if self._is_timeline_mode():
             return "timeline"
-        mode = str(self.settings.get("gallery_sort_mode", "name"))
-        primary = mode.split(",")[0].strip().split(":")[0].lower()
-        if primary in ("name", "nombre"):
+        if self._uses_mask_or_alpha_layout():
             return "alpha"
+        if self._is_date_primary_sort() and self._gallery_timeline_spans:
+            return "timeline"
         return "flat"
 
     def _layout_spans_payload(self) -> list[dict]:
@@ -609,12 +687,21 @@ class GalleryBridgeMixin:
             idx += len(files)
         return ordered, spans
 
+    def _work_package_sort_config(self):
+        from ..core.work_packages import WorkPackageSortConfig
+
+        return WorkPackageSortConfig(
+            use_dynamic_regex=bool(self.settings.get("gallery_dynamic_name_regex", False)),
+        )
+
     def _scan_cache_key(self, folder: Path) -> tuple:
         return (
             str(folder.resolve()),
             bool(self.settings.get("gallery_include_subfolders", False)),
             bool(self.settings.get("gallery_group_by_folder", False)),
+            bool(self.settings.get("gallery_group_by_alpha", False)),
             bool(self.settings.get("gallery_timeline_view", False)),
+            bool(self.settings.get("gallery_dynamic_name_regex", False)),
             str(self.settings.get("gallery_sort_mode", "name")),
             self._layout_mode(),
         )
@@ -703,7 +790,11 @@ class GalleryBridgeMixin:
         if self._is_timeline_mode():
             include = bool(self.settings.get("gallery_include_subfolders", False))
             raw = scan_media_recursive(folder) if include else scan_media_flat(folder)
-            ordered = sort_image_paths(raw, self._timeline_sort_mode())
+            sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
+            stat_workers = self._gallery_thumb_build_workers()
+            ordered = self._sort_timeline_by_exif_months(
+                raw, sort_mode, stat_workers=stat_workers
+            )
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
             return ordered
         include = bool(self.settings.get("gallery_include_subfolders", False))
@@ -713,11 +804,14 @@ class GalleryBridgeMixin:
             raw = scan_media_flat(folder)
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
         stat_workers = self._gallery_thumb_build_workers()
-        ordered = sort_image_paths(raw, sort_mode, stat_workers=stat_workers)
+        sort_cfg = self._work_package_sort_config()
+        ordered = sort_image_paths(raw, sort_mode, stat_workers=stat_workers, sort_config=sort_cfg)
+        if self._uses_mask_or_alpha_layout():
+            ordered, self._gallery_alpha_spans = reorder_paths_into_work_packages(
+                ordered, sort_config=sort_cfg
+            )
         if self._is_date_primary_sort() and not self._is_timeline_mode():
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
-        if self._layout_mode() == "alpha":
-            self._gallery_alpha_spans = self._compute_alpha_spans(ordered)
         return ordered
 
     def _gallery_media_counts(self) -> tuple[int, int]:
@@ -860,6 +954,52 @@ class GalleryBridgeMixin:
             )
         return items
 
+    def _build_alpha_items_for_range(
+        self,
+        range_start: int,
+        range_end: int,
+        *,
+        build_boost: bool = False,
+        jump_fast: bool = False,
+    ) -> list[dict]:
+        """Ítems por sección alfabética/carácter inicial."""
+        items: list[dict] = []
+        if range_start >= range_end:
+            return items
+        thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
+        selected_frozenset = frozenset(self.selected)
+        for span_start, span_end, key, label in self._gallery_alpha_spans:
+            if span_end <= range_start:
+                continue
+            if span_start >= range_end:
+                break
+            clip_start = max(span_start, range_start)
+            clip_end = min(span_end, range_end)
+            if clip_start >= clip_end:
+                continue
+            if clip_start == span_start:
+                items.append(
+                    {
+                        "kind": "section",
+                        "name": label,
+                        "path": f"section:alpha:{key}",
+                        "sectionFolder": "",
+                        "thumbDataUrl": None,
+                    }
+                )
+            slice_paths = self.ordered_paths[clip_start:clip_end]
+            items.extend(
+                self._build_image_items(
+                    slice_paths,
+                    thumb_px,
+                    selected_frozenset,
+                    base_index=clip_start,
+                    jump_fast=jump_fast,
+                    build_boost=build_boost,
+                )
+            )
+        return items
+
     def _build_folder_items(self, thumb_px: int) -> list[dict]:
         """Tiles de subcarpetas inmediatas (navegación)."""
         if not self.subfolders:
@@ -894,6 +1034,17 @@ class GalleryBridgeMixin:
             return self._build_gallery_items_grouped()
         if self._is_timeline_mode():
             return self._build_gallery_items_timeline()
+        if self._uses_mask_or_alpha_layout():
+            s, e = self._slice()
+            build_boost = self._is_unlimited_mode() and self.gallery_page == 0 and s == 0
+            items: list[dict] = []
+            if self.gallery_page == 0 and self.gallery_folder is not None:
+                thumb_px = _thumb_px_from_gallery_scale(
+                    float(self.settings.get("gallery_thumb_scale", 1.0))
+                )
+                items.extend(self._build_folder_items(thumb_px))
+            items.extend(self._build_alpha_items_for_range(s, e, build_boost=build_boost))
+            return items
         s, e = self._slice()
         items: list[dict] = []
         if self.gallery_page == 0 and self.gallery_folder is not None:
@@ -932,6 +1083,10 @@ class GalleryBridgeMixin:
             return self._build_timeline_items_for_range(start, end)
         if self._is_grouped_mode():
             return self._build_grouped_items_for_range(start, end, jump_fast=jump_fast)
+        if self._uses_mask_or_alpha_layout():
+            return self._build_alpha_items_for_range(
+                start, end, jump_fast=jump_fast, build_boost=False
+            )
         thumb_px = _thumb_px_from_gallery_scale(float(self.settings.get("gallery_thumb_scale", 1.0)))
         selected_frozenset = frozenset(self.selected)
         return self._build_image_items(
@@ -1094,6 +1249,82 @@ class GalleryBridgeMixin:
             "timing": {"buildMs": build_ms, "itemCount": len(batch_items)},
         }
 
+    def gallery_layout_report(self, max_items: int = 0) -> dict:
+        """Informe compacto de ordenamiento/secciones para el depurador."""
+        from ..core.work_packages import section_summary_from_paths, sort_section_summaries_by_recent_date
+
+        ordered = list(self.ordered_paths)
+        spans = self._layout_spans_payload()
+        layout_mode = self._layout_mode()
+
+        full_sections: list[dict] = []
+        if spans:
+            for span in spans:
+                full_sections.append(
+                    {
+                        "start": int(span["start"]),
+                        "end": int(span["end"]),
+                        "label": str(span["label"]),
+                        "kind": str(span["kind"]),
+                        "key": str(span["key"]),
+                        "count": int(span["end"]) - int(span["start"]),
+                    }
+                )
+        else:
+            full_sections.append(
+                {
+                    "start": 0,
+                    "end": len(ordered),
+                    "label": "—",
+                    "kind": "flat",
+                    "key": "",
+                    "count": len(ordered),
+                }
+            )
+
+        section_summaries: list[dict] = []
+        for span in full_sections:
+            start, end = int(span["start"]), int(span["end"])
+            slice_paths = ordered[start:end]
+            if not slice_paths:
+                continue
+            summary = section_summary_from_paths(slice_paths, category=str(span["label"]))
+            summary.update(
+                {
+                    "start": start,
+                    "end": end,
+                    "kind": str(span["kind"]),
+                    "key": str(span["key"]),
+                }
+            )
+            section_summaries.append(summary)
+
+        section_summaries = sort_section_summaries_by_recent_date(section_summaries)
+
+        cap = max(0, min(500, int(max_items or 0)))
+        truncated = cap > 0 and len(section_summaries) > cap
+        if truncated:
+            section_summaries = section_summaries[:cap]
+
+        return {
+            "config": {
+                "gallery_sort_mode": str(self.settings.get("gallery_sort_mode", "name")),
+                "gallery_group_by_folder": bool(self.settings.get("gallery_group_by_folder", False)),
+                "gallery_group_by_alpha": bool(self.settings.get("gallery_group_by_alpha", False)),
+                "gallery_timeline_view": bool(self.settings.get("gallery_timeline_view", False)),
+                "gallery_include_subfolders": bool(
+                    self.settings.get("gallery_include_subfolders", False)
+                ),
+                "layoutMode": layout_mode,
+            },
+            "total": len(ordered),
+            "listed": len(section_summaries),
+            "truncated": truncated,
+            "sections": full_sections,
+            "sectionSummaries": section_summaries,
+            "items": [],
+        }
+
     def gallery_load_folder(self, raw_path: str) -> dict:
         folder = resolve_dir_path(raw_path)
         with self.lock:
@@ -1185,7 +1416,7 @@ class GalleryBridgeMixin:
                 "delta": True,
             }
             # Agrupado / línea de tiempo: la estructura de secciones puede cambiar → items completos.
-            if self._is_grouped_mode() or self._is_timeline_mode():
+            if self._uses_section_layout():
                 out["items"] = self._build_gallery_items()
                 out["delta"] = False
             return out

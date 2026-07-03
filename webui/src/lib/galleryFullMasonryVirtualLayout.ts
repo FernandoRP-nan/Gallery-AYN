@@ -1,6 +1,6 @@
 import type { GalleryItem } from "./api";
 import type { VirtualLayoutEntry } from "./galleryVirtualLayout";
-import { resolveVirtualLayoutSpans } from "./galleryLayoutSpans";
+import { resolveVirtualLayoutSpans, virtualSectionPath } from "./galleryLayoutSpans";
 import { resolveMasonrySlotHeight } from "./galleryMasonryHeightCache";
 import { masonryMaxHeightPx } from "./galleryMasonryLayoutMetrics";
 import {
@@ -195,10 +195,7 @@ export function buildGalleryFullMasonryVirtualLayout(opts: {
 
   if (spans.length > 0) {
     for (const span of spans) {
-      const sectionPath =
-        span.kind === "timeline"
-          ? `section:timeline:${span.key ?? span.label}`
-          : `section:${span.key ?? span.start}`;
+      const sectionPath = virtualSectionPath(span);
       emitMediaRange(
         span.start,
         Math.min(span.end, totalMediaCount),

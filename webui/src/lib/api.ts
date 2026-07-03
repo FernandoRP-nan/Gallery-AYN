@@ -74,6 +74,7 @@ const devMockApi: WebApi = {
       gallery_include_subfolders: false,
       gallery_sort_mode: "name,mtime,type",
       gallery_group_by_folder: false,
+      gallery_group_by_alpha: false,
       gallery_timeline_view: false,
       gallery_section_dominant_color: true,
     },
@@ -82,6 +83,32 @@ const devMockApi: WebApi = {
     markers: [],
   }),
   gallery_load_folder: async () => ({ ...mockGalleryPayload(), recentFolders: [] as string[] }),
+  gallery_layout_report: async (_max = 0) => ({
+    config: {
+      gallery_sort_mode: "name,mtime,type",
+      gallery_group_by_folder: false,
+      gallery_group_by_alpha: false,
+      gallery_timeline_view: false,
+      gallery_include_subfolders: false,
+      layoutMode: "flat",
+    },
+    total: 0,
+    listed: 0,
+    truncated: false,
+    sections: [] as Array<{ start: number; end: number; label: string; kind: string; key: string; count: number }>,
+    sectionSummaries: [] as Array<{
+      category: string;
+      count: number;
+      first: string;
+      last: string;
+      files: string[];
+      sample: string[] | null;
+      sortType: string;
+      temporalBase: string;
+      groupKey: string;
+    }>,
+    items: [] as never[],
+  }),
   gallery_reload: async () => mockGalleryPayload(),
   gallery_load_more: async () => ({ ...mockGalleryPayload(), hasMore: false }),
   gallery_load_until_index: async (_target: number) => ({ ...mockGalleryPayload(), hasMore: false, items: [] }),
@@ -257,6 +284,7 @@ const call = async <T>(method: string, ...args: any[]): Promise<T> => {
 export const bridge = {
   getInitialState: () => call<any>("get_initial_state"),
   galleryLoadFolder: (path: string) => call<any>("gallery_load_folder", path),
+  galleryLayoutReport: (maxItems = 0) => call<any>("gallery_layout_report", maxItems),
   galleryReload: () => call<any>("gallery_reload"),
   galleryLoadMore: () => call<any>("gallery_load_more"),
   galleryLoadUntilIndex: (targetIndex: number, jump = false, expand = false) =>
