@@ -1,17 +1,19 @@
 export type GallerySortPart = {
-  key: "name_base" | "name_suffix" | "name" | "exif_month" | "mtime" | "ctime" | "exif" | "type";
+  key: "name_base" | "name_suffix" | "name" | "name_lex" | "random" | "exif_month" | "mtime" | "ctime" | "exif" | "type";
   dir: "asc" | "desc";
 };
 
-const SORT_KEYS: GallerySortPart["key"][] = [
-  "exif_month",
+export const SORT_KEYS: GallerySortPart["key"][] = [
+  "name",
+  "name_lex",
   "name_base",
   "name_suffix",
-  "name",
+  "exif_month",
   "mtime",
   "ctime",
   "exif",
   "type",
+  "random",
 ];
 
 const DATE_DESC_KEYS = new Set<GallerySortPart["key"]>([
@@ -23,7 +25,7 @@ const DATE_DESC_KEYS = new Set<GallerySortPart["key"]>([
 
 export function parseGallerySortMode(mode: string): GallerySortPart[] {
   const rawParts = String(
-    mode || "exif_month:desc,name_base:asc,name_suffix:asc,name:asc,mtime:desc,type:asc",
+    mode || "name:asc",
   )
     .split(",")
     .map((x) => x.trim())
@@ -35,12 +37,10 @@ export function parseGallerySortMode(mode: string): GallerySortPart[] {
     if (!SORT_KEYS.includes(key)) continue;
     parsed.push({ key, dir: sp[1]?.trim() === "desc" ? "desc" : "asc" });
   }
-  for (const key of SORT_KEYS) {
-    if (!parsed.some((p) => p.key === key)) {
-      parsed.push({ key, dir: DATE_DESC_KEYS.has(key) ? "desc" : "asc" });
-    }
+  if (parsed.length === 0) {
+    parsed.push({ key: "name", dir: "asc" });
   }
-  return parsed.filter((p) => SORT_KEYS.includes(p.key));
+  return parsed;
 }
 
 export function formatGallerySortMode(parts: GallerySortPart[]): string {
@@ -55,6 +55,8 @@ export function sortPartLabelKey(key: GallerySortPart["key"]): string {
   if (key === "name_base") return "view.sortNameBase";
   if (key === "name_suffix") return "view.sortNameSuffix";
   if (key === "name") return "view.sortName";
+  if (key === "name_lex") return "view.sortNameLex";
+  if (key === "random") return "view.sortRandom";
   if (key === "exif_month") return "view.sortExifMonth";
   if (key === "mtime") return "view.sortDate";
   if (key === "ctime") return "view.sortCreated";
@@ -68,9 +70,9 @@ export function isTimelineDateSortKey(key: string): boolean {
 }
 
 export function isNameClusterPrimaryKey(key: string): boolean {
-  return key === "name" || key === "name_base" || key === "name_suffix";
+  return key === "name" || key === "name_lex" || key === "name_base" || key === "name_suffix";
 }
 
 export function primaryGallerySortKey(mode: string): GallerySortPart["key"] {
-  return parseGallerySortMode(mode)[0]?.key ?? "name_base";
+  return parseGallerySortMode(mode)[0]?.key ?? "name";
 }

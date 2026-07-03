@@ -199,6 +199,13 @@ def load_app_settings() -> dict:
             _sort_aliases = {
                 "name": "name",
                 "nombre": "name",
+                "name_lex": "name_lex",
+                "normal": "name_lex",
+                "lexicografico": "name_lex",
+                "lexicographical": "name_lex",
+                "random": "random",
+                "aleatorio": "random",
+                "azar": "random",
                 "name_base": "name_base",
                 "base": "name_base",
                 "num_base": "name_base",

@@ -200,6 +200,24 @@ def _prefetch_path_stats(
             cache[p] = st
 
 
+class InvertedString:
+    """Clase de utilidad para invertir la comparación de cadenas en tuplas compuestas."""
+    def __init__(self, s: str):
+        self.s = s
+    def __lt__(self, other: InvertedString) -> bool:
+        return self.s > other.s
+    def __le__(self, other: InvertedString) -> bool:
+        return self.s >= other.s
+    def __gt__(self, other: InvertedString) -> bool:
+        return self.s < other.s
+    def __ge__(self, other: InvertedString) -> bool:
+        return self.s <= other.s
+    def __eq__(self, other: InvertedString) -> bool:
+        return self.s == other.s
+    def __ne__(self, other: InvertedString) -> bool:
+        return self.s != other.s
+
+
 def _natural_sort_directed(path: Path, desc: bool) -> tuple:
     parts = list(natural_sort_key(normalize_filename_for_sort(path.name)))
     if not desc:
@@ -259,11 +277,15 @@ def sort_image_paths(
             sort_keys.append(("name_suffix", direction == "desc"))
         elif m in ("name", "nombre"):
             sort_keys.append(("name", direction == "desc"))
+        elif m in ("name_lex", "normal", "lexicografico"):
+            sort_keys.append(("name_lex", direction == "desc"))
+        elif m in ("random", "aleatorio", "azar"):
+            sort_keys.append(("random", direction == "desc"))
 
     if not sort_keys:
         sort_keys = [("name", False)]
 
-    if not any(k[0] == "name" for k in sort_keys):
+    if not any(k[0] in ("name", "name_lex", "random") for k in sort_keys):
         sort_keys.append(("name", False))
 
     stat_cache: dict[Path, os.stat_result | None] = {}
@@ -297,6 +319,13 @@ def sort_image_paths(
                     out.extend(directed_number_key(tertiary, is_desc))
             elif sk == "name":
                 out.append(_natural_sort_directed(p, is_desc))
+            elif sk == "name_lex":
+                val = normalize_filename_for_sort(p.name).casefold()
+                out.append(val if not is_desc else InvertedString(val))
+            elif sk == "random":
+                import hashlib
+                h = hashlib.md5(p.name.encode("utf-8")).hexdigest()
+                out.append(h if not is_desc else InvertedString(h))
             elif sk == "mtime":
                 st = _stat_cached(p)
                 val = st.st_mtime_ns if st is not None else 0

@@ -5,6 +5,7 @@
     gallerySortModesEqual,
     parseGallerySortMode,
     sortPartLabelKey,
+    SORT_KEYS,
     type GallerySortPart,
   } from "../lib/gallerySort";
 
@@ -81,6 +82,16 @@
 
   function applySortDraft() {
     void onGallerySortApply(formatGallerySortMode(sortDraftParts));
+  }
+
+  function toggleSortKeyActive(key: GallerySortPart["key"]) {
+    const isCurrentlyActive = sortDraftParts.some((p) => p.key === key);
+    if (isCurrentlyActive) {
+      sortDraftParts = sortDraftParts.filter((p) => p.key !== key);
+    } else {
+      const defaultDir = (key === "exif_month" || key === "mtime" || key === "ctime" || key === "exif") ? "desc" : "asc";
+      sortDraftParts = [...sortDraftParts, { key, dir: defaultDir }];
+    }
   }
 </script>
 
@@ -214,10 +225,35 @@
                     aria-label="Bajar prioridad"
                     on:click={() => moveSortPriority(index, 1)}
                   >▼</button>
+                  <button
+                    type="button"
+                    class="sort-deactivate-btn"
+                    title="Desactivar criterio"
+                    aria-label="Desactivar criterio"
+                    on:click={() => toggleSortKeyActive(modeObj.key)}
+                  >×</button>
                 </div>
               </li>
             {/each}
           </ol>
+          {#if SORT_KEYS.some((k) => !sortDraftParts.some((p) => p.key === k))}
+            <div class="view-menu__sort-head view-menu__sort-head--inactive">
+              <span class="view-menu__legend">Añadir criterio</span>
+            </div>
+            <div class="sort-inactive-wrap">
+              {#each SORT_KEYS as key}
+                {#if !sortDraftParts.some((p) => p.key === key)}
+                  <button
+                    type="button"
+                    class="sort-inactive-chip"
+                    on:click={() => toggleSortKeyActive(key)}
+                  >
+                    + {t(sortPartLabelKey(key))}
+                  </button>
+                {/if}
+              {/each}
+            </div>
+          {/if}
           <div class="sort-priority-footer">
             <button
               type="button"
@@ -441,6 +477,52 @@
 .sort-priority-btn:hover:not(:disabled) {
     color: var(--om-text-primary);
     background: color-mix(in oklab, var(--om-surface-3) 80%, transparent);
+  }
+.sort-deactivate-btn {
+    width: 1.35rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    color: var(--om-text-muted);
+    font-size: 0.85rem;
+    font-weight: bold;
+    cursor: pointer;
+    padding: 0;
+    transition: color 0.12s ease, background 0.12s ease;
+  }
+.sort-deactivate-btn:hover {
+    color: #ff4d4d;
+    background: color-mix(in oklab, #ff4d4d 12%, transparent);
+  }
+.sort-inactive-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 4px 2px;
+  }
+.sort-inactive-chip {
+    padding: 3px 8px;
+    border: 1px solid var(--om-border-default);
+    background: color-mix(in oklab, var(--om-surface-2) 65%, transparent);
+    color: var(--om-text-secondary);
+    border-radius: 99px;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+.sort-inactive-chip:hover {
+    background: color-mix(in oklab, var(--om-accent, #007acc) 12%, transparent);
+    border-color: color-mix(in oklab, var(--om-accent, #007acc) 45%, transparent);
+    color: var(--om-text-primary);
+  }
+.view-menu__sort-head--inactive {
+    margin-top: 6px;
+    border-top: 1px dashed color-mix(in oklab, var(--om-border-default) 45%, transparent);
+    padding-top: 8px;
   }
 .sort-priority-btn:disabled {
     opacity: 0.25;
