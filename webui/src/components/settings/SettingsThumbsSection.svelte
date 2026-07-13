@@ -6,6 +6,7 @@
   export let settingsThumbPresetIdx: number;
   export let settingsThumbScaleDraft: number;
   export let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
+  export let galleryThumbDiskCacheEnabled = false;
   export let thumbGapPx: number;
   export let thumbImageRadiusPx: number;
   export let thumbTileRadiusPx: number;
@@ -158,6 +159,13 @@
       >{t("settings.tileRadiusHigh")}</button
     >
   </div>
+
+  <p class="settings-hint settings-hint--section">{t("settings.thumbDiskCacheTitle")}</p>
+  <label class="settings-check">
+    <input type="checkbox" bind:checked={galleryThumbDiskCacheEnabled} />
+    <span>{t("settings.thumbDiskCacheEnabled")}</span>
+  </label>
+  <p class="settings-hint">{t("settings.thumbDiskCacheHint")}</p>
 </div>
 
 <style>

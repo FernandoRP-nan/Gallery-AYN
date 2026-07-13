@@ -123,6 +123,21 @@ def thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 90) -> str 
     if Image is None:
         return None
     try:
+        from .gallery_thumb_disk_cache import (
+            jpeg_bytes_to_data_url,
+            load_thumb_jpeg,
+            make_thumb_cache_id,
+            save_thumb_jpeg,
+            thumb_disk_cache_enabled,
+        )
+
+        use_disk = thumb_disk_cache_enabled()
+        cache_id = ""
+        if use_disk:
+            cache_id = make_thumb_cache_id(path, variant="square", size=size, max_w=0, max_h=0, quality=quality)
+            cached = load_thumb_jpeg(cache_id)
+            if cached:
+                return jpeg_bytes_to_data_url(cached)
         im = _load_rgb_for_thumb(path)
         side = max(1, int(size))
         if ImageOps is not None:
@@ -131,8 +146,10 @@ def thumb_jpeg_data_url_square(path: Path, size: int, quality: int = 90) -> str 
             im.thumbnail((side, side), Image.Resampling.LANCZOS)
         bio = io.BytesIO()
         im.save(bio, format="JPEG", quality=quality, optimize=True)
-        payload = base64.b64encode(bio.getvalue()).decode("ascii")
-        return f"data:image/jpeg;base64,{payload}"
+        jpeg_bytes = bio.getvalue()
+        if use_disk and cache_id:
+            save_thumb_jpeg(cache_id, jpeg_bytes)
+        return jpeg_bytes_to_data_url(jpeg_bytes)
     except Exception:
         return None
 
@@ -142,6 +159,23 @@ def thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quality: int
     if Image is None:
         return None
     try:
+        from .gallery_thumb_disk_cache import (
+            jpeg_bytes_to_data_url,
+            load_thumb_jpeg,
+            make_thumb_cache_id,
+            save_thumb_jpeg,
+            thumb_disk_cache_enabled,
+        )
+
+        use_disk = thumb_disk_cache_enabled()
+        cache_id = ""
+        if use_disk:
+            cache_id = make_thumb_cache_id(
+                path, variant="masonry", size=0, max_w=max_w, max_h=max_h, quality=quality
+            )
+            cached = load_thumb_jpeg(cache_id)
+            if cached:
+                return jpeg_bytes_to_data_url(cached)
         mw, mh = max(1, int(max_w)), max(1, int(max_h))
         im = _load_rgb_for_thumb(path)
         w, h = im.size
@@ -150,8 +184,10 @@ def thumb_jpeg_data_url_masonry(path: Path, max_w: int, max_h: int, quality: int
             im = im.resize((tw, th), Image.Resampling.LANCZOS)
         bio = io.BytesIO()
         im.save(bio, format="JPEG", quality=quality, optimize=True)
-        payload = base64.b64encode(bio.getvalue()).decode("ascii")
-        return f"data:image/jpeg;base64,{payload}"
+        jpeg_bytes = bio.getvalue()
+        if use_disk and cache_id:
+            save_thumb_jpeg(cache_id, jpeg_bytes)
+        return jpeg_bytes_to_data_url(jpeg_bytes)
     except Exception:
         return None
 

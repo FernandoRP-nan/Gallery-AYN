@@ -9,6 +9,32 @@ import os
 from pathlib import Path
 
 _CACHE_VERSION = 1
+_SAMPLE_HASH_COUNT = 20
+
+
+def _sample_paths_hash(paths: list[Path], n: int = _SAMPLE_HASH_COUNT) -> str:
+    """Huella de N rutas espaciadas (detecta cambios sin depender del mtime del directorio)."""
+    if not paths:
+        return ""
+    if len(paths) <= n:
+        sample = paths
+    else:
+        step = max(1, (len(paths) - 1) // (n - 1))
+        indices = [min(i * step, len(paths) - 1) for i in range(n)]
+        seen: set[int] = set()
+        sample: list[Path] = []
+        for idx in indices:
+            if idx not in seen:
+                seen.add(idx)
+                sample.append(paths[idx])
+    lines: list[str] = []
+    for p in sample:
+        try:
+            st = p.stat()
+            lines.append(f"{p}|{st.st_mtime_ns}|{st.st_size}")
+        except OSError:
+            lines.append(f"{p}|0|0")
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
 
 
 def _index_dir() -> Path:
@@ -95,6 +121,11 @@ def try_load_gallery_index(
                     paths.append(p)
         if int(meta.get("path_count", -1)) != len(paths):
             return None
+        sample_hash = str(meta.get("sample_hash") or "")
+        if sample_hash and sample_hash != _sample_paths_hash(paths):
+            _meta_path(cid).unlink(missing_ok=True)
+            _paths_path(cid).unlink(missing_ok=True)
+            return None
         if not _paths_file_valid(paths):
             _meta_path(cid).unlink(missing_ok=True)
             _paths_path(cid).unlink(missing_ok=True)
@@ -130,6 +161,7 @@ def save_gallery_index(
         "settings_key": list(settings_key),
         "folder_mtime_ns": _folder_mtime_ns(folder),
         "path_count": len(paths),
+        "sample_hash": _sample_paths_hash(paths),
         "section_spans": _serialize_spans(section_spans or []),
         "timeline_spans": _serialize_spans(timeline_spans or []),
         "alpha_spans": _serialize_spans(alpha_spans or []),

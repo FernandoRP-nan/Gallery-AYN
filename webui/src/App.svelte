@@ -391,7 +391,9 @@
   ] as const;
   let settingsThumbPresetIdx = 1;
   let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
+  let galleryThumbDiskCacheEnabled = false;
   let galleryThumbQualityPresetBackup: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
+  let galleryThumbDiskCacheEnabledBackup = false;
   let pageJumpDraft = 1;
   let previewRatio = 0.4;
   /** Fracción de altura para el panel inferior de destinos (solo pestaña Destinos). */
@@ -831,6 +833,7 @@
       galleryThumbQualityPreset =
         tq === "sharp" ? "sharp" : tq === "hidpi" ? "hidpi" : tq === "performance" ? "performance" : "balanced";
     }
+    galleryThumbDiskCacheEnabled = Boolean(data.settings?.gallery_thumb_disk_cache_enabled ?? false);
     applyGalleryPerfConfig(galleryPerfFromSettings(data.settings as Record<string, unknown> | undefined));
     const perfCfg = getGalleryPerfConfig();
     galleryUnlimitedBatchSize = perfCfg.unlimitedBatchSize;
@@ -1372,6 +1375,7 @@
     galleryWarmVideosEnabledBackup = galleryWarmVideosEnabled;
     galleryWarmVideosPerFolderBackup = galleryWarmVideosPerFolder;
     galleryThumbQualityPresetBackup = galleryThumbQualityPreset;
+    galleryThumbDiskCacheEnabledBackup = galleryThumbDiskCacheEnabled;
     messPinterestMasonryBackup = messPinterestMasonry;
     messSuggestionsEnabledBackup = messSuggestionsEnabled;
     messScanMaxFilesBackup = messScanMaxFiles;
@@ -1416,6 +1420,7 @@
     galleryWarmVideosEnabled = galleryWarmVideosEnabledBackup;
     galleryWarmVideosPerFolder = galleryWarmVideosPerFolderBackup;
     galleryThumbQualityPreset = galleryThumbQualityPresetBackup;
+    galleryThumbDiskCacheEnabled = galleryThumbDiskCacheEnabledBackup;
     messPinterestMasonry = messPinterestMasonryBackup;
     messSuggestionsEnabled = messSuggestionsEnabledBackup;
     messScanMaxFiles = messScanMaxFilesBackup;
@@ -1519,6 +1524,7 @@
         web_debug_log_filters: { ...debugLogFilters },
         gallery_thumb_scale: Number(ts.toFixed(3)),
         gallery_thumb_quality_preset: galleryThumbQualityPreset,
+        gallery_thumb_disk_cache_enabled: Boolean(galleryThumbDiskCacheEnabled),
         web_ui_theme: uiTheme,
         web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
         web_show_thumb_labels: Boolean(showThumbLabels),
@@ -5890,6 +5896,7 @@
       bind:settingsThumbPresetIdx
       bind:settingsThumbScaleDraft
       bind:galleryThumbQualityPreset
+      bind:galleryThumbDiskCacheEnabled
       bind:thumbGapPx
       bind:thumbImageRadiusPx
       bind:thumbTileRadiusPx

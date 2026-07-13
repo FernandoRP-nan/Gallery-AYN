@@ -269,6 +269,15 @@ def _natural_sort_directed(path: Path, desc: bool) -> tuple:
     return tuple(inverted)
 
 
+def sort_mode_uses_exif(mode: str) -> bool:
+    """True si el orden compuesto requiere leer EXIF."""
+    for m_raw in (mode or "").split(","):
+        m = m_raw.strip().split(":")[0].lower()
+        if m in ("exif", "exifdate", "photo", "foto", "captura", "exif_month", "month_exif", "mes_exif", "mes"):
+            return True
+    return False
+
+
 def sort_image_paths(
     paths: list[Path],
     mode: str,

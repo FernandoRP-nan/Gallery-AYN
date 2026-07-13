@@ -179,6 +179,7 @@ _THUMB_SETTINGS_KEYS = frozenset(
         "gallery_thumb_scale",
         "gallery_thumb_quality_preset",
         "gallery_masonry_view",
+        "gallery_thumb_disk_cache_enabled",
     }
 )
 

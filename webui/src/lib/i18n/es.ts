@@ -482,6 +482,10 @@ export const es = {
     thumbQualityPerformance: "Rendimiento (carga más rápida, menos nitidez)",
     thumbQualityHint:
       "La galería muestra primero una vista rápida (LQ) y luego la versión nítida (HQ). En miniaturas pequeñas o monitores de alta densidad, prueba «Nítido» o «HiDPI».",
+    thumbDiskCacheTitle: "Caché LQ en disco",
+    thumbDiskCacheEnabled: "Guardar miniaturas LQ en disco",
+    thumbDiskCacheHint:
+      "Acelera la reapertura de carpetas tras reiniciar la app. Se invalida automáticamente si cambia el archivo (mtime/tamaño). Ruta: ~/.cache/organizador_multimedia/thumbs_lq/",
     thumbGap: "Separación entre miniaturas",
     thumbImageRadius: "Redondeado de imagen",
     thumbTileRadius: "Redondeado del elemento",

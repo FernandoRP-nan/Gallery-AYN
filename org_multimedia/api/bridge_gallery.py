@@ -708,11 +708,15 @@ class GalleryBridgeMixin:
             idx += len(files)
         return ordered, spans
 
-    def _work_package_sort_config(self):
+    def _work_package_sort_config(self, sort_mode: str | None = None):
+        from ..core.gallery_paths import sort_mode_uses_exif
         from ..core.work_packages import WorkPackageSortConfig
 
+        mode = sort_mode if sort_mode is not None else str(self.settings.get("gallery_sort_mode", "name"))
+        prefer_exif = sort_mode_uses_exif(mode) or self._is_timeline_mode()
         return WorkPackageSortConfig(
             use_dynamic_regex=bool(self.settings.get("gallery_dynamic_name_regex", False)),
+            prefer_exif_timestamp=prefer_exif,
         )
 
     def _scan_cache_key(self, folder: Path) -> tuple:
@@ -857,11 +861,13 @@ class GalleryBridgeMixin:
         raw = self._scan_folder_files(folder, recursive=include)
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
         stat_workers = self._gallery_thumb_build_workers()
-        sort_cfg = self._work_package_sort_config()
+        sort_cfg = self._work_package_sort_config(sort_mode)
         ordered = sort_image_paths(raw, sort_mode, stat_workers=stat_workers, sort_config=sort_cfg)
         if self._uses_mask_or_alpha_layout():
             ordered, self._gallery_alpha_spans = reorder_paths_into_work_packages(
-                ordered, sort_config=sort_cfg
+                ordered,
+                sort_config=sort_cfg,
+                prefetch_exif=sort_cfg.prefer_exif_timestamp,
             )
         if self._is_date_primary_sort() and not self._is_timeline_mode():
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)

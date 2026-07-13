@@ -53,6 +53,7 @@
   export let settingsThumbPresetIdx: number;
   export let settingsThumbScaleDraft: number;
   export let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
+  export let galleryThumbDiskCacheEnabled = false;
   export let thumbGapPx: number;
   export let thumbImageRadiusPx: number;
   export let thumbTileRadiusPx: number;
@@ -162,6 +163,7 @@
           bind:settingsThumbPresetIdx
           bind:settingsThumbScaleDraft
           bind:galleryThumbQualityPreset
+          bind:galleryThumbDiskCacheEnabled
           bind:thumbGapPx
           bind:thumbImageRadiusPx
           bind:thumbTileRadiusPx

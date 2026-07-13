@@ -91,6 +91,7 @@ def load_app_settings() -> dict:
             "gallery_thumb_hq_workers": 4,
             "gallery_thumb_hq_visible_sequential": 16,
             "gallery_compact_indices_after_move": True,
+            "gallery_thumb_disk_cache_enabled": False,
             "web_debug_log_enabled": False,
             "web_debug_log_filters": {
                 "scroll": True,
@@ -466,6 +467,10 @@ def load_app_settings() -> dict:
             data["gallery_compact_indices_after_move"] = True
         else:
             data["gallery_compact_indices_after_move"] = bool(data["gallery_compact_indices_after_move"])
+        if "gallery_thumb_disk_cache_enabled" not in data:
+            data["gallery_thumb_disk_cache_enabled"] = False
+        else:
+            data["gallery_thumb_disk_cache_enabled"] = bool(data["gallery_thumb_disk_cache_enabled"])
         _default_debug_filters = {
             "scroll": True,
             "scroll_drag": True,
@@ -562,6 +567,7 @@ def load_app_settings() -> dict:
             "gallery_thumb_hq_workers": 4,
             "gallery_thumb_hq_visible_sequential": 16,
             "gallery_compact_indices_after_move": True,
+            "gallery_thumb_disk_cache_enabled": False,
             "web_debug_log_enabled": False,
             "web_debug_log_filters": {
                 "scroll": True,

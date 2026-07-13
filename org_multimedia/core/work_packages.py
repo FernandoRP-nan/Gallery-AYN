@@ -33,6 +33,7 @@ _SPACE_PAIR_RE = re.compile(r"^(\d+)\s+(\d+)$")
 class WorkPackageSortConfig:
     use_dynamic_regex: bool = False
     mask_registry: MaskFolderRegistry | None = None
+    prefer_exif_timestamp: bool = False
 
     def with_paths(self, paths: list[Path]) -> WorkPackageSortConfig:
         if not self.use_dynamic_regex:
@@ -40,6 +41,7 @@ class WorkPackageSortConfig:
         return WorkPackageSortConfig(
             use_dynamic_regex=True,
             mask_registry=MaskFolderRegistry.from_paths(paths),
+            prefer_exif_timestamp=self.prefer_exif_timestamp,
         )
 
 
@@ -258,6 +260,15 @@ def work_category_for_stem(stem: str) -> str:
     return signature_display(padding_signature(stem))
 
 
+def path_package_timestamp_ns(path: Path, *, prefer_exif: bool) -> int:
+    if prefer_exif:
+        return path_effective_timestamp_ns(path)
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
 def _package_sort_key(path: Path, config: WorkPackageSortConfig | None = None) -> tuple:
     """Orden interno de paquete: base → sufijo → terciario → fecha."""
     cfg = config or WorkPackageSortConfig()
@@ -270,7 +281,7 @@ def _package_sort_key(path: Path, config: WorkPackageSortConfig | None = None) -
         base if base is not None else 2**31,
         suffix if suffix is not None else 2**31,
         tertiary,
-        path_effective_timestamp_ns(path),
+        path_package_timestamp_ns(path, prefer_exif=cfg.prefer_exif_timestamp),
     )
 
 
@@ -303,13 +314,15 @@ def cluster_work_packages(
     *,
     gap_ns: int = WORK_PACKAGE_GAP_NS,
     sort_config: WorkPackageSortConfig | None = None,
+    prefetch_exif: bool = False,
 ) -> list[list[Path]]:
     del gap_ns
     if not paths:
         return []
 
     cfg = (sort_config or WorkPackageSortConfig()).with_paths(paths)
-    prefetch_exif_timestamps(paths)
+    if prefetch_exif or cfg.prefer_exif_timestamp:
+        prefetch_exif_timestamps(paths)
     pkg_key = partial(_package_sort_key, config=cfg)
 
     buckets: dict[str, list[Path]] = defaultdict(list)
@@ -395,9 +408,10 @@ def reorder_paths_into_work_packages(
     *,
     gap_ns: int = WORK_PACKAGE_GAP_NS,
     sort_config: WorkPackageSortConfig | None = None,
+    prefetch_exif: bool = False,
 ) -> tuple[list[Path], list[tuple[int, int, str, str]]]:
     cfg = (sort_config or WorkPackageSortConfig()).with_paths(ordered)
-    packages = cluster_work_packages(ordered, gap_ns=gap_ns, sort_config=cfg)
+    packages = cluster_work_packages(ordered, gap_ns=gap_ns, sort_config=cfg, prefetch_exif=prefetch_exif)
     pkg_key = partial(_package_sort_key, config=cfg)
     position = {id(path): idx for idx, path in enumerate(ordered)}
 
