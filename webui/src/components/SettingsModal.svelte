@@ -45,6 +45,9 @@
   export let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
   export let videoTranscodeMaxHeight = 1080;
   export let videoTranscodeHw: "auto" | "off" = "auto";
+  export let videoTranscodeMaxJobs = 1;
+  export let galleryWarmVideosEnabled = false;
+  export let galleryWarmVideosPerFolder = 3;
   export let settingsThumbPresetIdx: number;
   export let settingsThumbScaleDraft: number;
   export let galleryThumbQualityPreset: "balanced" | "sharp" | "hidpi" | "performance" = "balanced";
@@ -177,6 +180,9 @@
           bind:videoTranscodePreset
           bind:videoTranscodeMaxHeight
           bind:videoTranscodeHw
+          bind:videoTranscodeMaxJobs
+          bind:galleryWarmVideosEnabled
+          bind:galleryWarmVideosPerFolder
         />
       {:else if activeTab === "shortcuts"}
         <SettingsShortcutsSection bind:keyboardShortcuts {defaultShortcuts} />

@@ -14,6 +14,8 @@ class IndexWarmApi(Protocol):
 
     def _warm_dest_preview_index(self, folder_path: str) -> dict: ...
 
+    def _warm_videos_for_folder(self, folder_path: str) -> dict: ...
+
 
 class GalleryIndexWarmService:
     """Cola de carpetas a indexar (un hilo, cancelable)."""
@@ -108,6 +110,7 @@ class GalleryIndexWarmService:
                     errors.append(
                         {"path": folder_path, "error": str(prev.get("error") or "preview")}
                     )
+                api._warm_videos_for_folder(folder_path)
             except Exception as exc:
                 errors.append({"path": folder_path, "error": str(exc)})
             with self._lock:

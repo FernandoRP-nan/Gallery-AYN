@@ -66,6 +66,9 @@ def load_app_settings() -> dict:
             "video_transcode_max_height": 1080,
             "video_transcode_max_width": 1920,
             "video_transcode_hw": "auto",
+            "video_transcode_max_jobs": 1,
+            "gallery_warm_videos_enabled": False,
+            "gallery_warm_videos_per_folder": 3,
             "preview_video_autoplay": True,
             "preview_video_autoplay_edit": False,
             "mess_folder_path": "",
@@ -331,6 +334,24 @@ def load_app_settings() -> dict:
             data["video_transcode_hw"] = "auto"
         elif str(data["video_transcode_hw"]).lower() not in ("auto", "off"):
             data["video_transcode_hw"] = "auto"
+        if "video_transcode_max_jobs" not in data:
+            data["video_transcode_max_jobs"] = 1
+        else:
+            try:
+                data["video_transcode_max_jobs"] = max(1, min(3, int(data["video_transcode_max_jobs"])))
+            except (TypeError, ValueError):
+                data["video_transcode_max_jobs"] = 1
+        if "gallery_warm_videos_enabled" not in data:
+            data["gallery_warm_videos_enabled"] = False
+        else:
+            data["gallery_warm_videos_enabled"] = bool(data["gallery_warm_videos_enabled"])
+        if "gallery_warm_videos_per_folder" not in data:
+            data["gallery_warm_videos_per_folder"] = 3
+        else:
+            try:
+                data["gallery_warm_videos_per_folder"] = max(1, min(10, int(data["gallery_warm_videos_per_folder"])))
+            except (TypeError, ValueError):
+                data["gallery_warm_videos_per_folder"] = 3
         if "preview_video_autoplay" not in data:
             data["preview_video_autoplay"] = True
         else:
@@ -500,6 +521,9 @@ def load_app_settings() -> dict:
             "video_transcode_max_height": 1080,
             "video_transcode_max_width": 1920,
             "video_transcode_hw": "auto",
+            "video_transcode_max_jobs": 1,
+            "gallery_warm_videos_enabled": False,
+            "gallery_warm_videos_per_folder": 3,
             "preview_video_autoplay": True,
             "preview_video_autoplay_edit": False,
             "mess_folder_path": "",

@@ -181,3 +181,43 @@ class GalleryIndexWarmBridgeMixin:
             except Exception:
                 pass
         return paths
+
+    def _warm_videos_for_folder(self, folder_path: str) -> dict:
+        """Encola transcodificación de los primeros N vídeos de la carpeta (si está activo)."""
+        if not bool(self.settings.get("gallery_warm_videos_enabled", False)):
+            return {"ok": True, "skipped": True}
+        try:
+            limit = max(1, min(10, int(self.settings.get("gallery_warm_videos_per_folder", 3) or 3)))
+        except (TypeError, ValueError):
+            limit = 3
+        try:
+            folder = resolve_dir_path(folder_path)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "path": folder_path, "error": str(exc)}
+        from ..core.gallery_paths import scan_media_flat
+        from ..core.media_organizer import MediaOrganizer
+        from ..core.viewer_playback import (
+            needs_viewer_transcode,
+            viewer_playback_cache_status,
+            warm_viewer_playback_async,
+        )
+
+        videos = scan_media_flat(folder, MediaOrganizer.VIDEO_EXTENSIONS)
+        warmed = 0
+        skipped = 0
+        for path in videos[:limit]:
+            if not needs_viewer_transcode(path):
+                skipped += 1
+                continue
+            if viewer_playback_cache_status(path).get("transcodeCached"):
+                skipped += 1
+                continue
+            warm_viewer_playback_async(path)
+            warmed += 1
+        return {
+            "ok": True,
+            "path": str(folder),
+            "warmed": warmed,
+            "skipped": skipped,
+            "candidates": min(limit, len(videos)),
+        }

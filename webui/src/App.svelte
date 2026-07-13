@@ -238,9 +238,15 @@
   let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
   let videoTranscodeMaxHeight = 1080;
   let videoTranscodeHw: "auto" | "off" = "auto";
+  let videoTranscodeMaxJobs = 1;
+  let galleryWarmVideosEnabled = false;
+  let galleryWarmVideosPerFolder = 3;
   let videoTranscodePresetBackup: "turbo" | "fast" | "quality" = "fast";
   let videoTranscodeMaxHeightBackup = 1080;
   let videoTranscodeHwBackup: "auto" | "off" = "auto";
+  let videoTranscodeMaxJobsBackup = 1;
+  let galleryWarmVideosEnabledBackup = false;
+  let galleryWarmVideosPerFolderBackup = 3;
   let previewZoomNaturalW = 1;
   let previewZoomNaturalH = 1;
   let zoomMiniEl: HTMLDivElement | null = null;
@@ -804,6 +810,15 @@
       const hw = String(data.settings?.video_transcode_hw ?? "auto").toLowerCase();
       videoTranscodeHw = hw === "off" ? "off" : "auto";
     }
+    {
+      const jobs = Number(data.settings?.video_transcode_max_jobs ?? 1);
+      videoTranscodeMaxJobs = Number.isFinite(jobs) ? Math.max(1, Math.min(3, Math.round(jobs))) : 1;
+    }
+    galleryWarmVideosEnabled = Boolean(data.settings?.gallery_warm_videos_enabled ?? false);
+    {
+      const n = Number(data.settings?.gallery_warm_videos_per_folder ?? 3);
+      galleryWarmVideosPerFolder = Number.isFinite(n) ? Math.max(1, Math.min(10, Math.round(n))) : 3;
+    }
     previewVideoAutoplay = Boolean(data.settings?.preview_video_autoplay ?? true);
     previewVideoAutoplayEdit = Boolean(data.settings?.preview_video_autoplay_edit ?? false);
     {
@@ -1345,6 +1360,9 @@
     videoTranscodePresetBackup = videoTranscodePreset;
     videoTranscodeMaxHeightBackup = videoTranscodeMaxHeight;
     videoTranscodeHwBackup = videoTranscodeHw;
+    videoTranscodeMaxJobsBackup = videoTranscodeMaxJobs;
+    galleryWarmVideosEnabledBackup = galleryWarmVideosEnabled;
+    galleryWarmVideosPerFolderBackup = galleryWarmVideosPerFolder;
     galleryThumbQualityPresetBackup = galleryThumbQualityPreset;
     messPinterestMasonryBackup = messPinterestMasonry;
     messSuggestionsEnabledBackup = messSuggestionsEnabled;
@@ -1384,6 +1402,9 @@
     videoTranscodePreset = videoTranscodePresetBackup;
     videoTranscodeMaxHeight = videoTranscodeMaxHeightBackup;
     videoTranscodeHw = videoTranscodeHwBackup;
+    videoTranscodeMaxJobs = videoTranscodeMaxJobsBackup;
+    galleryWarmVideosEnabled = galleryWarmVideosEnabledBackup;
+    galleryWarmVideosPerFolder = galleryWarmVideosPerFolderBackup;
     galleryThumbQualityPreset = galleryThumbQualityPresetBackup;
     messPinterestMasonry = messPinterestMasonryBackup;
     messSuggestionsEnabled = messSuggestionsEnabledBackup;
@@ -1495,6 +1516,9 @@
         video_transcode_preset: videoTranscodePreset,
         video_transcode_max_height: Math.max(0, Math.min(2160, Math.round(Number(videoTranscodeMaxHeight) || 1080))),
         video_transcode_hw: videoTranscodeHw,
+        video_transcode_max_jobs: Math.max(1, Math.min(3, Math.round(Number(videoTranscodeMaxJobs) || 1))),
+        gallery_warm_videos_enabled: Boolean(galleryWarmVideosEnabled),
+        gallery_warm_videos_per_folder: Math.max(1, Math.min(10, Math.round(Number(galleryWarmVideosPerFolder) || 3))),
         mess_suggestions_enabled: Boolean(messSuggestionsEnabled),
         mess_pinterest_masonry: Boolean(messPinterestMasonry),
         mess_scan_max_files: Math.max(50, Math.min(2000, Math.round(Number(messScanMaxFiles) || 400))),
@@ -5770,6 +5794,9 @@
       bind:videoTranscodePreset
       bind:videoTranscodeMaxHeight
       bind:videoTranscodeHw
+      bind:videoTranscodeMaxJobs
+      bind:galleryWarmVideosEnabled
+      bind:galleryWarmVideosPerFolder
       bind:settingsThumbPresetIdx
       bind:settingsThumbScaleDraft
       bind:galleryThumbQualityPreset

@@ -20,6 +20,11 @@ from .video_transcode import (
 )
 
 
+def qt_has_proprietary_codecs() -> bool:
+    """True si Qt WebEngine puede reproducir H.264 (p. ej. freeworld en Fedora)."""
+    return _qt_has_proprietary_codecs()
+
+
 def _qt_has_proprietary_codecs() -> bool:
     """True si hay Qt WebEngine compilado con H.264 (p. ej. freeworld en Fedora)."""
     if os.environ.get("ORGANIZADOR_QT_PROPRIETARY_CODECS", "").lower() in ("1", "true", "yes"):

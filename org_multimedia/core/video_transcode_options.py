@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 _HW_ENCODER: str | None | False = False
+_HW_ENCODERS_TEXT: str | False = False
 _HW_LOCK = threading.Lock()
+
+# Orden de preferencia al elegir códec HW (Linux: VAAPI entre QSV y AMF).
+_HW_ENCODER_PRIORITY = ("h264_nvenc", "h264_qsv", "h264_vaapi", "h264_amf")
+_WEBM_HW_ENCODER_PRIORITY = ("vp8_vaapi",)
 
 PresetId = Literal["turbo", "fast", "quality"]
 HwMode = Literal["auto", "off"]
@@ -65,15 +70,27 @@ def get_transcode_hw_mode() -> HwMode:
     return "off" if raw == "off" else "auto"
 
 
+def get_transcode_max_jobs() -> int:
+    try:
+        n = int(_load_settings().get("video_transcode_max_jobs", 1))
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(3, n))
+
+
 def reset_hw_encoder_cache() -> None:
-    global _HW_ENCODER
+    global _HW_ENCODER, _HW_ENCODERS_TEXT
     with _HW_LOCK:
         _HW_ENCODER = False
+        _HW_ENCODERS_TEXT = False
 
 
 def transcode_settings_fingerprint() -> str:
     """Huella de ajustes globales (para invalidación explícita)."""
-    return f"{get_transcode_preset()}:{get_transcode_max_height()}:{get_transcode_max_width()}:{get_transcode_hw_mode()}"
+    return (
+        f"{get_transcode_preset()}:{get_transcode_max_height()}:{get_transcode_max_width()}:"
+        f"{get_transcode_hw_mode()}:{get_transcode_max_jobs()}"
+    )
 
 
 def _effective_scale_limits(preset: PresetId, max_w: int, max_h: int) -> tuple[int, int]:
@@ -92,12 +109,12 @@ def _effective_scale_limits(preset: PresetId, max_w: int, max_h: int) -> tuple[i
     return eff_w, eff_h
 
 
-def _detect_hw_encoder(ffmpeg: str) -> str | None:
-    global _HW_ENCODER
+def _ffmpeg_encoders_text(ffmpeg: str) -> str:
+    global _HW_ENCODERS_TEXT
     with _HW_LOCK:
-        if _HW_ENCODER is not False:
-            return _HW_ENCODER
-        enc: str | None = None
+        if _HW_ENCODERS_TEXT is not False:
+            return _HW_ENCODERS_TEXT
+        text = ""
         try:
             out = run_hidden(
                 [ffmpeg, "-hide_banner", "-encoders"],
@@ -107,14 +124,74 @@ def _detect_hw_encoder(ffmpeg: str) -> str | None:
                 check=False,
             )
             text = out.stdout or ""
-            for name in ("h264_nvenc", "h264_qsv", "h264_amf"):
-                if name in text:
-                    enc = name
-                    break
         except Exception:
-            enc = None
+            text = ""
+        _HW_ENCODERS_TEXT = text
+        return text
+
+
+def list_available_hw_encoders(ffmpeg: str) -> list[str]:
+    """Códecs HW de H.264 detectados en ffmpeg -encoders."""
+    text = _ffmpeg_encoders_text(ffmpeg)
+    return [name for name in _HW_ENCODER_PRIORITY if name in text]
+
+
+def list_available_webm_hw_encoders(ffmpeg: str) -> list[str]:
+    text = _ffmpeg_encoders_text(ffmpeg)
+    return [name for name in _WEBM_HW_ENCODER_PRIORITY if name in text]
+
+
+def _detect_hw_encoder(ffmpeg: str) -> str | None:
+    global _HW_ENCODER
+    with _HW_LOCK:
+        if _HW_ENCODER is not False:
+            return _HW_ENCODER
+        enc: str | None = None
+        if get_transcode_hw_mode() != "off":
+            for name in list_available_hw_encoders(ffmpeg):
+                enc = name
+                break
         _HW_ENCODER = enc
         return enc
+
+
+def get_selected_hw_encoder(ffmpeg: str | None = None) -> str | None:
+    if get_transcode_hw_mode() == "off":
+        return None
+    if not ffmpeg:
+        from .video_tools import resolve_ffmpeg
+
+        ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        return None
+    return _detect_hw_encoder(ffmpeg)
+
+
+def _vaapi_render_device() -> str:
+    from pathlib import Path
+
+    for cand in ("/dev/dri/renderD128", "/dev/dri/renderD129"):
+        if Path(cand).exists():
+            return cand
+    return "/dev/dri/renderD128"
+
+
+def build_vaapi_scale_filter(max_w: int, max_h: int) -> str:
+    w = max_w if max_w > 0 else 99999
+    h = max_h if max_h > 0 else 99999
+    return f"scale_vaapi=w='min({w},iw)':h='min({h},ih)':force_original_aspect_ratio=decrease"
+
+
+def build_vaapi_vf_chain(max_w: int, max_h: int) -> str:
+    return f"format=nv12,hwupload,{build_vaapi_scale_filter(max_w, max_h)}"
+
+
+def detect_webm_hw_encoder(ffmpeg: str) -> str | None:
+    if get_transcode_hw_mode() == "off":
+        return None
+    for name in list_available_webm_hw_encoders(ffmpeg):
+        return name
+    return None
 
 
 def build_scale_filter(max_w: int, max_h: int) -> str | None:
@@ -164,6 +241,12 @@ def build_mp4_encode_options(ffmpeg: str, *, preset_override: PresetId | None = 
                 "-qp_p",
                 crf,
             ]
+        elif hw_enc == "h264_vaapi":
+            device = _vaapi_render_device()
+            vcodec = "h264_vaapi"
+            vf_chain = build_vaapi_vf_chain(max_w, max_h)
+            video_args = ["-vaapi_device", device, "-vf", vf_chain, "-qp", crf]
+            vf = None
 
     if vf:
         video_args = ["-vf", vf, *video_args]
@@ -176,3 +259,20 @@ def build_mp4_encode_options(ffmpeg: str, *, preset_override: PresetId | None = 
         max_width=max_w,
         max_height=max_h,
     )
+
+
+def build_webm_encode_options(ffmpeg: str) -> tuple[str, list[str]]:
+    """Opciones de vídeo para transcodificación WebM (VP8 CPU o VAAPI)."""
+    max_h = get_transcode_max_height()
+    max_w = get_transcode_max_width()
+    hw_enc = detect_webm_hw_encoder(ffmpeg)
+    if hw_enc == "vp8_vaapi":
+        device = _vaapi_render_device()
+        vf_chain = build_vaapi_vf_chain(max_w, max_h)
+        return "vp8_vaapi", ["-vaapi_device", device, "-vf", vf_chain, "-b:v", "1M"]
+    vf = build_scale_filter(max_w, max_h)
+    args: list[str] = []
+    if vf:
+        args.extend(["-vf", vf])
+    args.extend(["-b:v", "1M", "-deadline", "realtime", "-cpu-used", "5"])
+    return "libvpx", args

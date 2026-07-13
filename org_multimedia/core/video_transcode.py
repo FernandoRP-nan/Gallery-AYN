@@ -15,7 +15,8 @@ from .win_subprocess import popen_hidden, run_hidden
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
-_TRANSCODE_SEM = threading.Semaphore(1)
+_TRANSCODE_SEM: threading.Semaphore | None = None
+_TRANSCODE_SEM_N = 0
 _WARM_TOKENS: set[str] = set()
 _WARM_GUARD = threading.Lock()
 _ACTIVE_JOBS: dict[str, dict[str, str]] = {}
@@ -32,6 +33,18 @@ _PROGRESSIVE_MOVFLAGS = ["-movflags", "frag_keyframe+empty_moov+default_base_moo
 
 class TranscodeCancelledError(RuntimeError):
     """Transcodificación cancelada por el usuario (p. ej. cerrar fullscreen)."""
+
+
+def _transcode_semaphore() -> threading.Semaphore:
+    """Semáforo acorde a video_transcode_max_jobs (1–3)."""
+    global _TRANSCODE_SEM, _TRANSCODE_SEM_N
+    from .video_transcode_options import get_transcode_max_jobs
+
+    n = get_transcode_max_jobs()
+    if _TRANSCODE_SEM is None or _TRANSCODE_SEM_N != n:
+        _TRANSCODE_SEM = threading.Semaphore(n)
+        _TRANSCODE_SEM_N = n
+    return _TRANSCODE_SEM
 
 
 def list_active_transcode_jobs() -> list[dict[str, str]]:
@@ -471,14 +484,16 @@ def _transcode_to_mp4(
 
 
 def _transcode_to_webm(source: Path, out: Path, *, token: str | None = None) -> None:
-    from .video_transcode_options import build_scale_filter, get_transcode_max_height, get_transcode_max_width
+    from .video_tools import resolve_ffmpeg
+    from .video_transcode_options import build_webm_encode_options
 
+    ffmpeg = resolve_ffmpeg() or "ffmpeg"
+    vcodec, video_extra = build_webm_encode_options(ffmpeg)
     tmp = out.with_suffix(".part.webm")
     if tmp.exists():
         tmp.unlink(missing_ok=True)
     video, _audio = _ffprobe_streams(source)
     duration_us = _parse_duration_us(video)
-    vf = build_scale_filter(get_transcode_max_width(), get_transcode_max_height())
     args = [
         "-y",
         "-i",
@@ -487,28 +502,17 @@ def _transcode_to_webm(source: Path, out: Path, *, token: str | None = None) -> 
         "0:v:0?",
         "-map",
         "0:a:0?",
+        "-c:v",
+        vcodec,
+        *video_extra,
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "128k",
+        "-f",
+        "webm",
+        str(tmp),
     ]
-    if vf:
-        args.extend(["-vf", vf])
-    args.extend(
-        [
-            "-c:v",
-            "libvpx",
-            "-b:v",
-            "1M",
-            "-deadline",
-            "realtime",
-            "-cpu-used",
-            "5",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "128k",
-            "-f",
-            "webm",
-            str(tmp),
-        ]
-    )
     _run_ffmpeg(args, token=token, duration_us=duration_us)
     if not tmp.is_file() or tmp.stat().st_size < 512:
         tmp.unlink(missing_ok=True)
@@ -533,7 +537,7 @@ def ensure_transcoded_webm(source: Path) -> Path:
         _clear_active_job(token)
         return out
     _register_transcode_job(token, resolved, "webm", status="queued")
-    with _TRANSCODE_SEM:
+    with _transcode_semaphore():
         _mark_job_running(token)
         with _lock_for(token):
             if _webm_cache_valid(out):
@@ -605,7 +609,7 @@ def _start_mp4_transcode_async(source: Path, *, playback_mode: str = "auto") -> 
 
         def _worker() -> None:
             try:
-                with _TRANSCODE_SEM:
+                with _transcode_semaphore():
                     _mark_job_running(token)
                     with _lock_for(token):
                         if _mp4_cache_valid(out):
@@ -706,7 +710,7 @@ def ensure_transcoded_mp4(source: Path, *, playback_mode: str = "auto") -> Path:
         _clear_active_job(token)
         return out
     _register_transcode_job(token, resolved, _mp4_job_format(resolved), status="queued")
-    with _TRANSCODE_SEM:
+    with _transcode_semaphore():
         _mark_job_running(token)
         with _lock_for(token):
             if _mp4_cache_valid(out):

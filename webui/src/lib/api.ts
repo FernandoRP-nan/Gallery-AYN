@@ -179,6 +179,18 @@ const devMockApi: WebApi = {
     exists: false,
     error: "Solo disponible con la app Python (PyWebView).",
   }),
+  gallery_video_system_diagnostics: async () => ({
+    engine: "mock",
+    prefersWebm: false,
+    qtFreeworld: false,
+    ffmpegAvailable: false,
+    hwEncodersAvailable: [] as string[],
+    webmHwEncodersAvailable: [] as string[],
+    transcodeMaxJobs: 1,
+    transcodeCacheFiles: 0,
+    transcodeCacheBytes: 0,
+    activeTranscodeJobs: 0,
+  }),
   gallery_open_external: async () => ({ ok: true }),
   gallery_show_in_explorer: async () => ({ ok: true }),
   gallery_file_base64: async () => ({
@@ -353,6 +365,7 @@ export const bridge = {
   galleryTranscodeCancel: (path: string) => call<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>("gallery_transcode_cancel", path),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
+  galleryVideoSystemDiagnostics: () => call<any>("gallery_video_system_diagnostics"),
   galleryVideoPlaybackBlob: (path: string) =>
     call<any>("gallery_video_playback_blob", normalizePathForApi(path)),
   galleryOpenExternal: (path: string) => call<any>("gallery_open_external", normalizePathForApi(path)),

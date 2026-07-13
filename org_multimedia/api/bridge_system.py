@@ -168,6 +168,9 @@ _VIDEO_SETTINGS_KEYS = frozenset(
         "video_transcode_max_height",
         "video_transcode_max_width",
         "video_transcode_hw",
+        "video_transcode_max_jobs",
+        "gallery_warm_videos_enabled",
+        "gallery_warm_videos_per_folder",
     }
 )
 
@@ -236,6 +239,12 @@ class SystemBridgeMixin:
 
     def ping(self) -> dict:
         return {"ok": True, "ts": time.time()}
+
+    def gallery_video_system_diagnostics(self) -> dict:
+        """Diagnóstico del motor de vídeo, ffmpeg HW y caché (sin archivo concreto)."""
+        from ..core.video_system_diagnostics import video_system_diagnostics
+
+        return video_system_diagnostics()
 
     def _merge_recent_folder(self, path_str: str) -> None:
         """Mantiene hasta 20 rutas únicas (más reciente primero) para acceso rápido en la UI."""
