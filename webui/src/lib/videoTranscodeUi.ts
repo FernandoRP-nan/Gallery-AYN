@@ -7,6 +7,7 @@ export type TranscodeJobRow = {
   format: string;
   progress?: string;
   status?: string;
+  queuePosition?: string;
 };
 
 export function isActiveTranscodeJob(job: TranscodeJobRow): boolean {

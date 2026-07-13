@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import os
 import subprocess
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .video_playback_mode import PlaybackMode, normalize_playback_mode, resolve_transcode_plan, transcode_cache_suffix
@@ -15,14 +17,10 @@ from .win_subprocess import popen_hidden, run_hidden
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
-_TRANSCODE_SEM: threading.Semaphore | None = None
-_TRANSCODE_SEM_N = 0
 _WARM_TOKENS: set[str] = set()
 _WARM_GUARD = threading.Lock()
 _ACTIVE_JOBS: dict[str, dict[str, str]] = {}
 _ACTIVE_GUARD = threading.Lock()
-_RUNNING: dict[str, threading.Thread] = {}
-_RUNNING_GUARD = threading.Lock()
 _FFMPEG_PROCS: dict[str, subprocess.Popen] = {}
 _FFMPEG_PROCS_GUARD = threading.Lock()
 _CANCEL_TOKENS: set[str] = set()
@@ -30,26 +28,289 @@ _CANCEL_GUARD = threading.Lock()
 _PARTIAL_MIN_BYTES = 196_608
 _PROGRESSIVE_MOVFLAGS = ["-movflags", "frag_keyframe+empty_moov+default_base_moof"]
 
+# Prioridad de cola: precalentamiento < streaming HTTP < reproducción del usuario.
+TRANSCODE_PRIORITY_WARM = 0
+TRANSCODE_PRIORITY_HTTP = 60
+TRANSCODE_PRIORITY_USER = 100
+
+
+@dataclass
+class _TranscodeWork:
+    token: str
+    source: Path
+    fmt: str
+    playback_mode: str = "auto"
+    progressive: bool = True
+    priority: int = TRANSCODE_PRIORITY_WARM
+    bump: int = 0
+    seq: int = 0
+    waiter: threading.Event | None = None
+    sync_error: list[BaseException] = field(default_factory=list)
+
+    def sort_key(self) -> tuple[int, int, int]:
+        return (-self.priority, -self.bump, self.seq)
+
+
+_QUEUE_BY_TOKEN: dict[str, _TranscodeWork] = {}
+_QUEUE_HEAP: list[tuple[tuple[int, int, int], str]] = []
+_QUEUE_GUARD = threading.Lock()
+_QUEUE_CV = threading.Condition(_QUEUE_GUARD)
+_QUEUE_SEQ = 0
+_QUEUE_BUMP = 0
+_RUNNING_TOKENS: set[str] = set()
+_WORKER_THREADS: list[threading.Thread] = []
+
 
 class TranscodeCancelledError(RuntimeError):
     """Transcodificación cancelada por el usuario (p. ej. cerrar fullscreen)."""
 
 
-def _transcode_semaphore() -> threading.Semaphore:
-    """Semáforo acorde a video_transcode_max_jobs (1–3)."""
-    global _TRANSCODE_SEM, _TRANSCODE_SEM_N
-    from .video_transcode_options import get_transcode_max_jobs
-
-    n = get_transcode_max_jobs()
-    if _TRANSCODE_SEM is None or _TRANSCODE_SEM_N != n:
-        _TRANSCODE_SEM = threading.Semaphore(n)
-        _TRANSCODE_SEM_N = n
-    return _TRANSCODE_SEM
-
-
 def list_active_transcode_jobs() -> list[dict[str, str]]:
     with _ACTIVE_GUARD:
-        return [j for j in _ACTIVE_JOBS.values() if j.get("status") in ("queued", "running")]
+        jobs = [dict(j) for j in _ACTIVE_JOBS.values() if j.get("status") in ("queued", "running")]
+    with _QUEUE_GUARD:
+        order = [
+            token
+            for _, token in sorted(
+                (work.sort_key(), work.token) for work in _QUEUE_BY_TOKEN.values()
+            )
+        ]
+    pos_by_token = {tok: idx + 1 for idx, tok in enumerate(order)}
+    for job in jobs:
+        if job.get("status") == "queued":
+            qp = pos_by_token.get(str(job.get("id", "")))
+            if qp:
+                job["queuePosition"] = str(qp)
+    return jobs
+
+
+def _next_queue_seq() -> int:
+    global _QUEUE_SEQ
+    _QUEUE_SEQ += 1
+    return _QUEUE_SEQ
+
+
+def _next_queue_bump() -> int:
+    global _QUEUE_BUMP
+    _QUEUE_BUMP += 1
+    return _QUEUE_BUMP
+
+
+def _rebuild_queue_heap() -> None:
+    _QUEUE_HEAP.clear()
+    for token, work in _QUEUE_BY_TOKEN.items():
+        heapq.heappush(_QUEUE_HEAP, (work.sort_key(), token))
+
+
+def _enqueue_work(work: _TranscodeWork) -> bool:
+    with _QUEUE_GUARD:
+        prev = _QUEUE_BY_TOKEN.get(work.token)
+        if prev is not None:
+            if work.priority > prev.priority:
+                prev.priority = work.priority
+                prev.bump = _next_queue_bump()
+                prev.progressive = prev.progressive or work.progressive
+                _rebuild_queue_heap()
+                _QUEUE_CV.notify_all()
+                return True
+            return False
+        if work.token in _RUNNING_TOKENS:
+            return False
+        work.seq = _next_queue_seq()
+        _QUEUE_BY_TOKEN[work.token] = work
+        heapq.heappush(_QUEUE_HEAP, (work.sort_key(), work.token))
+        _QUEUE_CV.notify()
+        return True
+
+
+def _dequeue_work() -> _TranscodeWork | None:
+    with _QUEUE_GUARD:
+        while True:
+            if not _QUEUE_HEAP:
+                _QUEUE_CV.wait()
+                continue
+            sort_key, token = heapq.heappop(_QUEUE_HEAP)
+            work = _QUEUE_BY_TOKEN.get(token)
+            if work is None:
+                continue
+            if work.sort_key() != sort_key:
+                heapq.heappush(_QUEUE_HEAP, (work.sort_key(), token))
+                continue
+            _QUEUE_BY_TOKEN.pop(token, None)
+            _RUNNING_TOKENS.add(token)
+            return work
+
+
+def _finish_running_token(token: str) -> None:
+    with _QUEUE_GUARD:
+        _RUNNING_TOKENS.discard(token)
+
+
+def _ensure_transcode_workers() -> None:
+    from .video_transcode_options import get_transcode_max_jobs
+
+    n = max(1, get_transcode_max_jobs())
+    with _QUEUE_GUARD:
+        while len(_WORKER_THREADS) < n:
+            t = threading.Thread(
+                target=_transcode_worker_main,
+                daemon=True,
+                name=f"om-transcode-worker-{len(_WORKER_THREADS)}",
+            )
+            _WORKER_THREADS.append(t)
+            t.start()
+
+
+def _execute_transcode_work(work: _TranscodeWork) -> None:
+    token = work.token
+    resolved = work.source
+    if work.fmt == "webm":
+        out = transcode_webm_output_path(resolved)
+        with _lock_for(token):
+            if _webm_cache_valid(out):
+                return
+            _transcode_to_webm(resolved, out, token=token)
+        return
+    mode = normalize_playback_mode(work.playback_mode)
+    out = transcode_output_path(resolved, playback_mode=mode)
+    with _lock_for(token):
+        if _mp4_cache_valid(out):
+            return
+        _transcode_to_mp4(
+            resolved,
+            out,
+            token=token,
+            playback_mode=mode,
+            progressive=work.progressive,
+        )
+
+
+def _transcode_worker_main() -> None:
+    while True:
+        work = _dequeue_work()
+        if work is None:
+            continue
+        token = work.token
+        try:
+            _mark_job_running(token)
+            _execute_transcode_work(work)
+            _finish_active_job(token)
+        except TranscodeCancelledError:
+            _fail_active_job(token)
+            if work.fmt == "mp4":
+                mode = normalize_playback_mode(work.playback_mode)
+                partial = transcode_partial_path(
+                    transcode_output_path(work.source, playback_mode=mode)
+                )
+                partial.unlink(missing_ok=True)
+        except Exception as exc:
+            work.sync_error.append(exc)
+            _fail_active_job(token)
+        finally:
+            _finish_running_token(token)
+            with _WARM_GUARD:
+                _WARM_TOKENS.discard(token)
+            if work.waiter is not None:
+                work.waiter.set()
+            with _QUEUE_GUARD:
+                _QUEUE_CV.notify()
+
+
+def _submit_transcode(
+    source: Path,
+    *,
+    fmt: str,
+    playback_mode: str = "auto",
+    progressive: bool = True,
+    priority: int = TRANSCODE_PRIORITY_WARM,
+    blocking: bool = False,
+) -> Path | None:
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    if fmt == "webm":
+        _remember_webm_source(resolved)
+        out = transcode_webm_output_path(resolved)
+        token = out.stem
+        job_fmt = "webm"
+        cache_ok = _webm_cache_valid(out)
+    else:
+        _remember_transcode_source(resolved, playback_mode=mode)
+        out = transcode_output_path(resolved, playback_mode=mode)
+        token = out.stem
+        job_fmt = _mp4_job_format(resolved)
+        cache_ok = _mp4_cache_valid(out)
+    if cache_ok:
+        _clear_active_job(token)
+        return out if blocking else None
+
+    waiter = threading.Event() if blocking else None
+    work = _TranscodeWork(
+        token=token,
+        source=resolved,
+        fmt=fmt,
+        playback_mode=mode,
+        progressive=progressive,
+        priority=priority,
+        waiter=waiter,
+    )
+    _register_transcode_job(token, resolved, job_fmt, status="queued")
+    if not _enqueue_work(work):
+        if not blocking:
+            return None
+        deadline = time.time() + 7200
+        while time.time() < deadline:
+            if fmt == "webm" and _webm_cache_valid(out):
+                _clear_active_job(token)
+                return out
+            if fmt == "mp4" and _mp4_cache_valid(out):
+                _clear_active_job(token)
+                return out
+            time.sleep(0.12)
+        raise TimeoutError("Tiempo de espera agotado para transcodificación")
+    _ensure_transcode_workers()
+    if not blocking:
+        return None
+    assert waiter is not None
+    waiter.wait()
+    if work.sync_error:
+        raise work.sync_error[0]
+    if fmt == "webm" and not _webm_cache_valid(out):
+        raise RuntimeError("La transcodificación WebM no generó un archivo válido")
+    if fmt == "mp4" and not _mp4_cache_valid(out):
+        raise RuntimeError("La transcodificación no generó un archivo válido")
+    return out
+
+
+def prioritize_transcode_for_path(source: Path, *, playback_mode: str = "auto") -> dict:
+    """Sube al frente de la cola el vídeo que el usuario intenta reproducir."""
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    tokens = [
+        transcode_output_path(resolved, playback_mode=mode).stem,
+        transcode_webm_output_path(resolved).stem,
+    ]
+    bumped = 0
+    with _QUEUE_GUARD:
+        for token in tokens:
+            work = _QUEUE_BY_TOKEN.get(token)
+            if work is None:
+                continue
+            work.priority = TRANSCODE_PRIORITY_USER
+            work.bump = _next_queue_bump()
+            bumped += 1
+        if bumped:
+            _rebuild_queue_heap()
+            _QUEUE_CV.notify_all()
+    return {"ok": True, "bumped": bumped, "path": str(resolved)}
+
+
+def _drop_queued_transcode(token: str) -> None:
+    with _QUEUE_GUARD:
+        if token not in _QUEUE_BY_TOKEN:
+            return
+        _QUEUE_BY_TOKEN.pop(token, None)
+        _rebuild_queue_heap()
+        _QUEUE_CV.notify_all()
 
 
 def _kill_ffmpeg_for_token(token: str) -> None:
@@ -76,6 +337,7 @@ def cancel_transcode_for_path(source: Path, *, playback_mode: str = "auto") -> b
         with _CANCEL_GUARD:
             _CANCEL_TOKENS.add(token)
         _kill_ffmpeg_for_token(token)
+        _drop_queued_transcode(token)
         with _ACTIVE_GUARD:
             if token in _ACTIVE_JOBS:
                 cancelled = True
@@ -184,8 +446,10 @@ def invalidate_transcode_cache() -> int:
             removed += 1
         except OSError:
             pass
-    with _RUNNING_GUARD:
-        _RUNNING.clear()
+    with _QUEUE_GUARD:
+        _QUEUE_BY_TOKEN.clear()
+        _QUEUE_HEAP.clear()
+        _RUNNING_TOKENS.clear()
     return removed
 
 
@@ -530,25 +794,14 @@ def _webm_cache_valid(out: Path) -> bool:
 
 def ensure_transcoded_webm(source: Path) -> Path:
     """Devuelve WebM en caché para visores sin H.264 (Qt en Fedora)."""
-    resolved = source.resolve()
-    out = transcode_webm_output_path(resolved)
-    token = out.stem
-    if _webm_cache_valid(out):
-        _clear_active_job(token)
-        return out
-    _register_transcode_job(token, resolved, "webm", status="queued")
-    with _transcode_semaphore():
-        _mark_job_running(token)
-        with _lock_for(token):
-            if _webm_cache_valid(out):
-                _finish_active_job(token)
-                return out
-            try:
-                _transcode_to_webm(resolved, out, token=token)
-                _finish_active_job(token)
-            except Exception:
-                _fail_active_job(token)
-                raise
+    out = _submit_transcode(
+        source,
+        fmt="webm",
+        progressive=True,
+        priority=TRANSCODE_PRIORITY_USER,
+        blocking=True,
+    )
+    assert out is not None
     return out
 
 
@@ -590,56 +843,20 @@ def _mp4_cache_valid(out: Path) -> bool:
     return out.is_file() and out.stat().st_size > 512 and is_browser_playable(out)
 
 
-def _start_mp4_transcode_async(source: Path, *, playback_mode: str = "auto") -> None:
-    resolved = source.resolve()
-    mode = normalize_playback_mode(playback_mode)
-    out = transcode_output_path(resolved, playback_mode=mode)
-    token = out.stem
-    if _mp4_cache_valid(out):
-        _clear_active_job(token)
-        return
-
-    with _RUNNING_GUARD:
-        thread = _RUNNING.get(token)
-        if thread is not None and thread.is_alive():
-            return
-
-        _remember_transcode_source(resolved, playback_mode=mode)
-        _register_transcode_job(token, resolved, _mp4_job_format(resolved), status="queued")
-
-        def _worker() -> None:
-            try:
-                with _transcode_semaphore():
-                    _mark_job_running(token)
-                    with _lock_for(token):
-                        if _mp4_cache_valid(out):
-                            _finish_active_job(token)
-                            return
-                        try:
-                            _transcode_to_mp4(
-                                resolved,
-                                out,
-                                token=token,
-                                playback_mode=mode,
-                                progressive=True,
-                            )
-                            _finish_active_job(token)
-                        except TranscodeCancelledError:
-                            _fail_active_job(token)
-                            partial = transcode_partial_path(out)
-                            partial.unlink(missing_ok=True)
-                        except Exception:
-                            _fail_active_job(token)
-                            partial = transcode_partial_path(out)
-                            partial.unlink(missing_ok=True)
-                            raise
-            finally:
-                with _RUNNING_GUARD:
-                    _RUNNING.pop(token, None)
-
-        t = threading.Thread(target=_worker, daemon=True, name=f"om-transcode-{token[:8]}")
-        _RUNNING[token] = t
-        t.start()
+def _start_mp4_transcode_async(
+    source: Path,
+    *,
+    playback_mode: str = "auto",
+    priority: int = TRANSCODE_PRIORITY_HTTP,
+) -> None:
+    _submit_transcode(
+        source,
+        fmt="mp4",
+        playback_mode=playback_mode,
+        progressive=True,
+        priority=priority,
+        blocking=False,
+    )
 
 
 def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait_partial: bool = True) -> Path:
@@ -653,7 +870,7 @@ def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait
         _clear_active_job(out.stem)
         return out
 
-    _start_mp4_transcode_async(resolved, playback_mode=mode)
+    _start_mp4_transcode_async(resolved, playback_mode=mode, priority=TRANSCODE_PRIORITY_HTTP)
 
     if not wait_partial:
         if partial.is_file() and partial.stat().st_size >= _PARTIAL_MIN_BYTES:
@@ -675,7 +892,6 @@ def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait
 
 def warm_webm_transcode_async(source: Path) -> None:
     resolved = source.resolve()
-    _remember_webm_source(resolved)
     out = transcode_webm_output_path(resolved)
     if _webm_cache_valid(out):
         return
@@ -684,50 +900,26 @@ def warm_webm_transcode_async(source: Path) -> None:
         if token in _WARM_TOKENS:
             return
         _WARM_TOKENS.add(token)
-    _register_transcode_job(token, resolved, "webm", status="queued")
-
-    def _worker() -> None:
-        token = out.stem
-        try:
-            ensure_transcoded_webm(resolved)
-        except Exception:
-            _fail_active_job(token)
-        finally:
-            _clear_active_job(token)
-            with _WARM_GUARD:
-                _WARM_TOKENS.discard(token)
-
-    threading.Thread(target=_worker, daemon=True, name="om-transcode-webm-warm").start()
+    _submit_transcode(
+        resolved,
+        fmt="webm",
+        progressive=True,
+        priority=TRANSCODE_PRIORITY_WARM,
+        blocking=False,
+    )
 
 
 def ensure_transcoded_mp4(source: Path, *, playback_mode: str = "auto") -> Path:
     """Devuelve el MP4 en caché; transcodifica la primera vez si hace falta (bloqueante)."""
-    resolved = source.resolve()
-    mode = normalize_playback_mode(playback_mode)
-    out = transcode_output_path(resolved, playback_mode=mode)
-    token = out.stem
-    if _mp4_cache_valid(out):
-        _clear_active_job(token)
-        return out
-    _register_transcode_job(token, resolved, _mp4_job_format(resolved), status="queued")
-    with _transcode_semaphore():
-        _mark_job_running(token)
-        with _lock_for(token):
-            if _mp4_cache_valid(out):
-                _finish_active_job(token)
-                return out
-            try:
-                _transcode_to_mp4(
-                    resolved,
-                    out,
-                    token=token,
-                    playback_mode=mode,
-                    progressive=False,
-                )
-                _finish_active_job(token)
-            except Exception:
-                _fail_active_job(token)
-                raise
+    out = _submit_transcode(
+        source,
+        fmt="mp4",
+        playback_mode=playback_mode,
+        progressive=False,
+        priority=TRANSCODE_PRIORITY_USER,
+        blocking=True,
+    )
+    assert out is not None
     return out
 
 
@@ -753,11 +945,15 @@ def resolve_transcode_source(filename: str) -> Path | None:
     return None
 
 
-def warm_transcode_async(source: Path, *, playback_mode: str = "auto") -> None:
+def warm_transcode_async(
+    source: Path,
+    *,
+    playback_mode: str = "auto",
+    priority: int = TRANSCODE_PRIORITY_WARM,
+) -> None:
     """Precalienta la caché de transcodificación sin bloquear la UI."""
     resolved = source.resolve()
     mode = normalize_playback_mode(playback_mode)
-    _remember_transcode_source(resolved, playback_mode=mode)
     out = transcode_output_path(resolved, playback_mode=mode)
     if _mp4_cache_valid(out):
         return
@@ -766,12 +962,11 @@ def warm_transcode_async(source: Path, *, playback_mode: str = "auto") -> None:
         if token in _WARM_TOKENS:
             return
         _WARM_TOKENS.add(token)
-
-    def _worker() -> None:
-        try:
-            _start_mp4_transcode_async(resolved, playback_mode=mode)
-        finally:
-            with _WARM_GUARD:
-                _WARM_TOKENS.discard(token)
-
-    threading.Thread(target=_worker, daemon=True, name="om-transcode-warm").start()
+    _submit_transcode(
+        resolved,
+        fmt="mp4",
+        playback_mode=mode,
+        progressive=True,
+        priority=priority,
+        blocking=False,
+    )

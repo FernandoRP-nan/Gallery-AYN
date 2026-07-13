@@ -129,12 +129,24 @@ def ensure_viewer_playback(path: Path, *, playback_mode: str = "auto") -> tuple[
     return out, "video/mp4"
 
 
-def warm_viewer_playback_async(path: Path, *, playback_mode: str = "auto") -> None:
+def warm_viewer_playback_async(
+    path: Path,
+    *,
+    playback_mode: str = "auto",
+    priority: int | None = None,
+) -> None:
+    from .video_transcode import TRANSCODE_PRIORITY_USER, TRANSCODE_PRIORITY_WARM, prioritize_transcode_for_path
+
     mode = normalize_playback_mode(playback_mode)
+    prio = priority if priority is not None else TRANSCODE_PRIORITY_WARM
     if viewer_prefers_webm():
         warm_webm_transcode_async(path)
+        if prio >= TRANSCODE_PRIORITY_USER:
+            prioritize_transcode_for_path(path, playback_mode=mode)
     else:
-        warm_transcode_async(path, playback_mode=mode)
+        warm_transcode_async(path, playback_mode=mode, priority=prio)
+        if prio >= TRANSCODE_PRIORITY_USER:
+            prioritize_transcode_for_path(path, playback_mode=mode)
 
 
 def viewer_playback_cache_status(path: Path, *, playback_mode: str = "auto") -> dict:

@@ -247,7 +247,9 @@ class EditorBridgeMixin:
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
             mode = normalize_playback_mode(playback_mode)
             if warm and mode != "direct":
-                warm_viewer_playback_async(p, playback_mode=mode)
+                from ..core.video_transcode import TRANSCODE_PRIORITY_USER
+
+                warm_viewer_playback_async(p, playback_mode=mode, priority=TRANSCODE_PRIORITY_USER)
             cache = viewer_playback_cache_status(p, playback_mode=mode)
             from ..core.video_tools import ffmpeg_available, ffprobe_available
 
@@ -285,6 +287,20 @@ class EditorBridgeMixin:
 
         jobs = list_active_transcode_jobs()
         return {"jobs": jobs, "count": len(jobs)}
+
+    def gallery_transcode_prioritize(self, path: str, playback_mode: str = "auto") -> dict:
+        from ..core.fs_path import resolve_file_path
+        from ..core.video_playback_mode import normalize_playback_mode
+        from ..core.video_transcode import prioritize_transcode_for_path, TRANSCODE_PRIORITY_USER
+        from ..core.viewer_playback import warm_viewer_playback_async
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        mode = normalize_playback_mode(playback_mode)
+        warm_viewer_playback_async(p, playback_mode=mode, priority=TRANSCODE_PRIORITY_USER)
+        return prioritize_transcode_for_path(p, playback_mode=mode)
 
     def gallery_transcode_cancel(self, path: str) -> dict:
         from ..core.fs_path import resolve_file_path

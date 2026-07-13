@@ -438,32 +438,133 @@
   let splitDrag = false;
   /** Contador para overlay de carga (carpetas, API, etc.). */
   let loadCount = 0;
+  let manualLoadDepth = 0;
   let uiLoading = false;
   let uiLoadingMessage = "";
+  let loadOverlayDetail = "";
+  let loadOverlayDone: number | null = null;
+  let loadOverlayTotal: number | null = null;
+  let loadProgressTimer: ReturnType<typeof setInterval> | null = null;
   let loadingTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  function syncUiLoadingVisible() {
+    uiLoading = manualLoadDepth > 0 || loadCount > 0;
+  }
+
+  function updateLoadOverlay(opts?: {
+    message?: string;
+    detail?: string;
+    done?: number | null;
+    total?: number | null;
+  }) {
+    if (opts?.message != null) uiLoadingMessage = opts.message;
+    if (opts?.detail !== undefined) loadOverlayDetail = opts.detail ?? "";
+    if (opts?.done !== undefined) loadOverlayDone = opts.done;
+    if (opts?.total !== undefined) loadOverlayTotal = opts.total;
+  }
+
+  function beginManualLoad(message: string, detail = "") {
+    manualLoadDepth++;
+    uiLoadingMessage = message;
+    loadOverlayDetail = detail;
+    loadOverlayDone = null;
+    loadOverlayTotal = null;
+    syncUiLoadingVisible();
+    startLoadProgressPoller();
+  }
+
+  function endManualLoad() {
+    manualLoadDepth = Math.max(0, manualLoadDepth - 1);
+    if (manualLoadDepth === 0 && loadCount <= 0) {
+      stopLoadProgressPoller();
+      loadOverlayDetail = "";
+      loadOverlayDone = null;
+      loadOverlayTotal = null;
+      uiLoadingMessage = "";
+    }
+    syncUiLoadingVisible();
+  }
+
+  async function refreshLoadOverlayBackground() {
+    if (!uiLoading) return;
+    try {
+      const warm = await bridge.galleryIndexWarmStatus();
+      if (warm?.running && Number(warm.total) > 0) {
+        const done = Number(warm.done) || 0;
+        const total = Number(warm.total) || 0;
+        const path = String(warm.currentPath || "").trim();
+        updateLoadOverlay({
+          detail: path
+            ? t("loadOverlay.warmCurrent").replace("{path}", path)
+            : t("loadOverlay.warmIndex").replace("{done}", String(done)).replace("{total}", String(total)),
+          done,
+          total,
+        });
+        return;
+      }
+      const tc = await bridge.galleryTranscodeActive();
+      const jobs = Array.isArray(tc?.jobs) ? tc.jobs : [];
+      if (jobs.length > 0) {
+        const first = jobs[0];
+        const name = String(first?.name || first?.path || "").trim();
+        updateLoadOverlay({
+          detail: name
+            ? t("loadOverlay.transcode").replace("{name}", name)
+            : t("loadOverlay.transcodeJobs").replace("{count}", String(jobs.length)),
+          done: null,
+          total: null,
+        });
+        return;
+      }
+      if (manualLoadDepth === 0) {
+        updateLoadOverlay({ done: null, total: null });
+      }
+    } catch {
+      /* ignorar errores de sondeo */
+    }
+  }
+
+  function startLoadProgressPoller() {
+    if (loadProgressTimer) return;
+    void refreshLoadOverlayBackground();
+    loadProgressTimer = setInterval(() => {
+      void refreshLoadOverlayBackground();
+    }, 500);
+  }
+
+  function stopLoadProgressPoller() {
+    if (!loadProgressTimer) return;
+    clearInterval(loadProgressTimer);
+    loadProgressTimer = null;
+  }
+
   function trackLoad<T>(promise: Promise<T>, message = ""): Promise<T> {
     loadCount++;
     if (loadCount === 1) {
-      uiLoadingMessage = message;
+      if (message) uiLoadingMessage = message;
       if (loadingTimeout) clearTimeout(loadingTimeout);
-      // Solo activa el spinner si la operación tarda más de 180ms (evita parpadeos en clics rápidos)
+      startLoadProgressPoller();
       loadingTimeout = setTimeout(() => {
-        if (loadCount > 0) {
-          uiLoading = true;
-        }
+        if (loadCount > 0 || manualLoadDepth > 0) syncUiLoadingVisible();
       }, 180);
     }
     return promise.finally(() => {
       loadCount--;
       if (loadCount <= 0) {
         loadCount = 0;
-        uiLoadingMessage = "";
+        if (manualLoadDepth <= 0) {
+          stopLoadProgressPoller();
+          uiLoadingMessage = "";
+          loadOverlayDetail = "";
+          loadOverlayDone = null;
+          loadOverlayTotal = null;
+        }
         if (loadingTimeout) {
           clearTimeout(loadingTimeout);
           loadingTimeout = null;
         }
-        uiLoading = false;
       }
+      syncUiLoadingVisible();
     });
   }
 
@@ -508,7 +609,13 @@
     for (const job of videoTranscodeJobs.filter(isActiveTranscodeJob)) {
       const pct =
         job.status === "running" && job.progress && job.progress !== "100" ? ` · ${job.progress}%` : "";
-      const queued = job.status === "queued" ? ` (${t("pager.processQueued")})` : "";
+      const pos = Number(job.queuePosition);
+      const queued =
+        job.status === "queued" && Number.isFinite(pos) && pos > 0
+          ? ` · ${t("preview.videoQueuePosition").replace("{n}", String(pos))}`
+          : job.status === "queued"
+            ? ` (${t("pager.processQueued")})`
+            : "";
       const base =
         job.format === "remux" ? t("pager.processVideoRemux") : t("pager.processVideoTranscode");
       list.push({
@@ -1499,9 +1606,9 @@
       escape: normalizeShortcutValue(keyboardShortcuts.escape, defaultKeyboardShortcuts.escape),
     };
 
-    uiLoading = true;
-    uiLoadingMessage = t("settings.saving");
+    beginManualLoad(t("settings.savingPatch"));
     try {
+      updateLoadOverlay({ message: t("settings.savingPatch") });
       await bridge.settingsPatch({
         gallery_thumbs_per_page: n, // 0 = sin límite
         gallery_unlimited_batch_size: galleryUnlimitedBatchSize,
@@ -1550,8 +1657,11 @@
         resetPreviewVideoPlaybackUi({ keepPath: true });
         requestPreviewVideoPlay();
       }
-      await trackLoad(bridge.destinationsSaveTree(destTreeSettingsDraft));
-      await trackLoad(bridge.markersSaveTree(markerTreeSettingsDraft));
+      updateLoadOverlay({ message: t("settings.savingDestinations") });
+      await bridge.destinationsSaveTree(destTreeSettingsDraft);
+      updateLoadOverlay({ message: t("settings.savingMarkers") });
+      await bridge.markersSaveTree(markerTreeSettingsDraft);
+      updateLoadOverlay({ message: t("settings.savingSync") });
       await syncDestinationsFromApi();
       await syncMarkersFromApi();
       applyGalleryPerfConfig({
@@ -1571,19 +1681,28 @@
       setGalleryDebugFilters(debugLogFilters);
       appliedThumbScale = ts;
       settingsOpen = false;
-      uiLoading = false;
 
       if (needsGalleryReload) {
-        uiLoading = true;
-        uiLoadingMessage = t("settings.applyingGallery");
-        await reload({ silent: false, invalidateThumbCache: thumbConfigChanged });
-        uiLoading = false;
+        const folderLabel = String(folder || getGalleryState()?.folder || "").trim();
+        const shortFolder = folderLabel ? folderLabel.split(/[/\\]/).filter(Boolean).pop() ?? folderLabel : "";
+        updateLoadOverlay({
+          message: t("settings.applyingGallery"),
+          detail: shortFolder ? `${shortFolder}` : "",
+          done: null,
+          total: null,
+        });
+        const navGen = beginGalleryRefresh(Boolean(thumbConfigChanged));
+        const out = await bridge.galleryReload();
+        if (isGalleryNavigationCurrent(navGen)) {
+          setGalleryPayload(out.state, out.items ?? []);
+          await afterGalleryDataLoaded();
+        }
       }
       status = needsGalleryReload ? t("settings.savedReloaded") : t("settings.savedInstant");
     } catch (e: unknown) {
       status = e instanceof Error ? e.message : t("settings.saveError");
     } finally {
-      uiLoading = false;
+      endManualLoad();
     }
   };
 
@@ -1939,10 +2058,16 @@
   function transcodeJobStatusLabel(job: (typeof videoTranscodeJobs)[number]): string {
     const pct =
       job.status === "running" && job.progress && job.progress !== "100" ? ` · ${job.progress}%` : "";
-    const queued = job.status === "queued" ? ` (${t("pager.processQueued")})` : "";
+    const pos = Number(job.queuePosition);
+    const queuePos =
+      job.status === "queued" && Number.isFinite(pos) && pos > 0
+        ? ` · ${t("preview.videoQueuePosition").replace("{n}", String(pos))}`
+        : job.status === "queued"
+          ? ` (${t("pager.processQueued")})`
+          : "";
     const base =
       job.format === "remux" ? t("pager.processVideoRemux") : t("pager.processVideoTranscode");
-    return `${base}${queued}${pct}`;
+    return `${base}${queuePos}${pct}`;
   }
 
   function stopVideoPreparePoll() {
@@ -2019,6 +2144,7 @@
     previewVideoErrorDetails = "";
     previewVideoSrc = "";
 
+    void bridge.galleryTranscodePrioritize(normalizePathForApi(path), previewVideoMode);
     void runPreviewVideoPlayback(path);
   }
 
@@ -2928,6 +3054,7 @@
     previewZoomVideoStatus = t("preview.videoStarting");
     previewZoomFileUrl = null;
 
+    void bridge.galleryTranscodePrioritize(normalizePathForApi(path), "auto");
     void runZoomVideoPlayback(path, previewZoomVideoSession);
   }
 
@@ -5938,7 +6065,12 @@
   {/if}
 
   {#if uiLoading}
-    <LoadOverlay message={uiLoadingMessage || t("load.loading")} />
+    <LoadOverlay
+      message={uiLoadingMessage || t("load.loading")}
+      detail={loadOverlayDetail}
+      done={loadOverlayDone}
+      total={loadOverlayTotal}
+    />
   {/if}
 
   <DebugLogPanel />

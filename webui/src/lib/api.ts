@@ -369,7 +369,13 @@ export const bridge = {
       "gallery_video_profiles",
       normalizePathForApi(path)
     ),
-  galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string }>; count: number }>("gallery_transcode_active"),
+  galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string; queuePosition?: string }>; count: number }>("gallery_transcode_active"),
+  galleryTranscodePrioritize: (path: string, playbackMode = "auto") =>
+    call<{ ok: boolean; bumped?: number; path?: string; error?: string }>(
+      "gallery_transcode_prioritize",
+      normalizePathForApi(path),
+      playbackMode
+    ),
   galleryTranscodeCancel: (path: string) => call<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>("gallery_transcode_cancel", path),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
