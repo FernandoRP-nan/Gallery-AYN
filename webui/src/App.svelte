@@ -22,7 +22,7 @@
     miniMapPointToNorm,
     panFromMiniMapNorm,
   } from "./lib/zoomMiniMap";
-  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
+  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, absolutizeMediaUrl, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
   import { canTranscodeVideo, tryAutoplayVideo, waitForTranscodeCache } from "./lib/videoPlayback";
   import { transcodeProgressForPath } from "./lib/videoTranscodeUi";
   import { scheduleNextZoomVideoWarm, cancelZoomVideoWarm } from "./lib/videoCarouselWarm";
@@ -2144,8 +2144,14 @@
     previewVideoErrorDetails = "";
     previewVideoSrc = "";
 
-    void bridge.galleryTranscodePrioritize(normalizePathForApi(path), previewVideoMode);
-    void runPreviewVideoPlayback(path);
+    void (async () => {
+      try {
+        await bridge.galleryTranscodePrioritize(normalizePathForApi(path), previewVideoMode);
+      } catch {
+        /* seguir con reproducción aunque falle la priorización */
+      }
+      await runPreviewVideoPlayback(path);
+    })();
   }
 
   async function runPreviewVideoPlayback(pathAtStart: string) {
@@ -2207,10 +2213,39 @@
       const out = await bridge.galleryTranscodeActive();
       const jobs = (out?.jobs ?? []).filter(isActiveTranscodeJob);
       videoTranscodeJobs = jobs;
-      if (jobs.length === 0) stopVideoPreparePoll();
+      const path = String(selectedPreview?.path ?? "").trim();
+      if (previewVideoPreparing && path && selectedPreview?.mediaType === "video") {
+        const key = normalizePathForApi(path);
+        const ownJob = jobs.find(
+          (j) => isActiveTranscodeJob(j) && normalizePathForApi(j.path) === key
+        );
+        if (ownJob?.status === "running" || ownJob?.queuePosition === "1") {
+          try {
+            const media = await bridge.galleryMediaUrl(key, false, previewVideoMode);
+            if (media?.transcodeCached) {
+              const info: MediaPlaybackInfo = {
+                fileUrl: absolutizeMediaUrl(String(media?.fileUrl ?? "")),
+                transcodeUrl: absolutizeMediaUrl(String(media?.transcodeUrl ?? "")),
+                needsTranscode: Boolean(media?.needsTranscode),
+                transcodeCached: true,
+                playbackMode: previewVideoMode,
+              };
+              const url = pickInitialPlaybackUrl(info);
+              if (url && !sameMediaUrl(previewVideoSrc, url)) {
+                previewVideoSrc = url;
+                selectedPreview = { ...selectedPreview, fileUrl: url };
+                void tick().then(() => maybeAutoplayPreviewVideo(previewVideoEl));
+              }
+            }
+          } catch {
+            /* ignorar fallo puntual de sondeo */
+          }
+        }
+      }
+      if (jobs.length === 0 && !previewVideoPreparing) stopVideoPreparePoll();
     } catch {
       videoTranscodeJobs = [];
-      stopVideoPreparePoll();
+      if (!previewVideoPreparing) stopVideoPreparePoll();
     }
   }
 
@@ -3054,8 +3089,14 @@
     previewZoomVideoStatus = t("preview.videoStarting");
     previewZoomFileUrl = null;
 
-    void bridge.galleryTranscodePrioritize(normalizePathForApi(path), "auto");
-    void runZoomVideoPlayback(path, previewZoomVideoSession);
+    void (async () => {
+      try {
+        await bridge.galleryTranscodePrioritize(normalizePathForApi(path), "auto");
+      } catch {
+        /* ignorar */
+      }
+      await runZoomVideoPlayback(path, previewZoomVideoSession);
+    })();
   }
 
   async function runZoomVideoPlayback(pathAtStart: string, sessionAtStart: number) {

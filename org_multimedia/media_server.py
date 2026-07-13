@@ -221,23 +221,25 @@ def _serve_transcoded_media(filename: str) -> bottle.HTTPResponse | str:
 
 
 def _serve_transcoded_webm(filename: str) -> bottle.HTTPResponse | str:
-    from .core.video_transcode import ensure_transcoded_webm, resolve_webm_source, transcode_cache_dir
+    from .core.video_transcode import resolve_webm_playback_path, resolve_webm_source, transcode_cache_dir
 
     name = _safe_cache_name(filename)
     if not name:
         return bottle.HTTPError(403, "Nombre inválido")
 
     cached = transcode_cache_dir() / name
-    if not cached.is_file() or cached.stat().st_size <= 512:
-        source = resolve_webm_source(name)
-        if source is None:
-            return bottle.HTTPError(404, "Archivo no encontrado")
-        try:
-            ensure_transcoded_webm(source)
-        except Exception as exc:
-            return bottle.HTTPError(500, f"No se pudo preparar el vídeo: {exc}")
+    if cached.is_file() and cached.stat().st_size > 512:
+        return _stream_file_range(cached, "video/webm")
 
-    return _stream_file_range(cached, "video/webm")
+    source = resolve_webm_source(name)
+    if source is None:
+        return bottle.HTTPError(404, "Archivo no encontrado")
+    try:
+        playback = resolve_webm_playback_path(source, wait_partial=True)
+    except Exception as exc:
+        return bottle.HTTPError(500, f"No se pudo preparar el vídeo: {exc}")
+
+    return _stream_file_range(playback, "video/webm")
 
 
 def _apply_media_cors() -> None:

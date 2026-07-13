@@ -47,11 +47,22 @@
   async function refreshVideoDiagnostics() {
     videoDiagLoading = true;
     videoDiagError = "";
+    const timeoutMs = 12_000;
     try {
-      videoDiag = await bridge.galleryVideoSystemDiagnostics();
+      videoDiag = await Promise.race([
+        bridge.galleryVideoSystemDiagnostics(),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error("timeout")), timeoutMs);
+        }),
+      ]);
     } catch (err) {
       videoDiag = null;
-      videoDiagError = err instanceof Error ? err.message : String(err);
+      videoDiagError =
+        err instanceof Error && err.message === "timeout"
+          ? t("settings.videoDiagTimeout")
+          : err instanceof Error
+            ? err.message
+            : String(err);
     } finally {
       videoDiagLoading = false;
     }

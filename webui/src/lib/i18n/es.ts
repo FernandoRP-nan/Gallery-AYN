@@ -452,6 +452,7 @@ export const es = {
     videoDiagTitle: "Diagnóstico del sistema",
     videoDiagRefresh: "Actualizar",
     videoDiagLoading: "Comprobando…",
+    videoDiagTimeout: "El diagnóstico tardó demasiado (¿muchas transcodificaciones en curso?). Pulsa Actualizar.",
     videoDiagEmpty: "Sin datos de diagnóstico.",
     videoDiagEngine: "Motor de reproducción",
     videoDiagQtFreeworld: "Qt freeworld (H.264)",

@@ -243,7 +243,6 @@ def _submit_transcode(
         _clear_active_job(token)
         return out if blocking else None
 
-    waiter = threading.Event() if blocking else None
     work = _TranscodeWork(
         token=token,
         source=resolved,
@@ -251,34 +250,32 @@ def _submit_transcode(
         playback_mode=mode,
         progressive=progressive,
         priority=priority,
-        waiter=waiter,
+        waiter=None,
     )
     _register_transcode_job(token, resolved, job_fmt, status="queued")
-    if not _enqueue_work(work):
-        if not blocking:
-            return None
-        deadline = time.time() + 7200
-        while time.time() < deadline:
-            if fmt == "webm" and _webm_cache_valid(out):
-                _clear_active_job(token)
-                return out
-            if fmt == "mp4" and _mp4_cache_valid(out):
-                _clear_active_job(token)
-                return out
-            time.sleep(0.12)
-        raise TimeoutError("Tiempo de espera agotado para transcodificación")
-    _ensure_transcode_workers()
+    enqueued = _enqueue_work(work)
+    if enqueued:
+        _ensure_transcode_workers()
     if not blocking:
         return None
-    assert waiter is not None
-    waiter.wait()
-    if work.sync_error:
-        raise work.sync_error[0]
-    if fmt == "webm" and not _webm_cache_valid(out):
-        raise RuntimeError("La transcodificación WebM no generó un archivo válido")
-    if fmt == "mp4" and not _mp4_cache_valid(out):
-        raise RuntimeError("La transcodificación no generó un archivo válido")
-    return out
+    partial: Path | None = None
+    if fmt == "webm":
+        partial = transcode_webm_partial_path(out)
+    else:
+        partial = transcode_partial_path(out)
+    if not enqueued:
+        _ensure_transcode_workers()
+    try:
+        return _wait_transcode_ready(
+            token=token,
+            out=out,
+            fmt=fmt,
+            partial=partial,
+            timeout=7200.0,
+            allow_partial=False,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def prioritize_transcode_for_path(source: Path, *, playback_mode: str = "auto") -> dict:
@@ -422,6 +419,65 @@ def transcode_output_path(source: Path, *, playback_mode: str = "auto") -> Path:
 
 def transcode_partial_path(out: Path) -> Path:
     return out.with_suffix(".part.mp4")
+
+
+def transcode_webm_partial_path(out: Path) -> Path:
+    return out.with_suffix(".part.webm")
+
+
+def _wait_transcode_ready(
+    *,
+    token: str,
+    out: Path,
+    fmt: str,
+    partial: Path | None = None,
+    timeout: float = 7200.0,
+    allow_partial: bool = False,
+) -> Path:
+    """Espera a caché final o archivo parcial (sin bloquear el hilo de trabajo)."""
+    deadline = time.time() + max(1.0, timeout)
+    while time.time() < deadline:
+        if fmt == "webm" and _webm_cache_valid(out):
+            _clear_active_job(token)
+            return out
+        if fmt == "mp4" and _mp4_cache_valid(out):
+            _clear_active_job(token)
+            return out
+        if allow_partial and partial is not None and partial.is_file():
+            try:
+                if partial.stat().st_size >= _PARTIAL_MIN_BYTES:
+                    return partial
+            except OSError:
+                pass
+        time.sleep(0.12)
+    raise TimeoutError("Tiempo de espera agotado para la transcodificación")
+
+
+def request_user_transcode(source: Path, *, playback_mode: str = "auto") -> dict:
+    """Encola (o reprioriza) la transcodificación del vídeo que el usuario quiere ver."""
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    from .viewer_playback import viewer_prefers_webm
+
+    if viewer_prefers_webm():
+        _submit_transcode(
+            resolved,
+            fmt="webm",
+            progressive=True,
+            priority=TRANSCODE_PRIORITY_USER,
+            blocking=False,
+        )
+    else:
+        _submit_transcode(
+            resolved,
+            fmt="mp4",
+            playback_mode=mode,
+            progressive=True,
+            priority=TRANSCODE_PRIORITY_USER,
+            blocking=False,
+        )
+    _ensure_transcode_workers()
+    return prioritize_transcode_for_path(resolved, playback_mode=mode)
 
 
 def transcode_webm_output_path(source: Path) -> Path:
@@ -792,17 +848,29 @@ def _webm_cache_valid(out: Path) -> bool:
     return not audio or (audio.get("codec_name") or "").lower() == "opus"
 
 
-def ensure_transcoded_webm(source: Path) -> Path:
+def ensure_transcoded_webm(source: Path, *, timeout: float = 7200.0) -> Path:
     """Devuelve WebM en caché para visores sin H.264 (Qt en Fedora)."""
-    out = _submit_transcode(
-        source,
+    resolved = source.resolve()
+    out = transcode_webm_output_path(resolved)
+    if _webm_cache_valid(out):
+        _clear_active_job(out.stem)
+        return out
+    _submit_transcode(
+        resolved,
         fmt="webm",
         progressive=True,
         priority=TRANSCODE_PRIORITY_USER,
-        blocking=True,
+        blocking=False,
     )
-    assert out is not None
-    return out
+    _ensure_transcode_workers()
+    return _wait_transcode_ready(
+        token=out.stem,
+        out=out,
+        fmt="webm",
+        partial=transcode_webm_partial_path(out),
+        timeout=timeout,
+        allow_partial=False,
+    )
 
 
 def resolve_webm_source(filename: str) -> Path | None:
@@ -871,6 +939,7 @@ def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait
         return out
 
     _start_mp4_transcode_async(resolved, playback_mode=mode, priority=TRANSCODE_PRIORITY_HTTP)
+    _ensure_transcode_workers()
 
     if not wait_partial:
         if partial.is_file() and partial.stat().st_size >= _PARTIAL_MIN_BYTES:
@@ -879,15 +948,50 @@ def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait
             return out
         raise FileNotFoundError("Transcodificación aún no iniciada")
 
-    deadline = time.time() + 60.0
-    while time.time() < deadline:
-        if _mp4_cache_valid(out):
-            return out
+    return _wait_transcode_ready(
+        token=out.stem,
+        out=out,
+        fmt="mp4",
+        partial=partial,
+        timeout=180.0,
+        allow_partial=True,
+    )
+
+
+def resolve_webm_playback_path(source: Path, *, wait_partial: bool = True) -> Path:
+    """Ruta servible por HTTP (final o parcial en curso)."""
+    resolved = source.resolve()
+    out = transcode_webm_output_path(resolved)
+    partial = transcode_webm_partial_path(out)
+
+    if _webm_cache_valid(out):
+        _clear_active_job(out.stem)
+        return out
+
+    _submit_transcode(
+        resolved,
+        fmt="webm",
+        progressive=True,
+        priority=TRANSCODE_PRIORITY_HTTP,
+        blocking=False,
+    )
+    _ensure_transcode_workers()
+
+    if not wait_partial:
         if partial.is_file() and partial.stat().st_size >= _PARTIAL_MIN_BYTES:
             return partial
-        time.sleep(0.12)
+        if out.is_file():
+            return out
+        raise FileNotFoundError("Transcodificación aún no iniciada")
 
-    raise TimeoutError("Tiempo de espera agotado para iniciar reproducción progresiva")
+    return _wait_transcode_ready(
+        token=out.stem,
+        out=out,
+        fmt="webm",
+        partial=partial,
+        timeout=180.0,
+        allow_partial=True,
+    )
 
 
 def warm_webm_transcode_async(source: Path) -> None:
@@ -907,20 +1011,34 @@ def warm_webm_transcode_async(source: Path) -> None:
         priority=TRANSCODE_PRIORITY_WARM,
         blocking=False,
     )
+    _ensure_transcode_workers()
 
 
-def ensure_transcoded_mp4(source: Path, *, playback_mode: str = "auto") -> Path:
+def ensure_transcoded_mp4(source: Path, *, playback_mode: str = "auto", timeout: float = 7200.0) -> Path:
     """Devuelve el MP4 en caché; transcodifica la primera vez si hace falta (bloqueante)."""
-    out = _submit_transcode(
-        source,
+    resolved = source.resolve()
+    mode = normalize_playback_mode(playback_mode)
+    out = transcode_output_path(resolved, playback_mode=mode)
+    if _mp4_cache_valid(out):
+        _clear_active_job(out.stem)
+        return out
+    _submit_transcode(
+        resolved,
         fmt="mp4",
         playback_mode=playback_mode,
         progressive=False,
         priority=TRANSCODE_PRIORITY_USER,
-        blocking=True,
+        blocking=False,
     )
-    assert out is not None
-    return out
+    _ensure_transcode_workers()
+    return _wait_transcode_ready(
+        token=out.stem,
+        out=out,
+        fmt="mp4",
+        partial=transcode_partial_path(out),
+        timeout=timeout,
+        allow_partial=False,
+    )
 
 
 def resolve_transcode_source(filename: str) -> Path | None:
@@ -970,3 +1088,4 @@ def warm_transcode_async(
         priority=priority,
         blocking=False,
     )
+    _ensure_transcode_workers()

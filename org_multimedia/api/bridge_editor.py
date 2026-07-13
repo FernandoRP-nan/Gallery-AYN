@@ -291,16 +291,14 @@ class EditorBridgeMixin:
     def gallery_transcode_prioritize(self, path: str, playback_mode: str = "auto") -> dict:
         from ..core.fs_path import resolve_file_path
         from ..core.video_playback_mode import normalize_playback_mode
-        from ..core.video_transcode import prioritize_transcode_for_path, TRANSCODE_PRIORITY_USER
-        from ..core.viewer_playback import warm_viewer_playback_async
+        from ..core.video_transcode import request_user_transcode
 
         try:
             p = resolve_file_path(path)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         mode = normalize_playback_mode(playback_mode)
-        warm_viewer_playback_async(p, playback_mode=mode, priority=TRANSCODE_PRIORITY_USER)
-        return prioritize_transcode_for_path(p, playback_mode=mode)
+        return request_user_transcode(p, playback_mode=mode)
 
     def gallery_transcode_cancel(self, path: str) -> dict:
         from ..core.fs_path import resolve_file_path
