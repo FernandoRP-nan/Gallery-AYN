@@ -27,11 +27,13 @@ from ..core.gallery_images import make_thumbnail_photoimage
 
 from ..core.gallery_paths import (
     list_subdirs,
+    scan_all_files_flat,
     scan_images_flat,
     scan_media_flat,
     scan_media_recursive,
     sort_image_paths,
 )
+from ..core.media_organizer import MediaOrganizer
 
 from ..core.section_color import accent_hex_from_paths
 
@@ -241,17 +243,23 @@ class DestinationsBridgeMixin:
         return data
 
     def destination_move_paths_new_folder(
-        self, src_paths: list[str], parent_path: str, folder_name: str
+        self, src_paths: list[str], parent_path: str, folder_name: str, merge: bool = False
     ) -> dict:
-        """Mueve rutas a una subcarpeta nueva (sufijo (n) si el nombre ya existe)."""
+        """Mueve rutas a una subcarpeta nueva (sufijo (n) si el nombre ya existe y merge=False)."""
         raw_name = str(folder_name or "").strip()
         if not raw_name:
             raise ValueError("El nombre de carpeta no puede estar vacío.")
         if any(c in raw_name for c in '\\/:*?"<>|'):
             raise ValueError("Nombre de carpeta no válido.")
         parent = Path(str(parent_path or "").strip()).expanduser().resolve()
-        dest_dir = ensure_unique_folder_path(parent, raw_name)
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        if merge:
+            dest_dir = parent / raw_name
+            if dest_dir.exists() and not dest_dir.is_dir():
+                raise ValueError(f"Ya existe un archivo con el nombre «{raw_name}».")
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            dest_dir = ensure_unique_folder_path(parent, raw_name)
+            dest_dir.mkdir(parents=True, exist_ok=True)
         data = self.destination_move_paths(src_paths, str(dest_dir))
         data["moveResult"]["destFolder"] = str(dest_dir)
         return data
@@ -294,13 +302,31 @@ class DestinationsBridgeMixin:
     def destination_preview(self, dest_path: str, scale: float, width: int) -> dict:
         """Lista archivos del destino sin generar miniaturas (rápido; LQ/HQ las pide el cliente)."""
         folder = Path(dest_path).expanduser().resolve()
-        paths = scan_images_flat(folder) if folder.is_dir() else []
+        show_other = bool(self.settings.get("gallery_show_other_files", False))
+        if folder.is_dir():
+            paths = scan_all_files_flat(folder) if show_other else scan_images_flat(folder)
+        else:
+            paths = []
         thumb = _thumb_px_from_dest_scale(float(scale))
         cols = max(2, min(10, int(max(400, width) // (thumb + 34))))
-        items = [
-            {"name": p.name, "path": str(p), "thumbDataUrl": None, "thumbQuality": "lq"}
-            for p in paths
-        ]
+        items = []
+        for p in paths:
+            ext = p.suffix.lower()
+            if ext in MediaOrganizer.VIDEO_EXTENSIONS:
+                kind = "video"
+            elif ext in MediaOrganizer.IMAGE_EXTENSIONS:
+                kind = "image"
+            else:
+                kind = "file"
+            items.append(
+                {
+                    "name": p.name,
+                    "path": str(p),
+                    "kind": kind,
+                    "thumbDataUrl": None,
+                    "thumbQuality": "lq",
+                }
+            )
         return {"items": items, "cols": cols, "total": len(items)}
 
     def destination_preview_thumbs(

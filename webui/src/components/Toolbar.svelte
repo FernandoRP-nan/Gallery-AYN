@@ -12,6 +12,7 @@
   export let destinationsMode: boolean;
   export let viewMenuOpen: boolean;
   export let includeSubfolders: boolean;
+  export let showOtherFiles: boolean;
   export let groupByFolder: boolean;
   export let groupByAlpha: boolean;
   export let sectionDominantColor: boolean;
@@ -32,6 +33,7 @@
 
   export let toggleDestinationsModePreserveScroll: () => void;
   export let onIncludeSubfoldersChange: (val: boolean) => void;
+  export let onShowOtherFilesChange: (val: boolean) => void;
   export let onGroupByFolderChange: (val: boolean) => void;
   export let onGroupByAlphaChange: (val: boolean) => void;
   export let onSectionDominantColorChange: (val: boolean) => void;
@@ -129,6 +131,15 @@
                 void onIncludeSubfoldersChange((e.currentTarget as HTMLInputElement).checked)}
             />
             <span>{t("view.includeSubfolders")}</span>
+          </label>
+          <label class="view-menu__row">
+            <input
+              type="checkbox"
+              checked={showOtherFiles}
+              on:change={(e) =>
+                void onShowOtherFilesChange((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>{t("view.showOtherFiles")}</span>
           </label>
           <label class="view-menu__row" title={t("view.groupByFolderHint")}>
             <input

@@ -9,9 +9,9 @@ export function isGalleryMediaKind(kind: GalleryItem["kind"]): boolean {
   return kind === "image" || kind === "video";
 }
 
-/** Seleccionable en modo edición (incluye subcarpetas; no folder_up ni secciones). */
+/** Seleccionable en modo edición (incluye subcarpetas y otros archivos; no folder_up ni secciones). */
 export function isGallerySelectableKind(kind: GalleryItem["kind"]): boolean {
-  return kind === "image" || kind === "video" || kind === "folder";
+  return kind === "image" || kind === "video" || kind === "file" || kind === "folder";
 }
 
 /** Extensión del archivo en mayúsculas (p. ej. MP4) para la insignia en miniaturas de vídeo. */

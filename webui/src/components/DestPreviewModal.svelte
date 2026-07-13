@@ -163,7 +163,7 @@
   }
   $: virtualItems = items.map(
     (it): GalleryItem => ({
-      kind: "image",
+      kind: it.kind === "video" || it.kind === "file" ? it.kind : "image",
       name: it.name,
       path: it.path,
       thumbDataUrl: it.thumbDataUrl ?? null,

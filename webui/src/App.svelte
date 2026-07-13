@@ -285,6 +285,7 @@
   /** Menú Vista (subcarpetas, orden, futuro agrupar). */
   let viewMenuOpen = false;
   let includeSubfolders = false;
+  let showOtherFiles = false;
   let groupByFolder = false;
   let groupByAlpha = false;
   /** Tinte de cabecera según color medio de imágenes (solo vista agrupada por carpeta). */
@@ -775,6 +776,7 @@
     thumbsPerPage = perPageRaw <= 0 ? 0 : Math.max(12, perPageRaw);
     pageJumpDraft = Number(data.gallery?.page ?? 1);
     includeSubfolders = Boolean(data.settings?.gallery_include_subfolders ?? false);
+    showOtherFiles = Boolean(data.settings?.gallery_show_other_files ?? false);
     groupByFolder = Boolean(data.settings?.gallery_group_by_folder ?? false);
     groupByAlpha = Boolean(data.settings?.gallery_group_by_alpha ?? false);
     sectionDominantColor = Boolean(data.settings?.gallery_section_dominant_color ?? true);
@@ -831,6 +833,7 @@
       await trackLoad(
         bridge.settingsPatch({
           gallery_include_subfolders: includeSubfolders,
+          gallery_show_other_files: showOtherFiles,
           gallery_sort_mode: gallerySortMode,
           gallery_dynamic_name_regex: dynamicNameRegex,
           gallery_group_by_folder: groupByFolder,
@@ -852,6 +855,11 @@
       groupByFolder = false;
       groupByAlpha = false;
     }
+    await persistViewAndReload();
+  }
+
+  async function onShowOtherFilesChange(checked: boolean) {
+    showOtherFiles = checked;
     await persistViewAndReload();
   }
 
@@ -977,6 +985,8 @@
     destPath: string;
     /** Si está definido, crea subcarpeta única bajo destPath (ruta padre). */
     newFolderName?: string;
+    /** Si true, usa carpeta existente en lugar de sufijo (n). */
+    mergeFolder?: boolean;
   };
 
   type GalleryDeleteJob = GalleryMutationSnapshot;
@@ -2250,7 +2260,12 @@
         galleryMoveQueue = rest;
         try {
           const out = job.newFolderName
-            ? await bridge.destinationMovePathsNewFolder(job.srcPaths, job.destPath, job.newFolderName)
+            ? await bridge.destinationMovePathsNewFolder(
+                job.srcPaths,
+                job.destPath,
+                job.newFolderName,
+                Boolean(job.mergeFolder)
+              )
             : await bridge.destinationMovePaths(job.srcPaths, job.destPath);
           if (!isGalleryNavigationCurrent(job.navGen)) continue;
           const moved = Number(out.moveResult?.moved ?? 0);
@@ -2302,10 +2317,12 @@
   let moveAsFolderModalOpen = false;
   let moveAsFolderDestPath = "";
   let moveAsFolderDraft = "";
+  let moveAsFolderMerge = false;
 
   function openMoveAsFolderModal(parentPath: string) {
     moveAsFolderDestPath = parentPath;
     moveAsFolderDraft = "";
+    moveAsFolderMerge = false;
     moveAsFolderModalOpen = true;
   }
 
@@ -2326,6 +2343,7 @@
     moveAsFolderModalOpen = false;
     moveAsFolderDestPath = "";
     moveAsFolderDraft = "";
+    moveAsFolderMerge = false;
   }
 
   async function confirmMoveAsFolder() {
@@ -2335,8 +2353,9 @@
       return;
     }
     const parent = moveAsFolderDestPath;
+    const merge = moveAsFolderMerge;
     closeMoveAsFolderModal();
-    await moveSelectionToNewFolder(parent, name);
+    await moveSelectionToNewFolder(parent, name, merge);
   }
 
   function sectionFolderMoveLabel(folderPath: string): string {
@@ -2402,7 +2421,7 @@
     }
   };
 
-  const moveSelectionToNewFolder = async (parentPath: string, folderName: string) => {
+  const moveSelectionToNewFolder = async (parentPath: string, folderName: string, merge = false) => {
     const selectedPaths = getSelectedGalleryPaths();
     if (selectedPaths.length === 0) {
       status = t("status.noImagesToMove");
@@ -2410,7 +2429,12 @@
     }
     const snapshot = createGalleryMoveJobSnapshot(selectedPaths);
     await applyOptimisticGalleryRemove(snapshot);
-    const job: GalleryMoveJob = { ...snapshot, destPath: parentPath, newFolderName: folderName };
+    const job: GalleryMoveJob = {
+      ...snapshot,
+      destPath: parentPath,
+      newFolderName: folderName,
+      mergeFolder: merge,
+    };
     galleryMoveQueue = [...galleryMoveQueue, job];
     status = t("status.imagesMoving")
       .replace("{n}", String(selectedPaths.length))
@@ -4497,6 +4521,16 @@
     openDestPreview(node.path);
   }
 
+  async function goToDestFromCtx() {
+    if (destCtxMenu === null) return;
+    const node = destNodeAtToolbarIdx(destCtxMenu.idx);
+    const fromFullscreen = destCtxMenu.source === "fullscreen";
+    closeDestCtxMenu();
+    if (!node || !isDestNode(node)) return;
+    if (fromFullscreen) previewZoomOpen = false;
+    await navigateToFolder(node.path);
+  }
+
   // Muestra el destino en el explorador de archivos del sistema
   async function showDestInExplorer() {
     if (destCtxMenu === null) return;
@@ -4860,6 +4894,7 @@
     bind:destinationsMode
     bind:viewMenuOpen
     bind:includeSubfolders
+    bind:showOtherFiles
     bind:groupByFolder
     bind:groupByAlpha
     onGroupByAlphaChange={(checked) => void onGroupByAlphaChange(checked)}
@@ -4879,6 +4914,7 @@
     bind:pinnedFolders
     {toggleDestinationsModePreserveScroll}
     {onIncludeSubfoldersChange}
+    {onShowOtherFilesChange}
     {onGroupByFolderChange}
     {onSectionDominantColorChange}
     {onTimelineViewChange}
@@ -5224,6 +5260,9 @@
       {#if destCtxMenu.source === "gallery"}
         <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openPreviewFromCtx}>{t("menus.viewFolder")}</button>
       {/if}
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={() => void goToDestFromCtx()}
+        >{t("menus.goToRoute")}</button
+      >
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={showDestInExplorer}
         >{t("contextGallery.showInExplorer")}</button
       >
@@ -5516,6 +5555,10 @@
             if (e.key === "Escape") closeMoveAsFolderModal();
           }}
         />
+        <label class="view-menu__row" title={t("confirm.mergeFolderHint")}>
+          <input type="checkbox" bind:checked={moveAsFolderMerge} />
+          <span>{t("confirm.mergeFolder")}</span>
+        </label>
         <div class="settings-actions">
           <button type="button" class="om-btn om-btn--ghost" on:click={closeMoveAsFolderModal}>{t("common.cancel")}</button>
           <button type="button" class="om-btn om-btn--primary" on:click={() => void confirmMoveAsFolder()}>{t("common.move")}</button>

@@ -1,4 +1,4 @@
-import { bridge } from "./api";
+import { bridge, type GalleryItem } from "./api";
 import {
   applyCachedDestPreviewThumbs,
   setDestPreviewThumb,
@@ -8,6 +8,7 @@ import { prioritizeThumbPaths, type ThumbPointerAnchor } from "./thumbPriority";
 export type DestPreviewItem = {
   name: string;
   path: string;
+  kind?: GalleryItem["kind"];
   thumbDataUrl?: string | null;
   thumbQuality?: "lq" | "hq";
 };

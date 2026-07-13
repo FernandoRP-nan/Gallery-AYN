@@ -30,6 +30,8 @@ from ..core.gallery_paths import (
     list_subdirs,
     list_subdirs_recursive,
     path_natural_sort_key,
+    scan_all_files_flat,
+    scan_all_files_recursive,
     scan_images_flat,
     scan_media_flat,
     scan_media_recursive,
@@ -634,13 +636,15 @@ class GalleryBridgeMixin:
                 return d
             ext = p.suffix.lower()
             is_video = ext in MediaOrganizer.VIDEO_EXTENSIONS
+            is_image = ext in MediaOrganizer.IMAGE_EXTENSIONS
+            kind = "video" if is_video else ("image" if is_image else "file")
             d: dict = {
-                "kind": "video" if is_video else "image",
+                "kind": kind,
                 "name": p.name,
                 "path": item_path,
                 "selected": p in selected_frozenset,
-                "thumbDataUrl": self._thumb_data_url_cached(p, thumb_px, "lq"),
-                "thumbQuality": "lq",
+                "thumbDataUrl": None if kind == "file" else self._thumb_data_url_cached(p, thumb_px, "lq"),
+                "thumbQuality": "lq" if kind != "file" else None,
                 "mediaIndex": base_index + i,
             }
             if timeline_meta:
@@ -648,6 +652,7 @@ class GalleryBridgeMixin:
             if (
                 self._is_masonry_view()
                 and not jump_fast
+                and kind != "file"
                 and p.suffix.lower() not in (".svg",)
             ):
                 tw, th = self._masonry_display_size(p, thumb_px)
@@ -667,18 +672,25 @@ class GalleryBridgeMixin:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(_one_image_item, enumerate(slice_paths)))
 
+    def _scan_folder_files(self, folder: Path, *, recursive: bool) -> list[Path]:
+        """Escanea archivos según ajuste de mostrar otros tipos."""
+        show_other = bool(self.settings.get("gallery_show_other_files", False))
+        if show_other:
+            return scan_all_files_recursive(folder) if recursive else scan_all_files_flat(folder)
+        return scan_media_recursive(folder) if recursive else scan_media_flat(folder)
+
     def _compute_grouped_paths(self, root: Path) -> tuple[list[Path], list[tuple[int, int, str, str]]]:
         """Sección por archivos en la raíz y por cada subcarpeta (incluye nietas y más profundo)."""
         mode = str(self.settings.get("gallery_sort_mode", "name"))
         ordered: list[Path] = []
         spans: list[tuple[int, int, str, str]] = []
         idx = 0
-        root_files = sort_image_paths(scan_media_flat(root), mode)
+        root_files = sort_image_paths(self._scan_folder_files(root, recursive=False), mode)
         spans.append((idx, idx + len(root_files), str(root), "(esta carpeta)"))
         ordered.extend(root_files)
         idx += len(root_files)
         for sub in list_subdirs_recursive(root):
-            files = sort_image_paths(scan_media_flat(sub), mode)
+            files = sort_image_paths(self._scan_folder_files(sub, recursive=False), mode)
             if not files:
                 continue
             label = grouped_section_label(root, sub)
@@ -698,6 +710,7 @@ class GalleryBridgeMixin:
         return (
             str(folder.resolve()),
             bool(self.settings.get("gallery_include_subfolders", False)),
+            bool(self.settings.get("gallery_show_other_files", False)),
             bool(self.settings.get("gallery_group_by_folder", False)),
             bool(self.settings.get("gallery_group_by_alpha", False)),
             bool(self.settings.get("gallery_timeline_view", False)),
@@ -789,7 +802,7 @@ class GalleryBridgeMixin:
             return ordered
         if self._is_timeline_mode():
             include = bool(self.settings.get("gallery_include_subfolders", False))
-            raw = scan_media_recursive(folder) if include else scan_media_flat(folder)
+            raw = self._scan_folder_files(folder, recursive=include)
             sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
             stat_workers = self._gallery_thumb_build_workers()
             ordered = self._sort_timeline_by_exif_months(
@@ -798,10 +811,7 @@ class GalleryBridgeMixin:
             self._gallery_timeline_spans = self._compute_timeline_spans(ordered)
             return ordered
         include = bool(self.settings.get("gallery_include_subfolders", False))
-        if include:
-            raw = scan_media_recursive(folder)
-        else:
-            raw = scan_media_flat(folder)
+        raw = self._scan_folder_files(folder, recursive=include)
         sort_mode = str(self.settings.get("gallery_sort_mode", "name"))
         stat_workers = self._gallery_thumb_build_workers()
         sort_cfg = self._work_package_sort_config()

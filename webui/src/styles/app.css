@@ -867,6 +867,13 @@
     letter-spacing: 0.06em;
     opacity: 0.9;
   }
+.tile-file-ph {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    opacity: 0.9;
+    text-transform: uppercase;
+  }
 
 :global(.om-btn--mini) {
     padding: var(--om-space-1) var(--om-space-2);

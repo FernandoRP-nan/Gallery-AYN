@@ -49,6 +49,7 @@ def load_app_settings() -> dict:
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
             "gallery_include_subfolders": False,
+            "gallery_show_other_files": False,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_group_by_alpha": False,
@@ -192,6 +193,10 @@ def load_app_settings() -> dict:
             data["gallery_include_subfolders"] = False
         else:
             data["gallery_include_subfolders"] = bool(data["gallery_include_subfolders"])
+        if "gallery_show_other_files" not in data:
+            data["gallery_show_other_files"] = False
+        else:
+            data["gallery_show_other_files"] = bool(data["gallery_show_other_files"])
         if "gallery_sort_mode" not in data:
             data["gallery_sort_mode"] = "name,mtime,type"
         else:
@@ -460,6 +465,7 @@ def load_app_settings() -> dict:
             "dest_preview_modal_h": 0.8,
             "window_start_maximized": True,
             "gallery_include_subfolders": False,
+            "gallery_show_other_files": False,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_group_by_alpha": False,

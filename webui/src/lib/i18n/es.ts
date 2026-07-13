@@ -20,6 +20,9 @@ export const es = {
       "Introduce el nombre de la carpeta. Si ya existe en esa ruta, se usará un sufijo (1), (2), etc.",
     moveAsFolderPlaceholder: "Nombre de carpeta",
     moveAsFolderInvalidName: "Nombre de carpeta no válido.",
+    mergeFolder: "Combinar carpeta",
+    mergeFolderHint:
+      "Si ya existe una carpeta con ese nombre, mover el contenido dentro en lugar de crear «Nombre (1)».",
     moveFolderTitle: "Mover carpeta",
     moveFolderDetail: "¿Mover la carpeta «{folder}» al destino seleccionado? Se moverá con todo su contenido.",
     moveImageTitle: "Mover imagen",
@@ -106,6 +109,7 @@ export const es = {
     galleryFolderAria: "Menú de carpeta",
     destPreviewFileAria: "Menú de archivo en vista previa",
     viewFolder: "Ver carpeta",
+    goToRoute: "Ir a ruta",
     edit: "Editar…",
     delete: "Eliminar",
     unpin: "Desanclar",
@@ -116,7 +120,8 @@ export const es = {
   },
   destPreview: {
     loading: "Cargando lista…",
-    empty: "Esta carpeta no tiene imágenes.",
+    empty: "Esta carpeta no tiene archivos.",
+    emptyImages: "Esta carpeta no tiene imágenes.",
     loadError: "No se pudo cargar la vista previa.",
   },
   contextDestPreview: {
@@ -581,6 +586,7 @@ export const es = {
   view: {
     title: "Vista",
     includeSubfolders: "Todas las imágenes (incluye subcarpetas)",
+    showOtherFiles: "Mostrar otros archivos (no solo imágenes/vídeo)",
     groupByFolder: "Agrupar por carpeta",
     groupByFolderHint:
       "Muestra subcarpetas (también anidadas) como secciones en la misma vista. Arrastra con Ctrl (modo Edición) sobre el encabezado de otra sección para mover.",

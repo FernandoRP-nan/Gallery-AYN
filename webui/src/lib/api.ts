@@ -1,7 +1,7 @@
 import { normalizePathForApi } from "./pathUtils";
 
 export type GalleryItem = {
-  kind: "image" | "video" | "folder" | "folder_up" | "section" | "day_break" | "placeholder";
+  kind: "image" | "video" | "file" | "folder" | "folder_up" | "section" | "day_break" | "placeholder";
   name: string;
   path: string;
   /** Carpeta destino de la sección (solo kind === "section"). */
@@ -72,6 +72,7 @@ const devMockApi: WebApi = {
       gallery_recent_folders: [] as string[],
       gallery_thumbs_per_page: 48,
       gallery_include_subfolders: false,
+      gallery_show_other_files: false,
       gallery_sort_mode: "name,mtime,type",
       gallery_group_by_folder: false,
       gallery_group_by_alpha: false,
@@ -90,6 +91,7 @@ const devMockApi: WebApi = {
       gallery_group_by_alpha: false,
       gallery_timeline_view: false,
       gallery_include_subfolders: false,
+      gallery_show_other_files: false,
       layoutMode: "flat",
     },
     total: 0,
@@ -330,8 +332,8 @@ export const bridge = {
   destinationMoveSelected: (path: string) => call<any>("destination_move_selected", path),
   destinationMovePaths: (paths: string[], destPath: string) =>
     call<any>("destination_move_paths", paths, destPath),
-  destinationMovePathsNewFolder: (paths: string[], parentPath: string, folderName: string) =>
-    call<any>("destination_move_paths_new_folder", paths, parentPath, folderName),
+  destinationMovePathsNewFolder: (paths: string[], parentPath: string, folderName: string, merge = false) =>
+    call<any>("destination_move_paths_new_folder", paths, parentPath, folderName, merge),
   destinationMoveFolder: (folderPath: string, destPath: string) =>
     call<any>("destination_move_folder", normalizePathForApi(folderPath), destPath),
   destinationMoveFromPreview: (paths: string[]) => call<any>("destination_move_from_preview", paths),

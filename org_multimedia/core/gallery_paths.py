@@ -177,6 +177,44 @@ def scan_media_recursive(root: Path, extensions: frozenset[str] | None = None) -
     return out
 
 
+def scan_all_files_flat(root: Path) -> list[Path]:
+    """Archivos visibles en esta carpeta (no recursivo, excluye ocultos)."""
+    out: list[Path] = []
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if entry.name.startswith("."):
+                    continue
+                out.append(Path(entry.path))
+    except OSError:
+        pass
+    out.sort(key=path_natural_sort_key)
+    return out
+
+
+def scan_all_files_recursive(root: Path) -> list[Path]:
+    """Todos los archivos visibles bajo `root` (incluye subcarpetas, excluye ocultos)."""
+    base = root.resolve()
+    out: list[Path] = []
+    try:
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            try:
+                rel = p.relative_to(base)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            out.append(p)
+    except OSError:
+        pass
+    out.sort(key=path_natural_sort_key)
+    return out
+
+
 def _prefetch_path_stats(
     paths: list[Path],
     cache: dict[Path, os.stat_result | None],

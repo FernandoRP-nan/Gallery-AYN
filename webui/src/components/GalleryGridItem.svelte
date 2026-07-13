@@ -209,6 +209,9 @@
           Sin preview
         {:else if it.kind === "video"}
           <span class="tile-video-ph" aria-hidden="true">▶</span>
+        {:else if it.kind === "file"}
+          {@const fileFmt = videoFormatLabel(it.path || it.name)}
+          <span class="tile-file-ph" aria-hidden="true">{fileFmt ?? "FILE"}</span>
         {:else if it.kind === "folder_up"}
           <span class="folder-ph__icon" aria-hidden="true">↩</span>
           <span class="folder-ph__label">Subir</span>
