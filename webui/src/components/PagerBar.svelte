@@ -8,6 +8,7 @@
   export let thumbsPerPage: number;
   export let pageJumpDraft: number;
   export let status: string;
+  export let scanSourceHint = "";
   export let previewVisible: boolean;
   export let previewRatio: number;
   export let thumbScale: number;
@@ -157,6 +158,9 @@
     {/if}
   </div>
   <span class="status-line">{status}</span>
+  {#if scanSourceHint}
+    <span class="status-line status-line--scan" title={scanSourceHint}>{scanSourceHint}</span>
+  {/if}
   <span class="webui-build-tag" title={t("pager.buildTagTitle")}>{__WEBUI_BUILD__.slice(0, 10)}</span>
   <button
     type="button"

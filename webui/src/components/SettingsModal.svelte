@@ -40,6 +40,8 @@
   export let galleryWarmIndexOnStartup = false;
   export let galleryWarmIncludeChildren = true;
   export let galleryWarmMaxDepth = 2;
+  export let galleryScanCacheMax = 20;
+  export let galleryScanCacheTtlS = 600;
   export let debugLogEnabled = false;
   export let debugLogFilters: import("../lib/galleryDebugLog").GalleryDebugFilters;
   export let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
@@ -140,6 +142,8 @@
           bind:galleryWarmIndexOnStartup
           bind:galleryWarmIncludeChildren
           bind:galleryWarmMaxDepth
+          bind:galleryScanCacheMax
+          bind:galleryScanCacheTtlS
           bind:galleryUnlimitedBatchSize
           bind:galleryWindowOverscanBefore
           bind:galleryWindowOverscanAfter

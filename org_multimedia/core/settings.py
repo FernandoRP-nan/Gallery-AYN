@@ -53,6 +53,8 @@ def load_app_settings() -> dict:
             "gallery_warm_index_on_startup": False,
             "gallery_warm_include_children": True,
             "gallery_warm_max_depth": 2,
+            "gallery_scan_cache_max": 20,
+            "gallery_scan_cache_ttl_s": 600,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_group_by_alpha": False,
@@ -218,6 +220,20 @@ def load_app_settings() -> dict:
                 data["gallery_warm_max_depth"] = max(0, min(6, int(data["gallery_warm_max_depth"])))
             except (TypeError, ValueError):
                 data["gallery_warm_max_depth"] = 2
+        if "gallery_scan_cache_max" not in data:
+            data["gallery_scan_cache_max"] = 20
+        else:
+            try:
+                data["gallery_scan_cache_max"] = max(4, min(64, int(data["gallery_scan_cache_max"])))
+            except (TypeError, ValueError):
+                data["gallery_scan_cache_max"] = 20
+        if "gallery_scan_cache_ttl_s" not in data:
+            data["gallery_scan_cache_ttl_s"] = 600
+        else:
+            try:
+                data["gallery_scan_cache_ttl_s"] = max(60, min(7200, int(data["gallery_scan_cache_ttl_s"])))
+            except (TypeError, ValueError):
+                data["gallery_scan_cache_ttl_s"] = 600
         if "gallery_sort_mode" not in data:
             data["gallery_sort_mode"] = "name,mtime,type"
         else:
@@ -508,6 +524,8 @@ def load_app_settings() -> dict:
             "gallery_warm_index_on_startup": False,
             "gallery_warm_include_children": True,
             "gallery_warm_max_depth": 2,
+            "gallery_scan_cache_max": 20,
+            "gallery_scan_cache_ttl_s": 600,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_group_by_alpha": False,

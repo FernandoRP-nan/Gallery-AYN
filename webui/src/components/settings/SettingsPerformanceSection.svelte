@@ -6,6 +6,8 @@
   export let galleryWarmIndexOnStartup = false;
   export let galleryWarmIncludeChildren = true;
   export let galleryWarmMaxDepth = 2;
+  export let galleryScanCacheMax = 20;
+  export let galleryScanCacheTtlS = 600;
   export let galleryUnlimitedBatchSize: number;
   export let galleryWindowOverscanBefore: number;
   export let galleryWindowOverscanAfter: number;
@@ -65,6 +67,9 @@
       galleryThumbBuildWorkers = 12;
       galleryThumbHqWorkers = 10;
       galleryThumbHqVisibleSequential = 20;
+      galleryWarmIndexOnStartup = true;
+      galleryScanCacheMax = 24;
+      galleryScanCacheTtlS = 900;
     } else if (kind === "aggressive") {
       galleryUnlimitedBatchSize = 128;
       galleryWindowOverscanBefore = 192;
@@ -204,6 +209,23 @@
       {/if}
     </p>
   {/if}
+
+  <hr class="settings-divider" />
+
+  <p class="settings-subtitle">{t("settings.scanCacheTitle")}</p>
+  <div class="settings-grid-2">
+    <div>
+      <label class="field-label" for="set-scan-cache-max">{t("settings.scanCacheMaxLabel")}</label>
+      <input id="set-scan-cache-max" class="om-input" type="number" min="4" max="64" bind:value={galleryScanCacheMax} />
+    </div>
+    <div>
+      <label class="field-label" for="set-scan-cache-ttl">{t("settings.scanCacheTtlLabel")}</label>
+      <input id="set-scan-cache-ttl" class="om-input" type="number" min="60" max="7200" step="60" bind:value={galleryScanCacheTtlS} />
+    </div>
+  </div>
+  <p class="settings-hint">{t("settings.scanCacheMaxHint")}</p>
+  <p class="settings-hint">{t("settings.scanCacheTtlHint")}</p>
+  <p class="settings-hint">{t("settings.perfHighEndWarmHint")}</p>
 
   <hr class="settings-divider" />
 

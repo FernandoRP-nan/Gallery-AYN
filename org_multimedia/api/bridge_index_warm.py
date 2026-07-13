@@ -67,6 +67,25 @@ class GalleryIndexWarmBridgeMixin:
                 self._gallery_timeline_spans = tl_b
                 self._gallery_alpha_spans = al_b
 
+    def gallery_index_reindex(self, raw_path: str) -> dict:
+        """Fuerza re-escaneo e índice en disco para una carpeta (p. ej. desde marcador)."""
+        try:
+            folder = resolve_dir_path(raw_path)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "path": raw_path, "error": str(exc)}
+        from ..core.gallery_index_cache import invalidate_gallery_index
+
+        invalidate_gallery_index(folder)
+        key = self._scan_cache_key(folder)
+        with self.lock:
+            cache: dict = getattr(self, "_gallery_scan_cache", {})
+            cache.pop(key, None)
+            self._gallery_scan_cache = cache
+        out = self._warm_single_folder(str(folder))
+        if out.get("ok") and hasattr(self, "pin_scan_cache_for_folder"):
+            self.pin_scan_cache_for_folder(str(folder))
+        return out
+
     def _warm_dest_preview_index(self, folder_path: str) -> dict:
         """Índice ligero para modal «Ver carpeta» de destinos."""
         try:
@@ -147,8 +166,12 @@ class GalleryIndexWarmBridgeMixin:
             if hit:
                 source = "memory"
                 path_count = len(hit.get("paths") or [])
+                ts = float(hit.get("ts", 0))
+                if ts > 0:
+                    age_sec = max(0.0, time.monotonic() - ts)
 
         preview_cached = try_load_gallery_index(folder, preview_key) is not None
+        pins = getattr(self, "_gallery_scan_cache_pins", set())
         return {
             "ok": True,
             "path": str(folder),
@@ -157,6 +180,7 @@ class GalleryIndexWarmBridgeMixin:
             "pathCount": path_count,
             "ageSec": age_sec,
             "previewCached": preview_cached,
+            "pinned": key in pins,
         }
 
     def gallery_index_warm_maybe_startup(self) -> None:

@@ -151,22 +151,30 @@ def save_gallery_index(
         tmp_meta.unlink(missing_ok=True)
 
 
-def invalidate_gallery_index(folder: Path | None = None) -> None:
-    """Borra índices (uno o todos)."""
+def invalidate_gallery_index(folder: Path | None = None) -> int:
+    """Borra índices en disco (todos los de una carpeta o todo el directorio)."""
     root = _index_dir()
     if not root.is_dir():
-        return
+        return 0
+    removed = 0
     if folder is None:
         for p in root.glob("*"):
-            p.unlink(missing_ok=True)
-        return
-    for meta in root.glob("*.meta.json"):
+            try:
+                p.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                pass
+        return removed
+    folder_s = str(folder.resolve())
+    for meta in list(root.glob("*.meta.json")):
         try:
             data = json.loads(meta.read_text(encoding="utf-8"))
-            if data.get("folder") == str(folder.resolve()):
-                cid = meta.name[: -len(".meta.json")]
-                _meta_path(cid).unlink(missing_ok=True)
-                _paths_path(cid).unlink(missing_ok=True)
-                return
+            if data.get("folder") != folder_s:
+                continue
+            cid = meta.name[: -len(".meta.json")]
+            _meta_path(cid).unlink(missing_ok=True)
+            _paths_path(cid).unlink(missing_ok=True)
+            removed += 1
         except (OSError, json.JSONDecodeError):
             continue
+    return removed

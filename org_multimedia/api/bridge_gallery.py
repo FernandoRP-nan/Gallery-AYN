@@ -112,8 +112,9 @@ _GALLERY_JUMP_CORE_OVERSCAN_AFTER = 48
 # Scroll leve por encima de la ventana: ampliar hacia atrás; más lejos: recentrar ventana.
 _GALLERY_WINDOW_JUMP_MARGIN = 128
 _GALLERY_LOAD_MAX_BATCHES = 2
-_GALLERY_SCAN_CACHE_TTL_S = 300.0
-_GALLERY_SCAN_CACHE_MAX = 8
+# Valores por defecto si no hay ajuste (sustituidos por settings en runtime).
+_GALLERY_SCAN_CACHE_TTL_S = 600.0
+_GALLERY_SCAN_CACHE_MAX = 20
 _GALLERY_EXTEND_MAX_BATCHES = 16
 # Carpetas pequeñas: tandas LQ más cortas para builds rápidos.
 _GALLERY_SMALL_FOLDER_MAX = 2000
@@ -730,6 +731,35 @@ class GalleryBridgeMixin:
     def _invalidate_gallery_scan_cache(self) -> None:
         self._gallery_scan_cache = {}
 
+    def _scan_cache_ttl_s(self) -> float:
+        try:
+            ttl = float(self.settings.get("gallery_scan_cache_ttl_s", _GALLERY_SCAN_CACHE_TTL_S))
+        except (TypeError, ValueError):
+            ttl = _GALLERY_SCAN_CACHE_TTL_S
+        return max(60.0, min(7200.0, ttl))
+
+    def _scan_cache_max(self) -> int:
+        try:
+            n = int(self.settings.get("gallery_scan_cache_max", _GALLERY_SCAN_CACHE_MAX))
+        except (TypeError, ValueError):
+            n = _GALLERY_SCAN_CACHE_MAX
+        return max(4, min(64, n))
+
+    def _pinned_scan_cache_keys(self) -> set[tuple]:
+        pins = getattr(self, "_gallery_scan_cache_pins", None)
+        if pins is None:
+            pins = set()
+            self._gallery_scan_cache_pins = pins
+        return pins
+
+    def pin_scan_cache_for_folder(self, folder_path: str) -> None:
+        """Marca el índice RAM de una carpeta como prioritario (no se expulsa primero)."""
+        try:
+            folder = resolve_dir_path(folder_path)
+        except (OSError, ValueError):
+            return
+        self._pinned_scan_cache_keys().add(self._scan_cache_key(folder))
+
     def _store_scan_cache(self, key: tuple, ordered: list[Path]) -> None:
         cache: dict = getattr(self, "_gallery_scan_cache", {})
         cache[key] = {
@@ -739,8 +769,13 @@ class GalleryBridgeMixin:
             "alpha_spans": list(self._gallery_alpha_spans),
             "ts": time.monotonic(),
         }
-        if len(cache) > _GALLERY_SCAN_CACHE_MAX:
-            oldest_key = min(cache, key=lambda k: float(cache[k].get("ts", 0)))
+        pins = self._pinned_scan_cache_keys()
+        max_n = self._scan_cache_max()
+        while len(cache) > max_n:
+            candidates = [k for k in cache if k not in pins]
+            if not candidates:
+                candidates = list(cache.keys())
+            oldest_key = min(candidates, key=lambda k: float(cache[k].get("ts", 0)))
             del cache[oldest_key]
         self._gallery_scan_cache = cache
 
@@ -763,7 +798,7 @@ class GalleryBridgeMixin:
         cache: dict = getattr(self, "_gallery_scan_cache", {})
         hit = cache.get(key)
         now = time.monotonic()
-        if hit and (now - float(hit.get("ts", 0))) < _GALLERY_SCAN_CACHE_TTL_S:
+        if hit and (now - float(hit.get("ts", 0))) < self._scan_cache_ttl_s():
             self._apply_scan_spans(
                 hit.get("section_spans") or [],
                 hit.get("timeline_spans") or [],
@@ -1360,6 +1395,7 @@ class GalleryBridgeMixin:
             t_scan = time.perf_counter()
             self.ordered_paths = self._scan_ordered_paths(folder)
             scan_ms = int((time.perf_counter() - t_scan) * 1000)
+            self.pin_scan_cache_for_folder(str(folder))
             self._schedule_gallery_total_bytes_recompute()
             self.selected.clear()
             self.gallery_page = 0

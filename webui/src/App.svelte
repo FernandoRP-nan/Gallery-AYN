@@ -321,6 +321,9 @@
   let galleryWarmIndexOnStartup = false;
   let galleryWarmIncludeChildren = true;
   let galleryWarmMaxDepth = 2;
+  let galleryScanCacheMax = 20;
+  let galleryScanCacheTtlS = 600;
+  let scanSourceHint = "";
   let galleryUnlimitedBatchSizeBackup = 48;
   let galleryWindowOverscanBeforeBackup = 96;
   let galleryWindowOverscanAfterBackup = 160;
@@ -335,6 +338,8 @@
   let galleryWarmIndexOnStartupBackup = false;
   let galleryWarmIncludeChildrenBackup = true;
   let galleryWarmMaxDepthBackup = 2;
+  let galleryScanCacheMaxBackup = 20;
+  let galleryScanCacheTtlSBackup = 600;
   let debugLogEnabled = false;
   let debugLogEnabledBackup = false;
   let debugLogFilters: GalleryDebugFilters = { ...DEFAULT_GALLERY_DEBUG_FILTERS };
@@ -842,6 +847,8 @@
     galleryWarmIndexOnStartup = Boolean(data.settings?.gallery_warm_index_on_startup ?? false);
     galleryWarmIncludeChildren = Boolean(data.settings?.gallery_warm_include_children ?? true);
     galleryWarmMaxDepth = clampSettingInt(data.settings?.gallery_warm_max_depth, 0, 6, 2);
+    galleryScanCacheMax = clampSettingInt(data.settings?.gallery_scan_cache_max, 4, 64, 20);
+    galleryScanCacheTtlS = clampSettingInt(data.settings?.gallery_scan_cache_ttl_s, 60, 7200, 600);
     debugLogEnabled = Boolean(data.settings?.web_debug_log_enabled ?? false);
     setGalleryDebugLogEnabled(debugLogEnabled);
     debugLogFilters = normalizeGalleryDebugFilters(data.settings?.web_debug_log_filters);
@@ -1195,6 +1202,7 @@
       orgPath = folder || orgPath;
       routePickerOpen = false;
       commitChromePagerState();
+      scanSourceHint = formatScanSourceHint(out.timing?.scanSource ?? "fresh", out.timing?.scanMs);
       status = t("status.folderLoaded").replace("{path}", folder);
     } catch (e: unknown) {
       if (!isGalleryNavigationCurrent(navGen)) return;
@@ -1381,6 +1389,8 @@
     galleryWarmIndexOnStartupBackup = galleryWarmIndexOnStartup;
     galleryWarmIncludeChildrenBackup = galleryWarmIncludeChildren;
     galleryWarmMaxDepthBackup = galleryWarmMaxDepth;
+    galleryScanCacheMaxBackup = galleryScanCacheMax;
+    galleryScanCacheTtlSBackup = galleryScanCacheTtlS;
     debugLogEnabledBackup = debugLogEnabled;
     debugLogFiltersBackup = { ...debugLogFilters };
     settingsOpen = true;
@@ -1423,6 +1433,8 @@
     galleryWarmIndexOnStartup = galleryWarmIndexOnStartupBackup;
     galleryWarmIncludeChildren = galleryWarmIncludeChildrenBackup;
     galleryWarmMaxDepth = galleryWarmMaxDepthBackup;
+    galleryScanCacheMax = galleryScanCacheMaxBackup;
+    galleryScanCacheTtlS = galleryScanCacheTtlSBackup;
     debugLogEnabled = debugLogEnabledBackup;
     debugLogFilters = { ...debugLogFiltersBackup };
     setGalleryDebugLogEnabled(debugLogEnabled);
@@ -1501,6 +1513,8 @@
         gallery_warm_index_on_startup: Boolean(galleryWarmIndexOnStartup),
         gallery_warm_include_children: Boolean(galleryWarmIncludeChildren),
         gallery_warm_max_depth: galleryWarmMaxDepth,
+        gallery_scan_cache_max: galleryScanCacheMax,
+        gallery_scan_cache_ttl_s: galleryScanCacheTtlS,
         web_debug_log_enabled: Boolean(debugLogEnabled),
         web_debug_log_filters: { ...debugLogFilters },
         gallery_thumb_scale: Number(ts.toFixed(3)),
@@ -3770,6 +3784,8 @@
   let destCtxMenu: { x: number; y: number; idx: number; source: "gallery" | "fullscreen" } | null = null;
   /** Menú contextual (clic derecho) en marcador anclado del modal de rutas. */
   let pinnedCtxMenu: { x: number; y: number; path: string } | null = null;
+  let pinnedCtxIndexLine = "";
+  let pinnedCtxReindexing = false;
   /** Menú contextual en miniaturas de la galería (imagen / vídeo / carpeta). */
   let galleryItemCtxMenu: {
     x: number;
@@ -4048,6 +4064,7 @@
 
   function closePinnedCtxMenu() {
     pinnedCtxMenu = null;
+    pinnedCtxIndexLine = "";
   }
 
   function closeGalleryItemCtxMenu() {
@@ -4458,13 +4475,79 @@
     destCtxMenu = { x, y, idx, source };
   }
 
+  function formatScanSourceHint(source: string, scanMs?: number): string {
+    const src = String(source || "fresh").toLowerCase();
+    if (src === "memory") return t("status.scanMemory");
+    if (src === "disk") return t("status.scanDisk");
+    const ms = Number.isFinite(Number(scanMs)) ? Math.round(Number(scanMs)) : "?";
+    return t("status.scanFresh").replace("{ms}", String(ms));
+  }
+
+  function formatIndexAgeSec(sec: number): string {
+    if (!Number.isFinite(sec) || sec < 0) return "";
+    if (sec < 60) return t("markers.indexAgeSeconds").replace("{s}", String(Math.round(sec)));
+    if (sec < 3600) return t("markers.indexAgeMinutes").replace("{m}", String(Math.round(sec / 60)));
+    if (sec < 86400) return t("markers.indexAgeHours").replace("{h}", String(Math.round(sec / 3600)));
+    return t("markers.indexAgeDays").replace("{d}", String(Math.round(sec / 86400)));
+  }
+
+  function describeIndexStatus(st: {
+    ok?: boolean;
+    cached?: boolean;
+    pathCount?: number;
+    ageSec?: number | null;
+  }): string {
+    if (!st?.ok) return t("markers.indexUnknown");
+    if (!st.cached) return t("markers.indexMiss");
+    const count = Number(st.pathCount ?? 0);
+    const age = st.ageSec != null ? formatIndexAgeSec(Number(st.ageSec)) : "";
+    if (age) return t("markers.indexValid").replace("{count}", String(count)).replace("{age}", age);
+    return t("markers.indexValidNoAge").replace("{count}", String(count));
+  }
+
+  async function loadPinnedIndexStatus(path: string) {
+    pinnedCtxIndexLine = t("markers.indexLoading");
+    try {
+      const st = await bridge.galleryIndexStatus(path);
+      pinnedCtxIndexLine = describeIndexStatus(st);
+    } catch {
+      pinnedCtxIndexLine = t("markers.indexUnknown");
+    }
+  }
+
   function onPinnedContextMenu(e: MouseEvent, path: string) {
     e.preventDefault();
     e.stopPropagation();
     const p = String(path ?? "").trim();
     if (!p) return;
-    const { x, y } = clampContextMenuPosition(e.clientX, e.clientY, { menuWidth: 200, itemCount: 3 });
+    const { x, y } = clampContextMenuPosition(e.clientX, e.clientY, { menuWidth: 220, itemCount: 5 });
     pinnedCtxMenu = { x, y, path: p };
+    void loadPinnedIndexStatus(p);
+  }
+
+  async function reindexPinnedFromCtx() {
+    if (!pinnedCtxMenu || pinnedCtxReindexing) return;
+    const path = pinnedCtxMenu.path;
+    closePinnedCtxMenu();
+    pinnedCtxReindexing = true;
+    status = t("markers.reindexing").replace("{path}", path);
+    try {
+      const res = await bridge.galleryIndexReindex(path);
+      if (res?.ok) {
+        const count = Number(res.count ?? 0);
+        const source = String(res.source ?? "fresh");
+        status = t("markers.reindexOk").replace("{count}", String(count)).replace("{source}", source);
+        if (normalizePathForApi(folder) === normalizePathForApi(path)) {
+          await navigateToFolder(path, { pushHistory: false });
+        }
+      } else {
+        status = String(res?.error ?? t("markers.reindexError"));
+      }
+    } catch (err) {
+      status = err instanceof Error ? err.message : t("markers.reindexError");
+    } finally {
+      pinnedCtxReindexing = false;
+    }
   }
 
   function openEditPinnedFromCtx() {
@@ -5194,6 +5277,7 @@
     {thumbsPerPage}
     bind:pageJumpDraft
     {status}
+    {scanSourceHint}
     {previewVisible}
     {previewRatio}
     bind:thumbScale
@@ -5348,8 +5432,12 @@
       style={`left:${pinnedCtxMenu.x}px;top:${pinnedCtxMenu.y}px`}
       on:click|stopPropagation
     >
+      <p class="dest-ctx-menu__status">{pinnedCtxIndexLine || t("markers.indexLoading")}</p>
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={showPinnedInExplorer}
         >{t("contextGallery.showInExplorer")}</button
+      >
+      <button type="button" class="dest-ctx-menu__item" role="menuitem" disabled={pinnedCtxReindexing} on:click={() => void reindexPinnedFromCtx()}
+        >{t("menus.reindex")}</button
       >
       <button type="button" class="dest-ctx-menu__item" role="menuitem" on:click={openEditPinnedFromCtx}>{t("menus.edit")}</button>
       <button type="button" class="dest-ctx-menu__item dest-ctx-menu__item--danger" role="menuitem" on:click={askUnpinPinnedFromCtx}
@@ -5789,6 +5877,8 @@
       bind:galleryWarmIndexOnStartup
       bind:galleryWarmIncludeChildren
       bind:galleryWarmMaxDepth
+      bind:galleryScanCacheMax
+      bind:galleryScanCacheTtlS
       bind:debugLogEnabled
       bind:debugLogFilters
       bind:videoTranscodePreset

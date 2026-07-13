@@ -105,6 +105,8 @@ class GalleryIndexWarmService:
                     errors.append(
                         {"path": folder_path, "error": str(out.get("error") or "error")}
                     )
+                elif hasattr(api, "pin_scan_cache_for_folder"):
+                    api.pin_scan_cache_for_folder(folder_path)
                 prev = api._warm_dest_preview_index(folder_path)
                 if not prev.get("ok"):
                     errors.append(
