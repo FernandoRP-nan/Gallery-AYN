@@ -157,10 +157,19 @@ def drain_low_priority_transcodes(*, keep_tokens: set[str] | None = None) -> dic
 
 
 def clear_warm_transcode_queue() -> dict:
-    """Vaciar cola de precalentamiento (ajustes / saturación)."""
+    """Vaciar cola de precalentamiento y recuperar workers/ffmpeg atascados."""
+    ffmpeg_killed = _kill_all_ffmpeg_procs()
+    with _QUEUE_GUARD:
+        _RUNNING_TOKENS.clear()
+    with _WARM_GUARD:
+        _WARM_TOKENS.clear()
     out = drain_low_priority_transcodes(keep_tokens=set())
     preempted = _preempt_running_below_priority(TRANSCODE_PRIORITY_USER, keep_tokens=set())
+    _prune_orphan_active_jobs()
+    _ensure_transcode_workers()
     out["preempted"] = preempted
+    out["ffmpegKilled"] = ffmpeg_killed
+    out["workers"] = len([t for t in _WORKER_THREADS if t.is_alive()])
     return out
 
 
@@ -220,7 +229,11 @@ def _enqueue_work(work: _TranscodeWork) -> bool:
                 return True
             return False
         if work.token in _RUNNING_TOKENS:
-            return False
+            with _FFMPEG_PROCS_GUARD:
+                proc = _FFMPEG_PROCS.get(work.token)
+            if proc is not None and proc.poll() is None:
+                return False
+            _RUNNING_TOKENS.discard(work.token)
         if work.priority <= TRANSCODE_PRIORITY_WARM:
             warm_n = sum(
                 1 for item in _QUEUE_BY_TOKEN.values() if item.priority <= TRANSCODE_PRIORITY_WARM
@@ -262,6 +275,10 @@ def _ensure_transcode_workers() -> None:
 
     n = max(1, get_transcode_max_jobs())
     with _QUEUE_GUARD:
+        alive = [t for t in _WORKER_THREADS if t.is_alive()]
+        if len(alive) != len(_WORKER_THREADS):
+            _WORKER_THREADS.clear()
+            _WORKER_THREADS.extend(alive)
         while len(_WORKER_THREADS) < n:
             t = threading.Thread(
                 target=_transcode_worker_main,
@@ -270,6 +287,18 @@ def _ensure_transcode_workers() -> None:
             )
             _WORKER_THREADS.append(t)
             t.start()
+        _QUEUE_CV.notify_all()
+
+
+def _kill_all_ffmpeg_procs() -> int:
+    """Detiene todos los ffmpeg de transcodificación (p. ej. reset de cola)."""
+    killed = 0
+    with _FFMPEG_PROCS_GUARD:
+        tokens = list(_FFMPEG_PROCS.keys())
+    for token in tokens:
+        _kill_ffmpeg_for_token(token)
+        killed += 1
+    return killed
 
 
 def _execute_transcode_work(work: _TranscodeWork) -> None:

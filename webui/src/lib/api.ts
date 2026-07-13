@@ -377,7 +377,9 @@ export const bridge = {
       playbackMode
     ),
   galleryTranscodeDrainWarm: () =>
-    call<{ ok: boolean; removed?: number; queued?: number; preempted?: number }>("gallery_transcode_drain_warm"),
+    call<{ ok: boolean; removed?: number; queued?: number; preempted?: number; workers?: number }>(
+      "gallery_transcode_drain_warm"
+    ),
   galleryTranscodeCancel: (path: string) => call<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>("gallery_transcode_cancel", path),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),

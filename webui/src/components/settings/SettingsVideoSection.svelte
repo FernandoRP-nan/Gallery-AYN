@@ -28,6 +28,8 @@
     transcodeQueued?: number;
     transcodeRunning?: number;
     transcodeWarmQueued?: number;
+    transcodeWorkers?: number;
+    hwProbed?: boolean;
   };
 
   let videoDiag: VideoDiag | null = null;
@@ -79,7 +81,8 @@
       const out = await bridge.galleryTranscodeDrainWarm();
       videoDiagDrainMsg = t("settings.videoDiagDrainWarmOk")
         .replace("{removed}", String(out?.removed ?? 0))
-        .replace("{preempted}", String(out?.preempted ?? 0));
+        .replace("{preempted}", String(out?.preempted ?? 0))
+        .replace("{workers}", String(out?.workers ?? 0));
       await refreshVideoDiagnostics();
     } catch (err) {
       videoDiagDrainMsg = err instanceof Error ? err.message : String(err);
@@ -177,7 +180,7 @@
         <dt>{t("settings.videoDiagEngine")}</dt>
         <dd>{videoDiag.engine ?? "—"}</dd>
         <dt>{t("settings.videoDiagQtFreeworld")}</dt>
-        <dd>{videoDiag.qtFreeworld ? t("settings.yes") : t("settings.no")}</dd>
+        <dd>{videoDiag.qtFreeworld == null ? "—" : videoDiag.qtFreeworld ? t("settings.yes") : t("settings.no")}</dd>
         <dt>{t("settings.videoDiagPrefersWebm")}</dt>
         <dd>{videoDiag.prefersWebm ? t("settings.yes") : t("settings.no")}</dd>
         <dt>ffmpeg</dt>
@@ -193,7 +196,10 @@
         <dt>{t("settings.videoDiagCache")}</dt>
         <dd>
           {videoDiag.transcodeCacheFiles ?? 0}
-          {t("settings.videoDiagFiles")} · {formatBytes(videoDiag.transcodeCacheBytes ?? 0)}
+          {t("settings.videoDiagFiles")}
+          {#if (videoDiag.transcodeCacheBytes ?? -1) >= 0}
+            · {formatBytes(videoDiag.transcodeCacheBytes ?? 0)}
+          {/if}
         </dd>
         <dt>{t("settings.videoDiagActiveJobs")}</dt>
         <dd>{videoDiag.activeTranscodeJobs ?? 0}</dd>
@@ -203,7 +209,12 @@
         <dd>{videoDiag.transcodeRunning ?? 0}</dd>
         <dt>{t("settings.videoDiagWarmQueued")}</dt>
         <dd>{videoDiag.transcodeWarmQueued ?? 0}</dd>
+        <dt>workers</dt>
+        <dd>{videoDiag.transcodeWorkers ?? 0}</dd>
       </dl>
+      {#if videoDiag.hwProbed === false}
+        <p class="settings-hint">{t("settings.videoDiagHwPending")}</p>
+      {/if}
       {#if videoDiagDrainMsg}
         <p class="settings-hint">{videoDiagDrainMsg}</p>
       {/if}

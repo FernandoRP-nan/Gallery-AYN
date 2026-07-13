@@ -130,6 +130,26 @@ def _ffmpeg_encoders_text(ffmpeg: str) -> str:
         return text
 
 
+def get_cached_hw_encoder_snapshot() -> dict:
+    """Lista de códecs HW solo si ya se sondeó (sin ejecutar ffmpeg aquí)."""
+    with _HW_LOCK:
+        if _HW_ENCODERS_TEXT is False:
+            return {
+                "hwEncodersAvailable": [],
+                "webmHwEncodersAvailable": [],
+                "hwEncoderSelected": None,
+                "hwProbed": False,
+            }
+        text = _HW_ENCODERS_TEXT
+        selected = _HW_ENCODER if _HW_ENCODER is not False else None
+    return {
+        "hwEncodersAvailable": [name for name in _HW_ENCODER_PRIORITY if name in text],
+        "webmHwEncodersAvailable": [name for name in _WEBM_HW_ENCODER_PRIORITY if name in text],
+        "hwEncoderSelected": selected,
+        "hwProbed": True,
+    }
+
+
 def list_available_hw_encoders(ffmpeg: str) -> list[str]:
     """Códecs HW de H.264 detectados en ffmpeg -encoders."""
     text = _ffmpeg_encoders_text(ffmpeg)
