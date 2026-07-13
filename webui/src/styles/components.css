@@ -1,3 +1,20 @@
+/* Escala de capas: modales siempre por encima del chrome (toolbar/pager). */
+:root {
+    --om-z-bg: 0;
+    --om-z-app: 1;
+    --om-z-chrome: 60;
+    --om-z-view-menu-backdrop: 65;
+    --om-z-overlay: 200;
+    --om-z-overlay-confirm: 205;
+    --om-z-overlay-form: 210;
+    --om-z-overlay-settings: 215;
+    --om-z-overlay-above-settings: 220;
+    --om-z-context-backdrop: 300;
+    --om-z-context-menu: 301;
+    --om-z-zoom: 400;
+    --om-z-load: 500;
+  }
+
 /* Paneles tipo Bento */
 .om-panel {
   background: linear-gradient(165deg, var(--om-surface-1) 0%, var(--om-bg-elevated) 100%);

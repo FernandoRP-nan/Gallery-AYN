@@ -238,6 +238,34 @@ class SystemBridgeMixin:
         first = result[0] if isinstance(result, (list, tuple)) else result
         return {"path": str(first), "cancelled": False}
 
+    def dialog_pick_image(self, start_path: str = "") -> dict:
+        """Abre el selector de imagen del sistema (fondo de la interfaz)."""
+        try:
+            import webview
+            from webview import FileDialog
+        except Exception as exc:
+            return {"path": None, "cancelled": True, "error": str(exc)}
+        if not webview.windows:
+            return {"path": None, "cancelled": True, "error": "sin_ventana"}
+        win = webview.windows[0]
+        directory = ""
+        raw = (start_path or "").strip()
+        if raw:
+            try:
+                p = Path(raw).expanduser()
+                directory = str(p.parent if p.is_file() else p)
+            except (OSError, ValueError):
+                directory = ""
+        file_types = (
+            "Imágenes (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.bmp;*.avif)",
+            "Todos los archivos (*.*)",
+        )
+        result = win.create_file_dialog(FileDialog.OPEN, directory=directory, file_types=file_types)
+        if not result:
+            return {"path": None, "cancelled": True}
+        first = result[0] if isinstance(result, (list, tuple)) else result
+        return {"path": str(first), "cancelled": False}
+
     def ping(self) -> dict:
         from ..core.video_transcode import prime_transcode_workers
 

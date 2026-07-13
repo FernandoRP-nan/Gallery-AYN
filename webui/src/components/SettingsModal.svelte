@@ -3,6 +3,7 @@
   import { t } from "../lib/i18n";
   import { galleryGridCellPx } from "../lib/thumbScale";
   import type { UiThemeId } from "../lib/uiTheme";
+  import type { CustomTheme, ThemeSelection, UiFontId } from "../lib/uiAppearance";
   import SettingsAppearanceSection from "./settings/SettingsAppearanceSection.svelte";
   import SettingsDestinationsSection from "./settings/SettingsDestinationsSection.svelte";
   import SettingsMarkersSection from "./settings/SettingsMarkersSection.svelte";
@@ -64,7 +65,11 @@
   export let thumbGapPx: number;
   export let thumbImageRadiusPx: number;
   export let thumbTileRadiusPx: number;
-  export let uiTheme: UiThemeId;
+  export let themeSelection: ThemeSelection;
+  export let customThemes: CustomTheme[];
+  export let uiFont: UiFontId;
+  export let uiBgImagePath: string;
+  export let uiBgBlur: number;
   export let showThumbLabels: boolean;
   export let thumbFrameVisible: boolean;
   export let thumbCardStyle: "soft" | "flat" | "outlined";
@@ -79,6 +84,11 @@
   export let onMarkerTreeChange: (next: TreeNode[]) => void;
   export let onPickDestFolder: () => Promise<string | null>;
   export let onPickMarkerFolder: () => Promise<string | null>;
+  export let galleryFolder = "";
+  export let recentFolders: string[] = [];
+  export let pinnedFolders: string[] = [];
+  export let pinnedFolderLabels: Record<string, string> = {};
+  export let onBrowseBgFolder: (path: string) => void;
 
   export let themeNameLabel: (id: UiThemeId) => string;
   export let galleryMasonryTightSpacing = false;
@@ -191,7 +201,16 @@
         />
       {:else if activeTab === "appearance"}
         <SettingsAppearanceSection
-          bind:uiTheme
+          bind:themeSelection
+          bind:customThemes
+          bind:uiFont
+          bind:uiBgImagePath
+          bind:uiBgBlur
+          {galleryFolder}
+          {recentFolders}
+          {pinnedFolders}
+          {pinnedFolderLabels}
+          {onBrowseBgFolder}
           bind:showThumbLabels
           bind:thumbFrameVisible
           bind:thumbCardStyle

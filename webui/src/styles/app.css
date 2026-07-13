@@ -1,5 +1,10 @@
 @import "./components.css";
 
+.app-shell {
+    height: 100%;
+    position: relative;
+  }
+
 .app {
     height: 100%;
     display: grid;
@@ -11,13 +16,197 @@
     color: var(--om-text-primary);
     background: radial-gradient(120% 80% at 50% -20%, var(--om-bg-spot), transparent 50%), var(--om-bg-base);
     box-sizing: border-box;
+    position: relative;
+    z-index: var(--om-z-app);
+  }
+
+/* Fondo personalizado: capa fija fuera del flujo de scroll (AppBackgroundLayer). */
+html[data-om-has-bg],
+html[data-om-has-bg] body,
+html[data-om-has-bg] #app,
+html[data-om-has-bg] .app-shell {
+    background: transparent !important;
+  }
+
+.app-bg-stack {
+    position: fixed;
+    inset: 0;
+    z-index: var(--om-z-bg);
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+.app-bg-stack__image {
+    position: absolute;
+    inset: 0;
+    background-image: var(--om-bg-image);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    transform: scale(1.03);
+  }
+
+.app-bg-stack__scrim {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(120% 80% at 50% -20%, var(--om-bg-spot), transparent 55%),
+      linear-gradient(rgb(7 8 15 / 0.18), rgb(7 8 15 / 0.34));
+  }
+
+html[data-om-theme="paper"] .app-bg-stack__scrim {
+    background:
+      radial-gradient(120% 80% at 50% -20%, var(--om-bg-spot), transparent 55%),
+      linear-gradient(rgb(238 240 246 / 0.35), rgb(238 240 246 / 0.52));
+  }
+
+/* Pausa la imagen fija durante scroll/modales: evita parpadeos en Qt WebEngine. */
+.app-shell--has-bg:not(.app-shell--bg-paused) .app {
+    background: transparent;
+  }
+
+.app-shell--has-bg.app-shell--bg-paused .app {
+    background:
+      radial-gradient(120% 80% at 50% -20%, var(--om-bg-spot), transparent 50%),
+      var(--om-bg-base);
+  }
+
+.app--has-bg {
+    --om-glass-chrome: linear-gradient(165deg, rgb(21 24 42 / 0.72) 0%, rgb(16 18 28 / 0.62) 100%);
+    --om-glass-panel: linear-gradient(165deg, rgb(21 24 42 / 0.5) 0%, rgb(16 18 28 / 0.42) 100%);
+    --om-glass-media: rgb(8 10 18 / 0.42);
+    --om-glass-border: rgb(255 255 255 / 0.11);
+  }
+
+html[data-om-theme="paper"] .app--has-bg {
+    --om-glass-chrome: linear-gradient(165deg, rgb(252 253 255 / 0.82) 0%, rgb(238 242 248 / 0.72) 100%);
+    --om-glass-panel: linear-gradient(165deg, rgb(252 253 255 / 0.68) 0%, rgb(238 242 248 / 0.58) 100%);
+    --om-glass-media: rgb(255 255 255 / 0.45);
+    --om-glass-border: rgb(30 36 52 / 0.12);
+  }
+
+/* Chrome translúcido (sin backdrop-filter: parpadeos en Qt WebEngine). */
+.app--has-bg .app-chrome {
+    contain: layout style;
+    background: transparent;
+    box-shadow: none;
+  }
+
+.app--has-bg .tabs-bar.om-panel {
+    background: var(--om-glass-chrome);
+    border-color: var(--om-glass-border);
+  }
+
+.app--has-bg .pager.pager--bar.om-panel,
+.app--has-bg .preview.om-panel {
+    background: var(--om-glass-panel);
+    border-color: var(--om-glass-border);
+  }
+
+.app--has-bg .app-chrome--preview {
+    background: var(--om-glass-panel) !important;
+  }
+
+.app--has-bg .view-menu.om-panel,
+.app--has-bg .pager__process-panel.om-panel {
+    background: var(--om-glass-chrome);
+    border-color: var(--om-glass-border);
+  }
+
+.app--has-bg .selection-float.app-chrome,
+.app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
+    background: rgb(8 10 18 / 0.72);
+    border-color: var(--om-glass-border);
+  }
+
+.app--has-bg .app-chrome--dest-bar {
+    background: rgb(12 14 24 / 0.78) !important;
+  }
+
+/* Mosaico sin panel opaco: el fondo se ve entre miniaturas. */
+.app--has-bg .gallery.om-panel {
+    background: transparent;
+    border-color: var(--om-glass-border);
+    box-shadow: none !important;
+  }
+
+.app--has-bg .gallery.om-panel.om-panel--lift {
+    box-shadow: none !important;
+  }
+
+.app--has-bg .gallery {
+    contain: layout style;
+  }
+
+/* Vista previa y medios */
+.app--has-bg .preview__img,
+.app--has-bg .preview__empty,
+.app--has-bg .preview-zoom-panel__stage,
+.app--has-bg .preview-video-idle,
+.app--has-bg .preview-video-idle__placeholder {
+    background: var(--om-glass-media);
+  }
+
+.app--has-bg .preview-selection-grid {
+    background: rgb(8 10 18 / 0.28);
+    border-top-color: var(--om-glass-border);
+  }
+
+.app--has-bg .splitter {
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0.04));
+    border-color: var(--om-glass-border);
+  }
+
+html[data-om-theme="paper"] .app--has-bg .preview-selection-grid {
+    background: rgb(255 255 255 / 0.32);
+  }
+
+html[data-om-theme="paper"] .app--has-bg .selection-float.app-chrome,
+html[data-om-theme="paper"] .app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
+    background: rgb(252 253 255 / 0.78);
+  }
+
+.app--thumb-gap-zero .grid .tile,
+.app--thumb-gap-zero .grid-virtual .tile {
+    border-width: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+
+.app--thumb-gap-zero .grid .tile:hover {
+    box-shadow: none;
+    border-color: transparent;
+  }
+
+.app--masonry-gap-zero .grid-masonry-cols,
+.app--masonry-gap-zero .grid-masonry-col {
+    gap: 0;
+  }
+
+.app--masonry-gap-zero .grid-masonry-cols {
+    margin-bottom: 0;
+  }
+
+.app--masonry-gap-zero .grid-masonry .gallery-masonry-span {
+    margin-bottom: 0;
+  }
+
+.app--masonry-gap-zero .grid-masonry .tile.tile--masonry {
+    padding: 0;
+    border-width: 0;
+    box-shadow: none;
+  }
+
+.app--masonry-gap-zero .grid-masonry .tile.tile--masonry:hover {
+    box-shadow: none;
+    border-color: transparent;
   }
 
 /* Capa de chrome aislada: toolbar, pager, preview y barras flotantes no se repintan con la rejilla. */
   .app-chrome {
     contain: layout style paint;
     position: relative;
-    z-index: 70;
+    z-index: var(--om-z-chrome);
     background: var(--om-surface-1);
     box-shadow: var(--om-shadow-sm);
   }
@@ -25,18 +214,16 @@
 .app-chrome--header {
     /* Sin paint: el menú Vista desborda el header (position:absolute). */
     contain: layout style;
-    z-index: 80;
     border-radius: var(--thumb-tile-radius, var(--om-radius-md));
   }
 
 .view-menu-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 79;
+    z-index: var(--om-z-view-menu-backdrop);
   }
 
 .app-chrome--footer.pager.pager--bar {
-    z-index: 75;
     /* Sin paint: el panel de procesos desborda hacia arriba (igual que el menú Vista). */
     contain: layout style;
     overflow: visible;
@@ -1390,19 +1577,21 @@
     background: rgb(4 6 14 / 0.85);
     display: grid;
     place-items: center;
-    z-index: 40;
-    /* Promueve a su propia capa de composición GPU */
+    z-index: var(--om-z-overlay);
     transform: translateZ(0);
     backface-visibility: hidden;
   }
 
 .overlay--dim {
     background: rgb(4 6 14 / 0.72);
-    z-index: 45;
+  }
+
+.overlay--above-settings {
+    z-index: var(--om-z-overlay-above-settings);
   }
 
 .overlay--confirm {
-    z-index: 75;
+    z-index: var(--om-z-overlay-confirm);
   }
 
 .modal--dest-form {
@@ -1416,7 +1605,7 @@
   }
 
 .overlay--dest-form {
-    z-index: 85;
+    z-index: var(--om-z-overlay-form);
   }
 
 .modal--route-picker {
@@ -1427,7 +1616,6 @@
 .modal--confirm {
     width: min(520px, 92vw);
     max-height: min(72vh, 340px);
-    z-index: 76;
   }
 
 .dest-form-path-row {
@@ -1445,13 +1633,13 @@
 .ctx-menu-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 139;
+    z-index: var(--om-z-context-backdrop);
     background: transparent;
   }
 
 .dest-ctx-menu {
     position: fixed;
-    z-index: 140;
+    z-index: var(--om-z-context-menu);
     min-width: 11rem;
     padding: var(--om-space-2);
     display: flex;
@@ -1664,7 +1852,6 @@
     overflow: hidden;
     gap: var(--om-space-3);
     padding: var(--om-space-5);
-    z-index: 41;
     box-sizing: border-box;
   }
 
@@ -1711,8 +1898,7 @@
     /* Sin backdrop-filter: en Qt WebEngine relee todo el fondo en cada frame al hacer pan/zoom. */
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
-    /* Por encima de toolbar (80), pager (75) y modales; bajo LoadOverlay (150). */
-    z-index: 130;
+    z-index: var(--om-z-zoom);
     isolation: isolate;
     contain: paint;
     place-items: stretch;

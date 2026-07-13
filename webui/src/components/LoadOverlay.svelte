@@ -40,7 +40,7 @@
   .load-overlay {
     position: fixed;
     inset: 0;
-    z-index: 150;
+    z-index: var(--om-z-load);
     display: flex;
     flex-direction: column;
     align-items: center;

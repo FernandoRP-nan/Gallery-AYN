@@ -4,9 +4,9 @@ import "./styles/om-theme-overrides.css";
 import "./lib/chromeRemember";
 import { mount } from "svelte";
 import App from "./App.svelte";
-import { applyUiThemeToDocument, readCachedUiTheme } from "./lib/uiTheme";
+import { applyAppearanceToDocument, defaultAppearance, readCachedAppearance } from "./lib/uiAppearance";
 
-applyUiThemeToDocument(readCachedUiTheme());
+applyAppearanceToDocument({ ...defaultAppearance(), ...readCachedAppearance() });
 
 const target = document.getElementById("app");
 if (!target) {

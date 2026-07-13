@@ -96,6 +96,11 @@ def load_app_settings() -> dict:
             "web_ui_show_processes": False,
             "web_ui_show_scan_hint": False,
             "web_ui_show_build_tag": False,
+            "web_ui_theme": "midnight",
+            "web_ui_custom_themes": [],
+            "web_ui_font": "outfit",
+            "web_ui_bg_image": "",
+            "web_ui_bg_blur": 0,
             "web_debug_log_enabled": False,
             "web_debug_log_filters": {
                 "scroll": True,
@@ -507,6 +512,27 @@ def load_app_settings() -> dict:
                 if key in raw_filters:
                     merged[key] = bool(raw_filters[key])
             data["web_debug_log_filters"] = merged
+        if "web_ui_theme" not in data:
+            data["web_ui_theme"] = "midnight"
+        else:
+            data["web_ui_theme"] = str(data["web_ui_theme"]).strip().lower() or "midnight"
+        if "web_ui_custom_themes" not in data or not isinstance(data.get("web_ui_custom_themes"), list):
+            data["web_ui_custom_themes"] = []
+        if "web_ui_font" not in data:
+            data["web_ui_font"] = "outfit"
+        else:
+            data["web_ui_font"] = str(data["web_ui_font"]).strip().lower() or "outfit"
+        if "web_ui_bg_image" not in data:
+            data["web_ui_bg_image"] = ""
+        else:
+            data["web_ui_bg_image"] = str(data["web_ui_bg_image"]).strip()
+        if "web_ui_bg_blur" not in data:
+            data["web_ui_bg_blur"] = 0
+        else:
+            try:
+                data["web_ui_bg_blur"] = max(0, min(32, int(data["web_ui_bg_blur"])))
+            except (TypeError, ValueError):
+                data["web_ui_bg_blur"] = 0
         return data
     except (OSError, json.JSONDecodeError):
         return {

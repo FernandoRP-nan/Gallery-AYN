@@ -23,6 +23,7 @@
 
   const dispatch = createEventDispatcher<{
     close: void;
+    pick: { path: string };
     zoom: { item: DestPreviewItem; navItems: DestPreviewItem[] };
     deleteSelected: void;
     dropToRoute: { paths: string[] };
@@ -31,6 +32,8 @@
 
   export let open = false;
   export let destPath = "";
+  /** Modo elegir imagen (p. ej. fondo de la interfaz): un clic en foto confirma. */
+  export let pickImageMode = false;
   export let thumbScale = 1;
   export let thumbGapPx = 12;
   export let showThumbLabels = true;
@@ -180,7 +183,8 @@
   );
   $: visibleEntries = getVisibleLayoutEntries(virtualLayout.entries, scrollTop, scrollViewportH);
   $: selectedCount = selectedPaths.length;
-  $: floatActive = open && items.length > 0;
+  $: floatActive = open && items.length > 0 && !pickImageMode;
+  $: folderShortName = destPath.split(/[/\\]/).filter(Boolean).pop() ?? destPath;
 
   function entryStyle(top: number, left: number, width: number, height: number): string {
     return `top:${top}px;left:${left}px;width:${width}px;height:${height}px`;
@@ -273,6 +277,10 @@
   }
 
   function onTileClick(it: DestPreviewItem) {
+    if (pickImageMode) {
+      if (it.kind === "image") dispatch("pick", { path: it.path });
+      return;
+    }
     if (rangeSuppressClick) return;
     if (selectedCount > 0) {
       togglePick(it.path);
@@ -282,12 +290,17 @@
   }
 
   function onTileContextMenu(e: MouseEvent, it: DestPreviewItem) {
+    if (pickImageMode) return;
     e.preventDefault();
     e.stopPropagation();
     dispatch("contextmenu", { item: it, clientX: e.clientX, clientY: e.clientY });
   }
 
   function onTileDragStart(e: DragEvent, it: DestPreviewItem) {
+    if (pickImageMode) {
+      e.preventDefault();
+      return;
+    }
     if (!(e as DragEvent).ctrlKey) {
       e.preventDefault();
       return;
@@ -375,10 +388,12 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <div
-  class="overlay"
+  class="overlay overlay--dim"
+  class:overlay--above-settings={pickImageMode}
   role="presentation"
   on:dragover|preventDefault
   on:drop|preventDefault={(e) => {
+    if (pickImageMode) return;
     const t = e.target as HTMLElement | null;
     if (t?.closest(".modal--dest")) return;
     const raw = e.dataTransfer?.getData("application/x-om-preview-paths") ?? "";
@@ -408,7 +423,14 @@
     on:keydown|stopPropagation
   >
     <header class="modal__head">
-      <strong id="dest-preview-title">{destPath}</strong>
+      <div class="dest-preview-head">
+        <strong id="dest-preview-title" title={destPath}>
+          {pickImageMode ? `${t("settings.bgPickerModalTitle")} · ${folderShortName}` : destPath}
+        </strong>
+        {#if pickImageMode}
+          <p class="dest-preview-pick-hint">{t("settings.bgPickerModalHint")}</p>
+        {/if}
+      </div>
       <button
         type="button"
         class="om-btn om-btn--ghost om-btn--close"
@@ -472,15 +494,27 @@
                 tabindex="0"
                 class="tile dest-preview-tile gallery-virtual-item"
                 class:selected={selectedPaths.includes(it.path)}
+                class:dest-preview-tile--pickable={pickImageMode && it.kind === "image"}
+                class:dest-preview-tile--pick-disabled={pickImageMode && it.kind !== "image"}
                 data-preview-path={it.path}
                 style={`position:absolute;box-sizing:border-box;${entryStyle(entry.top, entry.left, entry.width, entry.height)}`}
-                draggable={selectedCount > 0}
-                on:pointerdown={(e) => onTilePointerDown(e, it)}
-                on:pointerenter={() => onTilePointerEnter(it.path)}
+                draggable={!pickImageMode && selectedCount > 0}
+                on:pointerdown={(e) => {
+                  if (!pickImageMode) onTilePointerDown(e, it);
+                }}
+                on:pointerenter={() => {
+                  if (!pickImageMode) onTilePointerEnter(it.path);
+                }}
                 on:dragstart={(e) => onTileDragStart(e, it)}
                 on:click={() => onTileClick(it)}
                 on:contextmenu={(e) => onTileContextMenu(e, it)}
-                on:dblclick|stopPropagation={() => dispatch("zoom", { item: it, navItems: items })}
+                on:dblclick|stopPropagation={() => {
+                  if (pickImageMode) {
+                    if (it.kind === "image") dispatch("pick", { path: it.path });
+                    return;
+                  }
+                  dispatch("zoom", { item: it, navItems: items });
+                }}
                 on:keydown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -519,6 +553,41 @@
 
   .dest-preview-status--error {
     color: var(--om-danger, #f87171);
+  }
+
+  .dest-preview-head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .dest-preview-head strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dest-preview-pick-hint {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--om-text-muted);
+    font-weight: 400;
+  }
+
+  :global(.dest-preview-tile--pickable) {
+    cursor: pointer;
+  }
+
+  :global(.dest-preview-tile--pickable:hover) {
+    outline: 2px solid var(--om-accent);
+    outline-offset: -2px;
+  }
+
+  :global(.dest-preview-tile--pick-disabled) {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .dest-preview-grid {

@@ -6,7 +6,7 @@
   background: rgb(4 6 14 / 0.72);
   display: grid;
   place-items: center;
-  z-index: 45;
+  z-index: var(--om-z-overlay-settings);
 }
 
 .sm-dialog.modal {
@@ -20,7 +20,6 @@
   overflow: hidden;
   border-radius: var(--thumb-tile-radius, var(--om-radius-md));
   min-height: 0;
-  z-index: 41;
 }
 
 .sm-dialog .modal__head {
@@ -113,6 +112,208 @@
 
 .sm-dialog .settings-preset-chip {
   min-height: 1.65rem;
+}
+
+.sm-dialog .settings-example {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--om-text-secondary);
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.sm-dialog .settings-theme-swatches {
+  gap: var(--om-space-2);
+}
+
+.sm-dialog .settings-theme-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2rem;
+  padding-inline: 0.55rem 0.7rem;
+}
+
+.sm-dialog .settings-theme-swatch__dot {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.2);
+  flex-shrink: 0;
+}
+
+.sm-dialog .settings-theme-swatch__label {
+  font-size: 0.78rem;
+}
+
+.sm-dialog .settings-custom-themes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--om-space-2);
+}
+
+.sm-dialog .settings-theme-example {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.sm-dialog .settings-theme-example__copy {
+  font-size: 0.68rem;
+  min-height: 1.35rem;
+  padding-inline: 0.4rem;
+}
+
+.sm-dialog .settings-custom-theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--om-space-2);
+  padding: var(--om-space-2);
+  border-radius: var(--om-radius-sm);
+  border: 1px solid transparent;
+}
+
+.sm-dialog .settings-custom-theme-card--active {
+  border-color: color-mix(in oklab, var(--om-accent) 40%, var(--om-border-default));
+  background: color-mix(in oklab, var(--om-accent-soft) 28%, transparent);
+}
+
+.sm-dialog .settings-custom-theme-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--om-space-1);
+  align-items: center;
+}
+
+.sm-dialog .settings-custom-theme-card__head .settings-custom-theme__name {
+  flex: 1 1 8rem;
+}
+
+.sm-dialog .settings-color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--om-space-1) var(--om-space-2);
+}
+
+.sm-dialog .settings-color-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--om-space-1);
+  font-size: 0.72rem;
+  color: var(--om-text-secondary);
+}
+
+.sm-dialog .settings-color-field input[type="color"] {
+  width: 2rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--om-border-default);
+  border-radius: var(--om-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sm-dialog .settings-custom-theme {
+  display: grid;
+  grid-template-columns: auto 1fr minmax(6.5rem, 8rem) auto auto;
+  gap: var(--om-space-1);
+  align-items: center;
+  padding: var(--om-space-1);
+  border-radius: var(--om-radius-sm);
+  border: 1px solid transparent;
+}
+
+.sm-dialog .settings-custom-theme--active {
+  border-color: color-mix(in oklab, var(--om-accent) 40%, var(--om-border-default));
+  background: color-mix(in oklab, var(--om-accent-soft) 35%, transparent);
+}
+
+.sm-dialog .settings-custom-theme__name,
+.sm-dialog .settings-custom-theme__base {
+  min-height: 1.75rem;
+  font-size: 0.78rem;
+  border-radius: var(--om-radius-sm);
+  border: 1px solid var(--om-border-default);
+  background: var(--om-surface-1);
+  color: var(--om-text-primary);
+  padding: 0 0.45rem;
+}
+
+.sm-dialog .settings-custom-theme__accent input[type="color"] {
+  width: 2rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--om-border-default);
+  border-radius: var(--om-radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sm-dialog .settings-bg-path {
+  word-break: break-all;
+  max-height: 2.8em;
+  overflow: hidden;
+}
+
+.sm-dialog .settings-range-row {
+  display: flex;
+  align-items: center;
+  gap: var(--om-space-2);
+}
+
+.sm-dialog .settings-range-row input[type="range"] {
+  flex: 1;
+}
+
+.sm-dialog .settings-range-value {
+  font-size: 0.75rem;
+  color: var(--om-text-secondary);
+  min-width: 2.5rem;
+  text-align: right;
+}
+
+.sm-dialog .settings-font-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--om-space-2);
+}
+
+.sm-dialog .settings-font-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  min-height: 2.6rem;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+}
+
+.sm-dialog .settings-font-chip__name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--om-text-secondary);
+}
+
+.sm-dialog .settings-font-chip__sample {
+  font-size: 0.8rem;
+}
+
+.sm-dialog .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .sm-dialog .check {

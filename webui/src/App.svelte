@@ -3,6 +3,7 @@
   let pollTimer: number | null = null;
   import { bridge, type GalleryItem } from "./lib/api";
   import ConfirmDeleteModal from "./components/ConfirmDeleteModal.svelte";
+  import AppBackgroundLayer from "./components/AppBackgroundLayer.svelte";
   import LoadOverlay from "./components/LoadOverlay.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
   import DebugLogPanel from "./components/DebugLogPanel.svelte";
@@ -90,7 +91,7 @@
     getGalleryNavigationGeneration,
     isGalleryNavigationCurrent,
   } from "./lib/gallerySession";
-  import { commitChromePagerState } from "./lib/chromeRemember";
+  import { commitChromePagerState, galleryChromeBusy } from "./lib/chromeRemember";
   import {
     collectRemovedMediaIndices,
     isGalleryMediaKind,
@@ -99,9 +100,18 @@
     shiftGalleryMediaIndicesAfterRemoval,
   } from "./lib/galleryUtils";
   import {
-    applyUiThemeToDocument,
-    normalizeUiTheme,
-    readCachedUiTheme,
+    applyAppearanceToDocument,
+    applyBackgroundAppearance,
+    applyThemeAppearance,
+    appearanceFromSettings,
+    defaultAppearance,
+    queueAppearancePersist,
+    readCachedAppearance,
+    type CustomTheme,
+    type ThemeSelection,
+    type UiFontId,
+  } from "./lib/uiAppearance";
+  import {
     type UiThemeId,
   } from "./lib/uiTheme";
   import type { TreeNode } from "./lib/itemTree";
@@ -159,6 +169,7 @@
   let appliedThumbScale = 1;
   let previewOpen = false;
   let previewDestPath = "";
+  let bgImagePickActive = false;
   let destPreviewModal: DestPreviewModal | null = null;
   let galleryRangeSelecting = false;
   let galleryRangeSuppressClick = false;
@@ -377,8 +388,16 @@
   };
   let keyboardShortcuts = { ...defaultKeyboardShortcuts };
   let keyboardShortcutsBackup = { ...defaultKeyboardShortcuts };
-  let uiTheme: UiThemeId = readCachedUiTheme();
-  let uiThemeBackup: UiThemeId = "midnight";
+  let themeSelection: ThemeSelection = readCachedAppearance().themeSelection ?? defaultAppearance().themeSelection;
+  let uiCustomThemes: CustomTheme[] = [];
+  let uiFont: UiFontId = "outfit";
+  let uiBgImagePath = "";
+  let uiBgBlur = 0;
+  let themeSelectionBackup: ThemeSelection = "midnight";
+  let uiCustomThemesBackup: CustomTheme[] = [];
+  let uiFontBackup: UiFontId = "outfit";
+  let uiBgImagePathBackup = "";
+  let uiBgBlurBackup = 0;
 
   const themeNameLabel = (id: UiThemeId): string =>
     t(
@@ -897,8 +916,13 @@
       zoomNext: normalizeShortcutValue(persistedShortcuts?.zoomNext, defaultKeyboardShortcuts.zoomNext),
       escape: normalizeShortcutValue(persistedShortcuts?.escape, defaultKeyboardShortcuts.escape),
     };
-    uiTheme = normalizeUiTheme(data.settings?.web_ui_theme);
-    applyUiThemeToDocument(uiTheme);
+    const appearance = appearanceFromSettings(data.settings as Record<string, unknown>);
+    themeSelection = appearance.themeSelection;
+    uiCustomThemes = appearance.customThemes;
+    uiFont = appearance.font;
+    uiBgImagePath = appearance.bgImagePath;
+    uiBgBlur = appearance.bgBlur;
+    applyAppearanceToDocument(appearance);
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
@@ -1003,7 +1027,21 @@
     await syncMarkersFromApi();
   };
 
-  $: applyUiThemeToDocument(uiTheme);
+  $: {
+    applyThemeAppearance({
+      themeSelection,
+      customThemes: uiCustomThemes,
+      font: uiFont,
+    });
+    applyBackgroundAppearance(uiBgImagePath, uiBgBlur);
+    queueAppearancePersist({
+      themeSelection,
+      customThemes: uiCustomThemes,
+      font: uiFont,
+      bgImagePath: uiBgImagePath,
+      bgBlur: uiBgBlur,
+    });
+  }
 
   async function persistViewAndReload() {
     try {
@@ -1493,7 +1531,11 @@
   };
 
   const openSettingsModal = () => {
-    uiThemeBackup = uiTheme;
+    themeSelectionBackup = themeSelection;
+    uiCustomThemesBackup = uiCustomThemes.map((row) => ({ ...row }));
+    uiFontBackup = uiFont;
+    uiBgImagePathBackup = uiBgImagePath;
+    uiBgBlurBackup = uiBgBlur;
     thumbsPerPageBackup = thumbsPerPage;
     thumbGapPxBackup = thumbGapPx;
     galleryMasonryTightSpacingBackup = galleryMasonryTightSpacing;
@@ -1553,7 +1595,11 @@
   };
 
   const cancelSettingsModal = () => {
-    uiTheme = uiThemeBackup;
+    themeSelection = themeSelectionBackup;
+    uiCustomThemes = uiCustomThemesBackup.map((row) => ({ ...row }));
+    uiFont = uiFontBackup;
+    uiBgImagePath = uiBgImagePathBackup;
+    uiBgBlur = uiBgBlurBackup;
     thumbsPerPage = thumbsPerPageBackup;
     thumbGapPx = thumbGapPxBackup;
     galleryMasonryTightSpacing = galleryMasonryTightSpacingBackup;
@@ -1685,7 +1731,11 @@
         gallery_thumb_scale: Number(ts.toFixed(3)),
         gallery_thumb_quality_preset: galleryThumbQualityPreset,
         gallery_thumb_disk_cache_enabled: Boolean(galleryThumbDiskCacheEnabled),
-        web_ui_theme: uiTheme,
+        web_ui_theme: themeSelection,
+        web_ui_custom_themes: uiCustomThemes,
+        web_ui_font: uiFont,
+        web_ui_bg_image: uiBgImagePath,
+        web_ui_bg_blur: uiBgBlur,
         web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
         web_show_thumb_labels: Boolean(showThumbLabels),
         web_thumb_card_style: thumbCardStyle,
@@ -2990,8 +3040,27 @@
   }
 
   const openDestPreview = (path: string) => {
+    bgImagePickActive = false;
     previewDestPath = path;
     previewOpen = true;
+  };
+
+  const openBgImageFolderPicker = (path: string) => {
+    const p = String(path ?? "").trim();
+    if (!p) return;
+    bgImagePickActive = true;
+    previewDestPath = p;
+    previewOpen = true;
+  };
+
+  const closeDestPreview = () => {
+    previewOpen = false;
+    bgImagePickActive = false;
+  };
+
+  const onBgImagePicked = (path: string) => {
+    uiBgImagePath = path;
+    closeDestPreview();
   };
 
   $: {
@@ -5008,6 +5077,11 @@
     pinnedCtxMenu = null;
   }
 
+  $: uiBgActive = Boolean(uiBgImagePath.trim());
+  /** Pausa la capa fija durante scroll/modales (anti-parpadeo en Qt WebEngine). */
+  $: uiBgPaused =
+    $galleryChromeBusy || routePickerOpen || settingsOpen || viewMenuOpen || pinMarkerOpen;
+
   $: if (!previewZoomOpen && deferredZoomMoveRefresh) {
     void applyGalleryItemsDelta(deferredZoomMoveRefresh);
     deferredZoomMoveRefresh = null;
@@ -5314,15 +5388,25 @@
       zoomEditMode = false;
       zoomCropMode = false;
     } else if (previewZoomOpen) previewZoomOpen = false;
-    else if (previewOpen) previewOpen = false;
+    else if (previewOpen) closeDestPreview();
     else if (routePickerOpen) routePickerOpen = false;
     else if (orgPanelOpen) orgPanelOpen = false;
     else if (messPanelOpen) messPanelOpen = false;
   }}
 />
 
+<div
+  class="app-shell"
+  class:app-shell--has-bg={uiBgActive}
+  class:app-shell--bg-paused={uiBgPaused}
+>
+  <AppBackgroundLayer active={uiBgActive && !uiBgPaused} />
+
 <main
   class="app"
+  class:app--has-bg={uiBgActive}
+  class:app--thumb-gap-zero={thumbGapPx <= 0}
+  class:app--masonry-gap-zero={galleryMasonryView && (galleryMasonryTightSpacing || thumbGapPx <= 0)}
   class:app--layout-ruta={!destinationsMode}
   class:app--layout-destinos={destinationsMode}
   class:app--tile-flat={thumbCardStyle === "flat"}
@@ -5330,7 +5414,6 @@
   class:app--tile-no-frame={!thumbFrameVisible}
   style={`--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
 >
-  
   <div class="app-chrome app-chrome--header">
   <Toolbar
     bind:destinationsMode
@@ -5594,13 +5677,19 @@
       bind:this={destPreviewModal}
       bind:open={previewOpen}
       destPath={previewDestPath}
+      pickImageMode={bgImagePickActive}
       {thumbScale}
       {thumbGapPx}
       {showThumbLabels}
       {gridCellPx}
-      on:close={() => (previewOpen = false)}
-      on:zoom={(e) => openPreviewZoom(e.detail.item, { navItems: e.detail.navItems })}
-      on:deleteSelected={() =>
+      on:close={closeDestPreview}
+      on:pick={(e) => onBgImagePicked(e.detail.path)}
+      on:zoom={(e) => {
+        if (bgImagePickActive) return;
+        openPreviewZoom(e.detail.item, { navItems: e.detail.navItems });
+      }}
+      on:deleteSelected={() => {
+        if (bgImagePickActive) return;
         openConfirmDelete(
           t("confirm.deleteSelectionTitle"),
           t("confirm.deleteSelectionDetail").replace(
@@ -5608,9 +5697,16 @@
             String(destPreviewModal?.getSelectedPaths()?.length ?? 0)
           ),
           deletePreviewSelectedItems
-        )}
-      on:dropToRoute={(e) => void movePreviewPathsToCurrentRoute(e.detail.paths)}
-      on:contextmenu={onDestPreviewItemContextMenu}
+        );
+      }}
+      on:dropToRoute={(e) => {
+        if (bgImagePickActive) return;
+        void movePreviewPathsToCurrentRoute(e.detail.paths);
+      }}
+      on:contextmenu={(e) => {
+        if (bgImagePickActive) return;
+        onDestPreviewItemContextMenu(e);
+      }}
     />
   {/if}
 
@@ -6199,7 +6295,11 @@
       bind:thumbImageRadiusPx
       bind:thumbTileRadiusPx
       bind:galleryMasonryTightSpacing
-      bind:uiTheme
+      bind:themeSelection
+      bind:customThemes={uiCustomThemes}
+      bind:uiFont
+      bind:uiBgImagePath
+      bind:uiBgBlur
       bind:showThumbLabels
       bind:thumbFrameVisible
       bind:thumbCardStyle
@@ -6214,6 +6314,11 @@
       onMarkerTreeChange={(next) => (markerTreeSettingsDraft = next)}
       onPickDestFolder={pickSettingsDestFolder}
       onPickMarkerFolder={pickSettingsMarkerFolder}
+      galleryFolder={folder}
+      {recentFolders}
+      {pinnedFolders}
+      pinnedFolderLabels={pinnedFolderLabels}
+      onBrowseBgFolder={openBgImageFolderPicker}
       themeNameLabel={themeNameLabel}
       onCancel={cancelSettingsModal}
       onSave={saveSettingsModal}
@@ -6349,4 +6454,5 @@
     onZoomVideoPlay={requestZoomVideoPlay}
   />
 </main>
+</div>
 

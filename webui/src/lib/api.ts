@@ -63,6 +63,10 @@ const devMockApi: WebApi = {
   get_initial_state: async () => ({
     settings: {
       web_ui_theme: "midnight",
+      web_ui_custom_themes: [] as Array<Record<string, unknown>>,
+      web_ui_font: "outfit",
+      web_ui_bg_image: "",
+      web_ui_bg_blur: 0,
       gallery_thumb_scale: 1,
       dest_preview_thumb_scale: 1,
       web_preview_ratio: 0.4,
@@ -320,6 +324,12 @@ const devMockApi: WebApi = {
     hint:
       "En el navegador no hay explorador del sistema. Abre la app con Python (PyWebView) o escribe la ruta a mano.",
   }),
+  dialog_pick_image: async () => ({
+    path: null as string | null,
+    cancelled: true,
+    hint:
+      "En el navegador no hay explorador del sistema. Abre la app con Python (PyWebView) para elegir una imagen de fondo.",
+  }),
 };
 
 const call = async <T>(method: string, ...args: any[]): Promise<T> => {
@@ -469,4 +479,5 @@ export const bridge = {
   messSimilarPaths: (anchorPath: string, candidatePaths: string[], minSimilarity?: number, limit = 32) =>
     call<any>("mess_similar_paths", anchorPath, candidatePaths, minSimilarity, limit),
   dialogPickFolder: (startPath?: string) => call<any>("dialog_pick_folder", startPath ?? ""),
+  dialogPickImage: (startPath?: string) => call<any>("dialog_pick_image", startPath ?? ""),
 };
