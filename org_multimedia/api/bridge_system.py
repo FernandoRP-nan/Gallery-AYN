@@ -239,7 +239,10 @@ class SystemBridgeMixin:
         return {"path": str(first), "cancelled": False}
 
     def ping(self) -> dict:
-        return {"ok": True, "ts": time.time()}
+        from ..core.video_transcode import prime_transcode_workers
+
+        workers = prime_transcode_workers()
+        return {"ok": True, "ts": time.time(), "transcodeWorkers": workers}
 
     def gallery_video_system_diagnostics(self) -> dict:
         """Diagnóstico del motor de vídeo, ffmpeg HW y caché (sin archivo concreto)."""

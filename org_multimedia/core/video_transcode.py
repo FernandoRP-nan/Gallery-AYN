@@ -89,6 +89,7 @@ def list_active_transcode_jobs() -> list[dict[str, str]]:
 
 def transcode_queue_stats() -> dict[str, int]:
     """Contadores rápidos de la cola (sin escanear caché)."""
+    alive_workers = prime_transcode_workers()
     _prune_orphan_active_jobs()
     with _QUEUE_GUARD:
         queued = len(_QUEUE_BY_TOKEN)
@@ -103,8 +104,36 @@ def transcode_queue_stats() -> dict[str, int]:
         "running": running,
         "warmQueued": warm_queued,
         "active": active,
-        "workers": len(_WORKER_THREADS),
+        "workers": alive_workers,
     }
+
+
+def prime_transcode_workers() -> int:
+    """Arranca workers de transcodificación si no hay ninguno vivo (idempotente)."""
+    from .video_transcode_options import get_transcode_max_jobs
+
+    n = max(1, get_transcode_max_jobs())
+    to_start: list[threading.Thread] = []
+    with _QUEUE_GUARD:
+        alive = [t for t in _WORKER_THREADS if t.is_alive()]
+        _WORKER_THREADS.clear()
+        _WORKER_THREADS.extend(alive)
+        missing = max(0, n - len(_WORKER_THREADS))
+        for _ in range(missing):
+            t = threading.Thread(
+                target=_transcode_worker_main,
+                daemon=True,
+                name=f"om-transcode-worker-{len(_WORKER_THREADS) + len(to_start)}",
+            )
+            to_start.append(t)
+    for t in to_start:
+        t.start()
+    if to_start:
+        with _QUEUE_GUARD:
+            _WORKER_THREADS.extend(to_start)
+            _QUEUE_CV.notify_all()
+    with _QUEUE_GUARD:
+        return sum(1 for t in _WORKER_THREADS if t.is_alive())
 
 
 def _prune_orphan_active_jobs() -> None:
@@ -166,10 +195,10 @@ def clear_warm_transcode_queue() -> dict:
     out = drain_low_priority_transcodes(keep_tokens=set())
     preempted = _preempt_running_below_priority(TRANSCODE_PRIORITY_USER, keep_tokens=set())
     _prune_orphan_active_jobs()
-    _ensure_transcode_workers()
+    alive = prime_transcode_workers()
     out["preempted"] = preempted
     out["ffmpegKilled"] = ffmpeg_killed
-    out["workers"] = len([t for t in _WORKER_THREADS if t.is_alive()])
+    out["workers"] = alive
     return out
 
 
@@ -271,23 +300,7 @@ def _finish_running_token(token: str) -> None:
 
 
 def _ensure_transcode_workers() -> None:
-    from .video_transcode_options import get_transcode_max_jobs
-
-    n = max(1, get_transcode_max_jobs())
-    with _QUEUE_GUARD:
-        alive = [t for t in _WORKER_THREADS if t.is_alive()]
-        if len(alive) != len(_WORKER_THREADS):
-            _WORKER_THREADS.clear()
-            _WORKER_THREADS.extend(alive)
-        while len(_WORKER_THREADS) < n:
-            t = threading.Thread(
-                target=_transcode_worker_main,
-                daemon=True,
-                name=f"om-transcode-worker-{len(_WORKER_THREADS)}",
-            )
-            _WORKER_THREADS.append(t)
-            t.start()
-        _QUEUE_CV.notify_all()
+    prime_transcode_workers()
 
 
 def _kill_all_ffmpeg_procs() -> int:
@@ -372,12 +385,14 @@ def _submit_transcode(
         out = transcode_webm_output_path(resolved)
         token = out.stem
         job_fmt = "webm"
+        _discard_invalid_cache(out, fmt="webm")
         cache_ok = _webm_cache_valid(out)
     else:
         _remember_transcode_source(resolved, playback_mode=mode)
         out = transcode_output_path(resolved, playback_mode=mode)
         token = out.stem
         job_fmt = _mp4_job_format(resolved)
+        _discard_invalid_cache(out, fmt="mp4")
         cache_ok = _mp4_cache_valid(out)
     if cache_ok:
         _clear_active_job(token)
@@ -394,15 +409,16 @@ def _submit_transcode(
     )
     enqueued = _enqueue_work(work)
     with _QUEUE_GUARD:
-        tracked = token in _QUEUE_BY_TOKEN or token in _RUNNING_TOKENS
-    if tracked:
-        status = "running" if token in _RUNNING_TOKENS else "queued"
+        in_queue = work.token in _QUEUE_BY_TOKEN
+        running = work.token in _RUNNING_TOKENS
+    if enqueued or in_queue or running:
+        status = "running" if running else "queued"
         _register_transcode_job(token, resolved, job_fmt, status=status, priority=priority)
     if enqueued:
         _ensure_transcode_workers()
     if not blocking:
         return None
-    if not tracked and not enqueued:
+    if not enqueued and not in_queue and not running:
         raise RuntimeError("No se pudo encolar la transcodificación")
     partial: Path | None = None
     if fmt == "webm":
@@ -619,6 +635,7 @@ def _wait_transcode_ready(
 
 def request_user_transcode(source: Path, *, playback_mode: str = "auto") -> dict:
     """Encola (o reprioriza) la transcodificación del vídeo que el usuario quiere ver."""
+    prime_transcode_workers()
     resolved = source.resolve()
     mode = normalize_playback_mode(playback_mode)
     from .viewer_playback import viewer_prefers_webm
@@ -738,7 +755,31 @@ def _ffprobe_streams(path: Path) -> tuple[dict | None, dict | None]:
         return None, None
 
 
-_H264_COMPAT_PIX = frozenset({"yuv420p", "yuvj420p"})
+def _ffprobe_audio_streams(path: Path) -> list[dict]:
+    from .video_tools import resolve_ffprobe
+
+    ffprobe = resolve_ffprobe()
+    if not ffprobe:
+        return []
+    try:
+        result = run_hidden(
+            [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+        streams = json.loads(result.stdout or "{}").get("streams") or []
+        return [s for s in streams if s.get("codec_type") == "audio"]
+    except Exception:
+        return []
+
+
+_H264_COMPAT_PIX = frozenset({"yuv420p", "yuvj420p", "nv12"})
+_DIRECT_CONTAINER_EXT = frozenset({".mp4", ".m4v", ".mov", ".3gp", ".3g2"})
+_DIRECT_AUDIO_CODECS = frozenset({"aac", "mp3"})
 
 
 def mp4_playback_mode(video: dict | None, audio: dict | None) -> str:
@@ -759,21 +800,37 @@ def mp4_playback_mode(video: dict | None, audio: dict | None) -> str:
 
 
 def is_browser_playable(path: Path) -> bool:
-    """True si el MP4/M4V ya es H.264/AAC y suele reproducirse en WebView."""
-    if path.suffix.lower() not in (".mp4", ".m4v"):
-        return False
+    """True si el contenedor/códec ya es compatible con reproducción directa en WebView."""
+    return _browser_playable_check(path)[0]
+
+
+def explain_browser_playable(path: Path) -> tuple[bool, str]:
+    """Devuelve (¿directo?, motivo si requiere conversión)."""
+    return _browser_playable_check(path)
+
+
+def _browser_playable_check(path: Path) -> tuple[bool, str]:
+    ext = path.suffix.lower()
+    if ext not in _DIRECT_CONTAINER_EXT:
+        return False, f"contenedor {ext or '(sin ext.)'} (se espera mp4/m4v/mov)"
     video, audio = _ffprobe_streams(path)
     if not video:
-        return False
-    if (video.get("codec_name") or "").lower() != "h264":
-        return False
+        return False, "sin pista de vídeo legible"
+    vcodec = (video.get("codec_name") or "").lower()
+    if vcodec != "h264":
+        return False, f"vídeo {vcodec or 'desconocido'} (se necesita H.264)"
     pix = (video.get("pix_fmt") or "").lower()
-    if pix and pix not in ("yuv420p", "yuvj420p"):
-        return False
+    if pix and pix not in _H264_COMPAT_PIX:
+        return False, f"pix_fmt {pix} (se espera yuv420p/nv12)"
     if audio:
-        if (audio.get("codec_name") or "").lower() not in ("aac", "mp3"):
-            return False
-    return True
+        acodec = (audio.get("codec_name") or "").lower()
+        if acodec not in _DIRECT_AUDIO_CODECS:
+            # Algunos MP4 traen pista secundaria incompatible; si hay AAC/MP3 en otra pista, remux basta.
+            extras = _ffprobe_audio_streams(path)
+            if any((s.get("codec_name") or "").lower() in _DIRECT_AUDIO_CODECS for s in extras[1:]):
+                return False, f"audio {acodec} en pista principal (hay otra pista AAC/MP3; remux)"
+            return False, f"audio {acodec} (se espera AAC/MP3)"
+    return True, "direct"
 
 
 def is_webm_playable(path: Path) -> bool:
@@ -981,35 +1038,51 @@ def _transcode_to_mp4(
 
 def _transcode_to_webm(source: Path, out: Path, *, token: str | None = None) -> None:
     from .video_tools import resolve_ffmpeg
-    from .video_transcode_options import build_webm_encode_options
+    from .video_transcode_options import build_webm_encode_options, disable_webm_hw_encoder
 
     ffmpeg = resolve_ffmpeg() or "ffmpeg"
-    vcodec, video_extra = build_webm_encode_options(ffmpeg)
     tmp = out.with_suffix(".part.webm")
     if tmp.exists():
         tmp.unlink(missing_ok=True)
     video, _audio = _ffprobe_streams(source)
     duration_us = _parse_duration_us(video)
-    args = [
-        "-y",
-        "-i",
-        str(source),
-        "-map",
-        "0:v:0?",
-        "-map",
-        "0:a:0?",
-        "-c:v",
-        vcodec,
-        *video_extra,
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "128k",
-        "-f",
-        "webm",
-        str(tmp),
-    ]
-    _run_ffmpeg(args, token=token, duration_us=duration_us)
+
+    last_err: RuntimeError | None = None
+    for force_cpu in (False, True):
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        vcodec, video_extra = build_webm_encode_options(ffmpeg, force_cpu=force_cpu)
+        args = [
+            "-y",
+            "-i",
+            str(source),
+            "-map",
+            "0:v:0?",
+            "-map",
+            "0:a:0?",
+            "-c:v",
+            vcodec,
+            *video_extra,
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "128k",
+            "-f",
+            "webm",
+            str(tmp),
+        ]
+        try:
+            _run_ffmpeg(args, token=token, duration_us=duration_us)
+            last_err = None
+            break
+        except RuntimeError as exc:
+            last_err = exc
+            if vcodec == "libvpx":
+                break
+            disable_webm_hw_encoder()
+    if last_err is not None:
+        tmp.unlink(missing_ok=True)
+        raise last_err
     if not tmp.is_file() or tmp.stat().st_size < 512:
         tmp.unlink(missing_ok=True)
         raise RuntimeError("La transcodificación WebM no generó un archivo válido")
@@ -1022,6 +1095,19 @@ def _webm_cache_valid(out: Path) -> bool:
         return False
     _, audio = _ffprobe_streams(out)
     return not audio or (audio.get("codec_name") or "").lower() == "opus"
+
+
+def _discard_invalid_cache(out: Path, *, fmt: str) -> None:
+    """Elimina entradas de caché obsoletas que bloquean la re-transcodificación."""
+    valid = _webm_cache_valid(out) if fmt == "webm" else _mp4_cache_valid(out)
+    if valid:
+        return
+    for candidate in (out, transcode_webm_partial_path(out) if fmt == "webm" else transcode_partial_path(out)):
+        try:
+            if candidate.is_file():
+                candidate.unlink()
+        except OSError:
+            pass
 
 
 def ensure_transcoded_webm(source: Path, *, timeout: float = 7200.0) -> Path:
@@ -1105,9 +1191,11 @@ def _start_mp4_transcode_async(
 
 def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait_partial: bool = True) -> Path:
     """Ruta servible por HTTP (final o parcial en curso)."""
+    prime_transcode_workers()
     resolved = source.resolve()
     mode = normalize_playback_mode(playback_mode)
     out = transcode_output_path(resolved, playback_mode=mode)
+    _discard_invalid_cache(out, fmt="mp4")
     partial = transcode_partial_path(out)
 
     if _mp4_cache_valid(out):
@@ -1136,8 +1224,10 @@ def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait
 
 def resolve_webm_playback_path(source: Path, *, wait_partial: bool = True) -> Path:
     """Ruta servible por HTTP (final o parcial en curso)."""
+    prime_transcode_workers()
     resolved = source.resolve()
     out = transcode_webm_output_path(resolved)
+    _discard_invalid_cache(out, fmt="webm")
     partial = transcode_webm_partial_path(out)
 
     if _webm_cache_valid(out):

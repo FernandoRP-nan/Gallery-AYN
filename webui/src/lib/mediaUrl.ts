@@ -30,6 +30,7 @@ export type MediaPlaybackInfo = {
   needsTranscode: boolean;
   playbackMode?: VideoPlaybackMode;
   playbackStrategy?: "direct" | "remux" | "encode";
+  transcodeReason?: string;
   playbackViaBlob?: boolean;
   ffmpegAvailable?: boolean;
   ffprobeAvailable?: boolean;
@@ -78,6 +79,7 @@ export async function resolveMediaPlaybackInfo(
     needsTranscode,
     playbackMode: (out?.playbackMode as VideoPlaybackMode) ?? mode,
     playbackStrategy: (out?.playbackStrategy as MediaPlaybackInfo["playbackStrategy"]) ?? undefined,
+    transcodeReason: String(out?.transcodeReason ?? "").trim() || undefined,
     playbackViaBlob,
     ffmpegAvailable: Boolean(out?.ffmpegAvailable),
     ffprobeAvailable: Boolean(out?.ffprobeAvailable),
@@ -88,17 +90,74 @@ export async function resolveMediaPlaybackInfo(
 
 /** Texto de estado mientras se prepara la reproducción. */
 export function playbackPrepareMessage(
-  info: Pick<MediaPlaybackInfo, "playbackStrategy" | "needsTranscode" | "transcodeCached">
+  info: Pick<MediaPlaybackInfo, "playbackStrategy" | "needsTranscode" | "transcodeCached" | "transcodeReason">
 ): string {
   if (!info.needsTranscode || info.playbackStrategy === "direct") return t("preview.videoLoadingDirect");
   if (info.transcodeCached) return t("preview.videoLoadingDirect");
-  if (info.playbackStrategy === "remux") return t("preview.videoRemuxing");
-  return t("preview.videoTranscodingProgressive");
+  const reason = transcodeReasonLabel(info.transcodeReason);
+  if (info.playbackStrategy === "remux") {
+    return reason ? tFmt("preview.videoRemuxingReason", { reason }) : t("preview.videoRemuxing");
+  }
+  return reason ? tFmt("preview.videoTranscodingReason", { reason }) : t("preview.videoTranscodingProgressive");
+}
+
+function tFmt(path: string, vars: Record<string, string>): string {
+  let s = t(path);
+  for (const [key, value] of Object.entries(vars)) {
+    s = s.replace(`{${key}}`, value);
+  }
+  return s;
+}
+
+/** Motivo legible devuelto por ffprobe en el backend. */
+export function transcodeReasonLabel(reason: string | undefined): string {
+  const raw = String(reason ?? "").trim();
+  if (!raw) return "";
+  if (raw === "compatible" || raw === "modo_original" || raw === "direct") return "";
+  if (raw === "motor_webm") return t("preview.transcodeReasonMotorWebm");
+  if (raw === "webm_no_compatible") return t("preview.transcodeReasonWebmBad");
+  if (raw.startsWith("contenedor ")) {
+    return tFmt("preview.transcodeReasonContainer", { detail: raw.replace(/^contenedor /, "") });
+  }
+  if (raw.startsWith("vídeo ")) {
+    return tFmt("preview.transcodeReasonVideo", { detail: raw.replace(/^vídeo /, "") });
+  }
+  if (raw.startsWith("audio ")) {
+    return tFmt("preview.transcodeReasonAudio", { detail: raw.replace(/^audio /, "") });
+  }
+  if (raw.startsWith("pix_fmt ")) {
+    return tFmt("preview.transcodeReasonPixFmt", { detail: raw.replace(/^pix_fmt /, "") });
+  }
+  return raw;
+}
+
+/** Añade parámetro de versión para forzar recarga del reproductor tras transcodificar. */
+export function bustMediaUrl(url: string): string {
+  const raw = String(url ?? "").trim();
+  if (!raw || raw.startsWith("data:")) return raw;
+  const sep = raw.includes("?") ? "&" : "?";
+  return `${raw}${sep}v=${Date.now()}`;
+}
+
+/** Normaliza URL ignorando el parámetro de versión (?v=). */
+export function normalizeMediaCompareKey(raw: string): string {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (s.startsWith("data:")) return `data:${s.length}`;
+  try {
+    const u = s.startsWith("http") ? new URL(s) : new URL(s, "http://local");
+    u.searchParams.delete("v");
+    const qs = u.searchParams.toString();
+    return qs ? `${u.pathname}?${qs}` : u.pathname;
+  } catch {
+    return s;
+  }
 }
 
 /** URL inicial según compatibilidad detectada por ffprobe en el backend. */
 export function pickInitialPlaybackUrl(info: MediaPlaybackInfo): string {
   if (info.playbackMode === "direct") return info.fileUrl || info.transcodeUrl;
+  if (info.transcodeCached && info.transcodeUrl) return info.transcodeUrl;
   if (info.needsTranscode) return info.transcodeUrl || info.fileUrl;
   return info.fileUrl || info.transcodeUrl;
 }
@@ -123,18 +182,7 @@ export function mediaUrlKey(raw: string | null | undefined): string {
 
 /** Normaliza para comparar URLs del mismo recurso (con o sin origen). */
 export function sameMediaUrl(a: string | null | undefined, b: string | null | undefined): boolean {
-  const norm = (raw: string) => {
-    const s = String(raw ?? "").trim();
-    if (!s) return "";
-    if (s.startsWith("data:")) return `data:${s.length}`;
-    try {
-      const u = s.startsWith("http") ? new URL(s) : new URL(s, "http://local");
-      return `${u.pathname}${u.search}`;
-    } catch {
-      return s;
-    }
-  };
-  const na = norm(String(a ?? ""));
-  const nb = norm(String(b ?? ""));
+  const na = normalizeMediaCompareKey(String(a ?? ""));
+  const nb = normalizeMediaCompareKey(String(b ?? ""));
   return Boolean(na && nb && na === nb);
 }

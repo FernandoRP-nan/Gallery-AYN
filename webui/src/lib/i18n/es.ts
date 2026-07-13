@@ -227,6 +227,14 @@ export const es = {
     videoTranscodingProgressive: "Transcodificando… la reproducción empieza en cuanto haya datos suficientes.",
     videoQueuePosition: "Cola #{n}",
     videoRemuxing: "Preparando MP4 (copia rápida del vídeo, sin recodificar)…",
+    videoRemuxingReason: "Preparando MP4 (remux rápido): {reason}",
+    videoTranscodingReason: "Transcodificando: {reason}",
+    transcodeReasonMotorWebm: "el visor usa WebM y este archivo no es VP8/Opus",
+    transcodeReasonWebmBad: "WebM con códecs no soportados por Qt",
+    transcodeReasonContainer: "contenedor {detail}",
+    transcodeReasonVideo: "vídeo {detail}",
+    transcodeReasonAudio: "audio {detail}",
+    transcodeReasonPixFmt: "formato de píxeles {detail}",
     videoLoadingDirect: "Cargando vídeo…",
     videoProfilesLabel: "Modo de reproducción",
     videoModeAuto: "Auto",
@@ -321,6 +329,8 @@ export const es = {
       "HTTP 0: el visor bloqueó la petición de red; suele acompañar al fallo del motor multimedia.",
     videoDiagFileCodecOk: "Códec del archivo (válido en reproductores externos)",
     videoDiagViewerTranscode: "Requiere versión para el visor",
+    videoDiagTranscodeReason: "Motivo",
+    videoDiagPlaybackStrategy: "Estrategia",
   },
   /** Mensajes de la barra de estado (`status` en App.svelte) */
   status: {
@@ -470,6 +480,12 @@ export const es = {
     videoDiagDrainWarm: "Vaciar cola de precalentamiento",
     videoDiagDrainWarmOk: "Cola reiniciada: {removed} quitados, {preempted} cancelados, {workers} workers",
     videoDiagHwPending: "Códecs HW: se detectarán en la primera transcodificación",
+    videoDiagWorkersZero: "Sin workers de transcodificación. Pulsa «Vaciar cola» o reinicia la app.",
+    videoDiagFreeworldHint:
+      "Para reproducir al instante como en Windows (sin transcodificar), instala H.264 en Qt WebEngine y reinicia la app:",
+    videoDiagFreeworldCmd: "sudo dnf install qt6-qtwebengine-freeworld",
+    videoDiagFreeworldPartial:
+      "Qt no pudo decodificar H.264 directo (¿freeworld instalado y app reiniciada?). Los siguientes vídeos usarán WebM automáticamente.",
     videoDiagNone: "Ninguno",
     yes: "Sí",
     no: "No",

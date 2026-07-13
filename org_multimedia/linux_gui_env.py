@@ -52,7 +52,9 @@ def prepare_linux_gui_env() -> None:
 
     ORGANIZADOR_PREFER_QT=1 — fuerza Qt WebEngine (Chromium).
 
-    Por defecto en Linux: Qt si está instalado (vídeos MP4 en WebKitGTK suelen fallar en Fedora).
+    ORGANIZADOR_QT_SKIP_PROPRIETARY_CODECS=1 — no añade --proprietary-codecs (desactiva H.264 en Qt).
+
+    Por defecto en Linux+Qt: --proprietary-codecs y QT_MEDIA_BACKEND=ffmpeg (PyQt6 pip + FFmpeg del sistema).
     Ajuste persistente: web_prefer_qt_engine en ~/.config/organizador_multimedia/settings.json
     (requiere reiniciar la app).
     """
@@ -88,6 +90,17 @@ def prepare_linux_gui_env() -> None:
             "--autoplay-policy=no-user-gesture-required",
             "--disable-features=BlockInsecurePrivateNetworkRequests",
         )
+        skip_proprietary = os.environ.get("ORGANIZADOR_QT_SKIP_PROPRIETARY_CODECS", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not skip_proprietary:
+            # PyQt6 por pip trae Chromium limitado; habilitar H.264 vía FFmpeg del sistema.
+            _merge_qt_chromium_flags("--proprietary-codecs")
+            os.environ.setdefault("QT_MEDIA_BACKEND", "ffmpeg")
+        if os.environ.get("ORGANIZADOR_QT_DEBUG", "").lower() in ("1", "true", "yes"):
+            _merge_qt_chromium_flags("--enable-logging")
         if os.environ.get("ORGANIZADOR_QT_DISABLE_GPU", "").lower() in ("1", "true", "yes"):
             _merge_qt_chromium_flags("--disable-gpu")
         return

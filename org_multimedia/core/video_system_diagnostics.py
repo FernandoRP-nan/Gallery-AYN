@@ -16,7 +16,16 @@ def video_system_diagnostics() -> dict:
         get_transcode_max_jobs,
         get_transcode_preset,
     )
-    from .viewer_playback import viewer_engine_label, viewer_prefers_webm
+    from .viewer_playback import (
+        viewer_engine_label,
+        viewer_prefers_webm,
+        qt_has_proprietary_codecs,
+        freeworld_install_hint,
+        freeworld_rpm_installed,
+        openh264_rpm_installed,
+        pyqt6_system_install,
+        qt_chromium_proprietary_flag_enabled,
+    )
 
     ffmpeg = resolve_ffmpeg()
     ffprobe = resolve_ffprobe()
@@ -38,7 +47,12 @@ def video_system_diagnostics() -> dict:
     return {
         "engine": viewer_engine_label(),
         "prefersWebm": viewer_prefers_webm(),
-        "qtFreeworld": None,
+        "qtFreeworld": qt_has_proprietary_codecs(),
+        "qtFreeworldRpm": freeworld_rpm_installed(),
+        "qtOpenh264": openh264_rpm_installed(),
+        "qtPyqt6System": pyqt6_system_install(),
+        "qtChromiumProprietaryFlag": qt_chromium_proprietary_flag_enabled(),
+        "freeworldInstallHint": freeworld_install_hint(),
         "pywebviewGui": os.environ.get("PYWEBVIEW_GUI", "qt" if sys.platform.startswith("linux") else "other"),
         "ffmpegAvailable": ffmpeg_available(),
         "ffmpegPath": ffmpeg,

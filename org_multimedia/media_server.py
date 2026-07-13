@@ -199,14 +199,19 @@ def _serve_cached_media(filename: str) -> bottle.HTTPResponse | str:
 
 
 def _serve_transcoded_media(filename: str) -> bottle.HTTPResponse | str:
-    from .core.video_transcode import resolve_mp4_playback_path, resolve_transcode_source, transcode_cache_dir
+    from .core.video_transcode import (
+        _mp4_cache_valid,
+        resolve_mp4_playback_path,
+        resolve_transcode_source,
+        transcode_cache_dir,
+    )
 
     name = _safe_cache_name(filename)
     if not name:
         return bottle.HTTPError(403, "Nombre inválido")
 
     cached = transcode_cache_dir() / name
-    if cached.is_file() and cached.stat().st_size > 512:
+    if _mp4_cache_valid(cached):
         return _stream_file_range(cached, "video/mp4")
 
     source = resolve_transcode_source(name)
@@ -221,14 +226,19 @@ def _serve_transcoded_media(filename: str) -> bottle.HTTPResponse | str:
 
 
 def _serve_transcoded_webm(filename: str) -> bottle.HTTPResponse | str:
-    from .core.video_transcode import resolve_webm_playback_path, resolve_webm_source, transcode_cache_dir
+    from .core.video_transcode import (
+        _webm_cache_valid,
+        resolve_webm_playback_path,
+        resolve_webm_source,
+        transcode_cache_dir,
+    )
 
     name = _safe_cache_name(filename)
     if not name:
         return bottle.HTTPError(403, "Nombre inválido")
 
     cached = transcode_cache_dir() / name
-    if cached.is_file() and cached.stat().st_size > 512:
+    if _webm_cache_valid(cached):
         return _stream_file_range(cached, "video/webm")
 
     source = resolve_webm_source(name)

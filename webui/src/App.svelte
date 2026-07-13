@@ -22,7 +22,7 @@
     miniMapPointToNorm,
     panFromMiniMapNorm,
   } from "./lib/zoomMiniMap";
-  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, sameMediaUrl, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, absolutizeMediaUrl, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
+  import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, bustMediaUrl, sameMediaUrl, normalizeMediaCompareKey, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, absolutizeMediaUrl, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
   import { canTranscodeVideo, tryAutoplayVideo, waitForTranscodeCache } from "./lib/videoPlayback";
   import { transcodeProgressForPath } from "./lib/videoTranscodeUi";
   import { scheduleNextZoomVideoWarm, cancelZoomVideoWarm } from "./lib/videoCarouselWarm";
@@ -209,6 +209,8 @@
   let previewVideoLastErrorDetail = "";
   let previewVideoDiagLoading = false;
   let previewVideoTriedUrls: string[] = [];
+  let previewVideoTriedUrlKeys: string[] = [];
+  let previewVideoDirectRejected = false;
   let previewVideoPlayback: MediaPlaybackInfo | null = null;
   let previewZoomPlayback: MediaPlaybackInfo | null = null;
   let previewVideoPreparing = false;
@@ -1814,8 +1816,19 @@
 
   function rememberPreviewVideoUrl(url: string) {
     const u = String(url ?? "").trim();
-    if (!u || previewVideoTriedUrls.includes(u)) return;
-    previewVideoTriedUrls = [...previewVideoTriedUrls, u];
+    if (!u) return;
+    const key = normalizeMediaCompareKey(u);
+    if (previewVideoTriedUrlKeys.includes(key)) return;
+    previewVideoTriedUrlKeys = [...previewVideoTriedUrlKeys, key];
+    if (!previewVideoTriedUrls.includes(u)) {
+      previewVideoTriedUrls = [...previewVideoTriedUrls, u];
+    }
+  }
+
+  function isDirectPreviewVideoUrl(url: string): boolean {
+    const playback = previewVideoPlayback;
+    if (!playback?.fileUrl) return false;
+    return sameMediaUrl(url, playback.fileUrl);
   }
 
   function previewVideoUrlKind(url: string): "direct" | "transcode" | "webm" | "unknown" {
@@ -1872,6 +1885,45 @@
     }
   }
 
+  function isH264PreviewAttempt(url: string): boolean {
+    if (isDirectPreviewVideoUrl(url)) return true;
+    const raw = String(url ?? "").trim();
+    return raw.startsWith("data:video/mp4");
+  }
+
+  async function switchPreviewVideoToWebmFallback(): Promise<boolean> {
+    const path = String(selectedPreview?.path ?? "").trim();
+    if (!path) return false;
+    previewVideoDirectRejected = true;
+    try {
+      await bridge.galleryVideoDirectRejected(normalizePathForApi(path));
+      const media = await bridge.galleryMediaUrl(normalizePathForApi(path), false, previewVideoMode);
+      const info: MediaPlaybackInfo = {
+        fileUrl: absolutizeMediaUrl(String(media?.fileUrl ?? "")),
+        transcodeUrl: absolutizeMediaUrl(String(media?.transcodeUrl ?? "")),
+        needsTranscode: Boolean(media?.needsTranscode),
+        transcodeCached: Boolean(media?.transcodeCached),
+        playbackMode: previewVideoMode,
+        playbackFormat: String(media?.playbackFormat ?? ""),
+      };
+      previewVideoPlayback = info;
+      const url = info.transcodeUrl || (info.transcodeCached ? pickInitialPlaybackUrl(info) : "");
+      if (!url) return false;
+      previewVideoSrc = url;
+      rememberPreviewVideoUrl(url);
+      selectedPreview = selectedPreview ? { ...selectedPreview, fileUrl: url } : selectedPreview;
+      previewVideoPreparing = true;
+      previewVideoError = "";
+      previewVideoErrorDetails = "";
+      await bridge.galleryTranscodePrioritize(normalizePathForApi(path), previewVideoMode);
+      startVideoPreparePoll();
+      void tick().then(() => maybeAutoplayPreviewVideo(previewVideoEl));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function tryBlobPreviewVideoUrl(): Promise<boolean> {
     const path = String(selectedPreview?.path ?? "").trim();
     if (!path || typeof window === "undefined" || !window.pywebview?.api) return false;
@@ -1905,27 +1957,30 @@
     const current = previewVideoSrc || selectedPreview?.fileUrl || "";
     rememberPreviewVideoUrl(current);
 
-    // Con WebM obligatorio: no volver al MP4 directo (provoca bucle infinito en Qt).
-    if (playback.needsTranscode) {
-      if (
-        playback.transcodeUrl &&
-        !sameMediaUrl(current, playback.transcodeUrl) &&
-        !previewVideoTriedUrls.some((u) => sameMediaUrl(u, playback.transcodeUrl))
-      ) {
-        previewVideoSrc = playback.transcodeUrl;
-        rememberPreviewVideoUrl(playback.transcodeUrl);
-        previewVideoPreparing = true;
-        previewVideoError = "";
-        previewVideoErrorDetails = "";
-        return true;
+    if (
+      playback.transcodeUrl &&
+      !sameMediaUrl(current, playback.transcodeUrl) &&
+      !previewVideoTriedUrlKeys.includes(normalizeMediaCompareKey(playback.transcodeUrl))
+    ) {
+      previewVideoSrc = playback.transcodeUrl;
+      rememberPreviewVideoUrl(playback.transcodeUrl);
+      previewVideoPreparing = true;
+      previewVideoError = "";
+      previewVideoErrorDetails = "";
+      const path = String(selectedPreview?.path ?? "").trim();
+      if (path) {
+        void bridge.galleryTranscodePrioritize(normalizePathForApi(path), previewVideoMode);
+        startVideoPreparePoll();
       }
-      return false;
+      return true;
     }
+
+    if (playback.needsTranscode || previewVideoDirectRejected) return false;
 
     for (const url of [playback.transcodeUrl, playback.fileUrl]) {
       if (!url) continue;
       if (sameMediaUrl(current, url)) continue;
-      if (previewVideoTriedUrls.some((u) => sameMediaUrl(u, url))) continue;
+      if (previewVideoTriedUrlKeys.includes(normalizeMediaCompareKey(url))) continue;
       previewVideoSrc = url;
       rememberPreviewVideoUrl(url);
       previewVideoPreparing = sameMediaUrl(url, playback.transcodeUrl);
@@ -2010,6 +2065,7 @@
     previewVideoErrorDetails = "";
     previewVideoLastErrorDetail = "";
     previewVideoTriedUrls = [];
+    previewVideoTriedUrlKeys = [];
     previewVideoSrc = isVideo ? "" : fallbackUrl ?? "";
     previewVideoPlayback = null;
     previewVideoDiagLoading = false;
@@ -2219,27 +2275,30 @@
         const ownJob = jobs.find(
           (j) => isActiveTranscodeJob(j) && normalizePathForApi(j.path) === key
         );
-        if (ownJob?.status === "running" || ownJob?.queuePosition === "1") {
-          try {
-            const media = await bridge.galleryMediaUrl(key, false, previewVideoMode);
-            if (media?.transcodeCached) {
-              const info: MediaPlaybackInfo = {
-                fileUrl: absolutizeMediaUrl(String(media?.fileUrl ?? "")),
-                transcodeUrl: absolutizeMediaUrl(String(media?.transcodeUrl ?? "")),
-                needsTranscode: Boolean(media?.needsTranscode),
-                transcodeCached: true,
-                playbackMode: previewVideoMode,
-              };
-              const url = pickInitialPlaybackUrl(info);
-              if (url && !sameMediaUrl(previewVideoSrc, url)) {
-                previewVideoSrc = url;
-                selectedPreview = { ...selectedPreview, fileUrl: url };
-                void tick().then(() => maybeAutoplayPreviewVideo(previewVideoEl));
-              }
+        try {
+          const media = await bridge.galleryMediaUrl(key, false, previewVideoMode);
+          if (media?.transcodeCached && media?.transcodeUrl) {
+            const info: MediaPlaybackInfo = {
+              fileUrl: absolutizeMediaUrl(String(media?.fileUrl ?? "")),
+              transcodeUrl: absolutizeMediaUrl(String(media?.transcodeUrl ?? "")),
+              needsTranscode: Boolean(media?.needsTranscode),
+              transcodeCached: true,
+              playbackMode: previewVideoMode,
+            };
+            const url = bustMediaUrl(info.transcodeUrl);
+            if (url && !sameMediaUrl(previewVideoSrc, url)) {
+              previewVideoSrc = url;
+              selectedPreview = { ...selectedPreview, fileUrl: url };
+              previewVideoPreparing = false;
+              previewVideoPlayLocked = false;
+              stopVideoPreparePoll();
+              void tick().then(() => maybeAutoplayPreviewVideo(previewVideoEl));
             }
-          } catch {
-            /* ignorar fallo puntual de sondeo */
+          } else if (ownJob?.status === "running") {
+            previewVideoPrepareMsg = t("preview.videoTranscodingProgressive");
           }
+        } catch {
+          /* ignorar fallo puntual de sondeo */
         }
       }
       if (jobs.length === 0 && !previewVideoPreparing) stopVideoPreparePoll();
@@ -2276,7 +2335,17 @@
     const el = e.currentTarget as HTMLVideoElement | null;
     const code = el?.error?.code ?? 0;
     previewVideoLastErrorDetail = String(el?.error?.message ?? "").trim();
-    rememberPreviewVideoUrl(previewVideoSrc || selectedPreview?.fileUrl || "");
+    const currentUrl = previewVideoSrc || selectedPreview?.fileUrl || "";
+    rememberPreviewVideoUrl(currentUrl);
+    const urlKind = previewVideoUrlKind(currentUrl);
+    if ((code === 4 || code === 3) && (isH264PreviewAttempt(currentUrl) || urlKind === "transcode")) {
+      previewVideoDirectRejected = true;
+      const path = String(selectedPreview?.path ?? "").trim();
+      if (path) void bridge.galleryVideoDirectRejected(normalizePathForApi(path));
+    }
+    if ((code === 4 || code === 3) && urlKind !== "webm" && !isDataPlaybackUrl(currentUrl)) {
+      if (await switchPreviewVideoToWebmFallback()) return;
+    }
     if ((code === 4 || code === 3) && tryAlternatePreviewVideoUrl()) return;
     if ((code === 4 || code === 3 || code === 2) && (await tryBlobPreviewVideoUrl())) return;
     previewVideoPreparing = false;

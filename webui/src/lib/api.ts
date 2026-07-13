@@ -383,6 +383,8 @@ export const bridge = {
   galleryTranscodeCancel: (path: string) => call<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>("gallery_transcode_cancel", path),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),
+  galleryVideoDirectRejected: (path: string) =>
+    call<{ ok: boolean; path?: string; error?: string }>("gallery_video_direct_rejected", normalizePathForApi(path)),
   galleryVideoSystemDiagnostics: () => call<any>("gallery_video_system_diagnostics"),
   galleryVideoPlaybackBlob: (path: string) =>
     call<any>("gallery_video_playback_blob", normalizePathForApi(path)),

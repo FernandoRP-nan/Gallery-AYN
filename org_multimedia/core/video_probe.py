@@ -18,6 +18,7 @@ from .video_transcode import (
 )
 from .viewer_playback import (
     ensure_viewer_playback,
+    explain_viewer_transcode,
     needs_viewer_transcode,
     viewer_engine_label,
     viewer_playback_cache_status,
@@ -103,6 +104,7 @@ def video_diagnostics(path: Path, *, test_transcode: bool = False) -> dict:
         return out
 
     out.update(probe_video_file(path))
+    out.update(explain_viewer_transcode(path))
     out["needsTranscode"] = needs_viewer_transcode(path)
 
     if test_transcode and ffmpeg_ok:

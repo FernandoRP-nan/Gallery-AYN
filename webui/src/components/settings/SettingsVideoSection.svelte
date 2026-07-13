@@ -30,6 +30,7 @@
     transcodeWarmQueued?: number;
     transcodeWorkers?: number;
     hwProbed?: boolean;
+    freeworldInstallHint?: string | null;
   };
 
   let videoDiag: VideoDiag | null = null;
@@ -212,7 +213,15 @@
         <dt>workers</dt>
         <dd>{videoDiag.transcodeWorkers ?? 0}</dd>
       </dl>
-      {#if videoDiag.hwProbed === false}
+      {#if videoDiag.prefersWebm && videoDiag.qtFreeworld === false}
+        <p class="settings-hint settings-hint--warn">{t("settings.videoDiagFreeworldHint")}</p>
+        <p class="settings-hint settings-hint--mono">
+          {videoDiag.freeworldInstallHint ?? t("settings.videoDiagFreeworldCmd")}
+        </p>
+      {/if}
+      {#if (videoDiag.transcodeWorkers ?? 0) <= 0}
+        <p class="settings-hint settings-hint--warn">{t("settings.videoDiagWorkersZero")}</p>
+      {:else if videoDiag.hwProbed === false}
         <p class="settings-hint">{t("settings.videoDiagHwPending")}</p>
       {/if}
       {#if videoDiagDrainMsg}

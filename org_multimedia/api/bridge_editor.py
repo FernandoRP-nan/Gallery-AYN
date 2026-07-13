@@ -54,7 +54,10 @@ _MONTH_NAMES_ES = (
 from ..core.media_organizer import MediaOrganizer
 from ..core.viewer_playback import (
     needs_viewer_transcode,
+    explain_viewer_transcode,
+    viewer_can_try_direct_h264,
     viewer_engine_label,
+    viewer_needs_webm_fallback,
     viewer_playback_cache_status,
     viewer_prefers_webm,
     warm_viewer_playback_async,
@@ -246,7 +249,7 @@ class EditorBridgeMixin:
         ext = p.suffix.lower()
         if ext in MediaOrganizer.VIDEO_EXTENSIONS:
             mode = normalize_playback_mode(playback_mode)
-            if warm and mode != "direct":
+            if warm and mode != "direct" and not (mode == "auto" and viewer_can_try_direct_h264(p)):
                 from ..core.video_transcode import TRANSCODE_PRIORITY_USER
 
                 warm_viewer_playback_async(p, playback_mode=mode, priority=TRANSCODE_PRIORITY_USER)
@@ -257,11 +260,14 @@ class EditorBridgeMixin:
 
             needs = needs_viewer_transcode(p, playback_mode=mode)
             strategy = viewer_playback_strategy(p, playback_mode=mode)
+            transcode_info = explain_viewer_transcode(p, playback_mode=mode)
+            webm_fallback = viewer_needs_webm_fallback(p, playback_mode=mode)
             return {
                 "path": str(p),
                 "fileUrl": publish_media_url(p),
-                "transcodeUrl": publish_viewer_playback_url(p, playback_mode=mode) if needs else None,
+                "transcodeUrl": publish_viewer_playback_url(p, playback_mode=mode) if webm_fallback else None,
                 "needsTranscode": needs,
+                "transcodeReason": transcode_info.get("reason", ""),
                 "playbackMode": mode,
                 "playbackStrategy": strategy,
                 "playbackMime": cache["playbackMime"],
@@ -317,6 +323,18 @@ class EditorBridgeMixin:
         cancelled = cancel_transcode_for_path(p)
         return {"ok": True, "cancelled": cancelled, "path": str(p)}
 
+    def gallery_video_direct_rejected(self, path: str) -> dict:
+        """Marca que el directo H.264 falló en Qt (evita reintentos /media en bucle)."""
+        from ..core.fs_path import resolve_file_path
+        from ..core.viewer_playback import mark_direct_h264_rejected
+
+        try:
+            p = resolve_file_path(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        mark_direct_h264_rejected(p)
+        return {"ok": True, "path": str(p)}
+
     def gallery_video_profiles(self, path: str) -> dict:
         from ..core.fs_path import resolve_file_path
         from ..core.viewer_playback import video_playback_profiles, viewer_playback_strategy
@@ -345,11 +363,11 @@ class EditorBridgeMixin:
         return video_diagnostics(p, test_transcode=bool(test_transcode))
 
     def gallery_video_playback_blob(self, path: str) -> dict:
-        """Data URL del vídeo transcodificado (PyWebView a veces no reproduce /om-webm/)."""
+        """Data URL del vídeo transcodificado (WebM si Qt no tiene H.264)."""
         import base64
 
         from ..core.fs_path import resolve_file_path
-        from ..core.viewer_playback import ensure_viewer_playback
+        from ..core.viewer_playback import ensure_viewer_playback, viewer_prefers_webm
 
         max_bytes = 12 * 1024 * 1024
         try:
@@ -366,6 +384,8 @@ class EditorBridgeMixin:
         size = out.stat().st_size
         if size > max_bytes:
             return {"ok": False, "error": "too_large", "bytes": size, "streamUrl": stream_url}
+        if not viewer_prefers_webm() and mime == "video/mp4":
+            return {"ok": False, "error": "h264_blob_unsupported", "streamUrl": stream_url, "bytes": size}
         data = out.read_bytes()
         b64 = base64.b64encode(data).decode("ascii")
         return {

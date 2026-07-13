@@ -55,6 +55,9 @@ Los ajustes se guardan en `~/.config/organizador_multimedia/settings.json` (Linu
 
 ```bash
 sudo dnf install python3 python3-pip nodejs npm
+# Reproducción instantánea de vídeo (H.264 en el visor, como en Windows):
+sudo dnf install qt6-qtwebengine-freeworld
+# La app también activa --proprietary-codecs en Qt WebEngine al arrancar (PyQt6 pip).
 # Opcional, para Qt WebEngine:
 sudo dnf install python3-qt6 python3-qt6-webengine
 ```

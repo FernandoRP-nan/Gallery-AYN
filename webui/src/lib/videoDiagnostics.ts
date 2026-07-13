@@ -1,4 +1,5 @@
 import { t } from "./i18n";
+import { transcodeReasonLabel } from "./mediaUrl";
 
 function tFmt(path: string, vars: Record<string, string>): string {
   let s = t(path);
@@ -32,6 +33,8 @@ export type VideoBackendDiagnostics = {
   height?: number | null;
   isBrowserPlayable?: boolean;
   needsTranscode?: boolean;
+  reason?: string;
+  strategy?: string;
   ffprobeError?: string | null;
   transcodeCached?: boolean;
   transcodeCacheBytes?: number;
@@ -223,7 +226,14 @@ export function formatVideoDiagnosticReport(opts: {
     lines.push(
       `${t("preview.videoDiagFileCodecOk")}: ${b.isBrowserPlayable ? t("preview.videoDiagYes") : t("preview.videoDiagNo")}`
     );
-    if (b.needsViewerTranscode ?? b.needsTranscode) lines.push(t("preview.videoDiagViewerTranscode"));
+    if (b.needsViewerTranscode ?? b.needsTranscode) {
+      lines.push(t("preview.videoDiagViewerTranscode"));
+      const reason = transcodeReasonLabel(b.reason);
+      if (reason) lines.push(`${t("preview.videoDiagTranscodeReason")}: ${reason}`);
+      if (b.strategy && b.strategy !== "direct") {
+        lines.push(`${t("preview.videoDiagPlaybackStrategy")}: ${b.strategy}`);
+      }
+    }
     lines.push("");
     lines.push(t("preview.videoDiagToolsSection"));
     lines.push(

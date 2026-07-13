@@ -205,3 +205,9 @@ class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, Galler
         self._gallery_scan_cache: dict[tuple, dict] = {}
         self._last_scan_source = "fresh"
         self._jump_expand_center = 0
+        try:
+            from ..core.video_transcode import prime_transcode_workers
+
+            prime_transcode_workers()
+        except Exception:
+            pass
