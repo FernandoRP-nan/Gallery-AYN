@@ -2275,10 +2275,15 @@
           } else {
             await reconcileGalleryMoveSuccess(out);
           }
-          status = t("status.moveBatchLine")
-            .replace("{moved}", String(out.moveResult?.moved ?? 0))
-            .replace("{errors}", String(out.moveResult?.errors ?? 0))
-            .replace("{queue}", String(galleryMoveQueue.length));
+          const destFolder = String(out.moveResult?.destFolder ?? "").trim();
+          if (destFolder && job.newFolderName) {
+            status = t("status.groupInFolderOk").replace("{folder}", destFolder);
+          } else {
+            status = t("status.moveBatchLine")
+              .replace("{moved}", String(out.moveResult?.moved ?? 0))
+              .replace("{errors}", String(out.moveResult?.errors ?? 0))
+              .replace("{queue}", String(galleryMoveQueue.length));
+          }
         } catch (e: unknown) {
           if (!isGalleryNavigationCurrent(job.navGen)) continue;
           await rollbackOptimisticGalleryMove(job);
@@ -2336,7 +2341,10 @@
       status = t("status.loadFolderForDrop");
       return;
     }
-    openMoveAsFolderModal(folder);
+    moveAsFolderDestPath = folder;
+    moveAsFolderDraft = t("selection.groupInFolderDefault");
+    moveAsFolderMerge = false;
+    moveAsFolderModalOpen = true;
   }
 
   function closeMoveAsFolderModal() {
@@ -2354,8 +2362,9 @@
     }
     const parent = moveAsFolderDestPath;
     const merge = moveAsFolderMerge;
+    const selectedPaths = getSelectedGalleryPaths();
     closeMoveAsFolderModal();
-    await moveSelectionToNewFolder(parent, name, merge);
+    await moveSelectionToNewFolder(parent, name, merge, selectedPaths);
   }
 
   function sectionFolderMoveLabel(folderPath: string): string {
@@ -2421,8 +2430,13 @@
     }
   };
 
-  const moveSelectionToNewFolder = async (parentPath: string, folderName: string, merge = false) => {
-    const selectedPaths = getSelectedGalleryPaths();
+  const moveSelectionToNewFolder = async (
+    parentPath: string,
+    folderName: string,
+    merge = false,
+    paths?: string[]
+  ) => {
+    const selectedPaths = paths?.length ? paths : getSelectedGalleryPaths();
     if (selectedPaths.length === 0) {
       status = t("status.noImagesToMove");
       return;
@@ -4373,18 +4387,31 @@
     }
   }
 
+  function clampContextMenuPosition(
+    clientX: number,
+    clientY: number,
+    opts: { menuWidth: number; itemCount: number }
+  ): { x: number; y: number } {
+    const pad = 8;
+    const rowH = 36;
+    const menuH = opts.itemCount * rowH + 12;
+    const mw = opts.menuWidth;
+    let x = clientX;
+    let y = clientY;
+    x = Math.min(Math.max(pad, x), window.innerWidth - mw - pad);
+    if (y + menuH > window.innerHeight - pad) {
+      y = Math.max(pad, clientY - menuH);
+    } else {
+      y = Math.min(y, window.innerHeight - menuH - pad);
+    }
+    return { x, y };
+  }
+
   function onDestContextMenu(e: MouseEvent, idx: number, source: "gallery" | "fullscreen" = "gallery") {
     e.preventDefault();
     e.stopPropagation();
-    const pad = 8;
-    const mw = 200;
-    const mh = 88;
-    let x = e.clientX;
-    let y = e.clientY;
-    x = Math.min(x, window.innerWidth - mw - pad);
-    y = Math.min(y, window.innerHeight - mh - pad);
-    x = Math.max(pad, x);
-    y = Math.max(pad, y);
+    const itemCount = source === "gallery" ? 5 : 4;
+    const { x, y } = clampContextMenuPosition(e.clientX, e.clientY, { menuWidth: 200, itemCount });
     destCtxMenu = { x, y, idx, source };
   }
 
@@ -4393,15 +4420,7 @@
     e.stopPropagation();
     const p = String(path ?? "").trim();
     if (!p) return;
-    const pad = 8;
-    const mw = 200;
-    const mh = 88;
-    let x = e.clientX;
-    let y = e.clientY;
-    x = Math.min(x, window.innerWidth - mw - pad);
-    y = Math.min(y, window.innerHeight - mh - pad);
-    x = Math.max(pad, x);
-    y = Math.max(pad, y);
+    const { x, y } = clampContextMenuPosition(e.clientX, e.clientY, { menuWidth: 200, itemCount: 3 });
     pinnedCtxMenu = { x, y, path: p };
   }
 

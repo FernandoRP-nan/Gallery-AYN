@@ -261,7 +261,16 @@ class DestinationsBridgeMixin:
             dest_dir = ensure_unique_folder_path(parent, raw_name)
             dest_dir.mkdir(parents=True, exist_ok=True)
         data = self.destination_move_paths(src_paths, str(dest_dir))
-        data["moveResult"]["destFolder"] = str(dest_dir)
+        move_result = dict(data.get("moveResult") or {})
+        move_result["destFolder"] = str(dest_dir)
+        # Nueva subcarpeta en la ruta actual: devolver ítems completos para mostrar el tile.
+        try:
+            cur = self.gallery_folder.resolve() if self.gallery_folder else None
+            if cur and parent.resolve() == cur:
+                data = self.gallery_reload(clear_thumb_cache=False)
+        except OSError:
+            pass
+        data["moveResult"] = move_result
         return data
 
     def destination_move_folder(self, src_folder_path: str, dest_path: str) -> dict:

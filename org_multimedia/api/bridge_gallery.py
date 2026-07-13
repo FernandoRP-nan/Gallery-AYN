@@ -432,17 +432,26 @@ class GalleryBridgeMixin:
             return (1970, 1)
 
     def _timeline_date_field(self) -> str:
-        """Campo de fecha para línea de tiempo; con vista activa usa EXIF obligatorio."""
-        if self._is_timeline_mode():
-            return "exif"
+        """Primer criterio de fecha en gallery_sort_mode; fallback mtime."""
         mode = str(self.settings.get("gallery_sort_mode", "mtime:desc"))
-        primary = mode.split(",")[0].strip().split(":")[0].lower()
-        if primary in ("exif_month", "month_exif", "mes_exif", "mes"):
-            return "exif"
-        if primary in ("ctime", "creacion", "creation", "created"):
-            return "ctime"
-        if primary in ("exif", "exifdate", "photo", "foto", "captura"):
-            return "exif"
+        for part in mode.split(","):
+            key = part.strip().split(":")[0].lower()
+            if key in (
+                "exif_month",
+                "month_exif",
+                "mes_exif",
+                "mes",
+                "exif",
+                "exifdate",
+                "photo",
+                "foto",
+                "captura",
+            ):
+                return "exif"
+            if key in ("ctime", "creacion", "creation", "created"):
+                return "ctime"
+            if key in ("mtime", "date", "fecha"):
+                return "mtime"
         return "mtime"
 
     @staticmethod
@@ -477,22 +486,21 @@ class GalleryBridgeMixin:
         *,
         stat_workers: int | None = None,
     ) -> list[Path]:
-        """Segmenta por mes EXIF; orden de usuario solo dentro de cada mes."""
+        """Segmenta por mes según el primer criterio de fecha del orden."""
         from collections import defaultdict
 
         from ..core.gallery_paths import sort_image_paths
-        from ..core.image_exif import path_photo_timestamp_ns, prefetch_exif_timestamps
+        from ..core.image_exif import prefetch_exif_timestamps
 
         sort_cfg = self._work_package_sort_config()
-        prefetch_exif_timestamps(raw, max_workers=stat_workers or 8)
+        date_field = self._timeline_date_field()
+        if date_field == "exif":
+            prefetch_exif_timestamps(raw, max_workers=stat_workers or 8)
         buckets: dict[tuple[int, int], list[Path]] = defaultdict(list)
         for path in raw:
-            ns = path_photo_timestamp_ns(str(path))
-            if ns > 0:
-                dt = datetime.datetime.fromtimestamp(ns / 1_000_000_000)
-                ym = (dt.year, dt.month)
-            else:
-                ym = (1970, 1)
+            ym = self._path_year_month(path, date_field)
+            if date_field == "exif" and ym == (1970, 1):
+                ym = self._path_year_month(path, "mtime")
             buckets[ym].append(path)
 
         month_desc = self._timeline_months_descending(sort_mode)

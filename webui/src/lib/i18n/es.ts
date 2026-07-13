@@ -132,6 +132,7 @@ export const es = {
   selection: {
     toolbarGalleryAria: "Selección",
     groupInFolder: "Agrupar en carpeta",
+    groupInFolderDefault: "Nueva carpeta",
     page: "Pág.",
     remove: "Quitar",
     delete: "Eliminar",
@@ -312,6 +313,7 @@ export const es = {
     deleteQueued: "Eliminación en cola ({n})",
     deleteImageQueued: "Imagen en cola de eliminación",
     moveBatchLine: "Movidas {moved} · errores {errors} · cola {queue}",
+    groupInFolderOk: "Archivos agrupados en «{folder}»",
     moveQueueError: "Error al procesar cola de movimientos",
     moveFolderOk: "Carpeta movida al destino",
     moveFolderError: "No se pudo mover la carpeta",
