@@ -59,6 +59,8 @@ _QUEUE_SEQ = 0
 _QUEUE_BUMP = 0
 _RUNNING_TOKENS: set[str] = set()
 _WORKER_THREADS: list[threading.Thread] = []
+_MAX_WARM_QUEUED = 24
+_MAX_TOTAL_QUEUED = 40
 
 
 class TranscodeCancelledError(RuntimeError):
@@ -66,6 +68,7 @@ class TranscodeCancelledError(RuntimeError):
 
 
 def list_active_transcode_jobs() -> list[dict[str, str]]:
+    _prune_orphan_active_jobs()
     with _ACTIVE_GUARD:
         jobs = [dict(j) for j in _ACTIVE_JOBS.values() if j.get("status") in ("queued", "running")]
     with _QUEUE_GUARD:
@@ -82,6 +85,108 @@ def list_active_transcode_jobs() -> list[dict[str, str]]:
             if qp:
                 job["queuePosition"] = str(qp)
     return jobs
+
+
+def transcode_queue_stats() -> dict[str, int]:
+    """Contadores rápidos de la cola (sin escanear caché)."""
+    _prune_orphan_active_jobs()
+    with _QUEUE_GUARD:
+        queued = len(_QUEUE_BY_TOKEN)
+        running = len(_RUNNING_TOKENS)
+        warm_queued = sum(
+            1 for work in _QUEUE_BY_TOKEN.values() if work.priority <= TRANSCODE_PRIORITY_WARM
+        )
+    with _ACTIVE_GUARD:
+        active = sum(1 for j in _ACTIVE_JOBS.values() if j.get("status") in ("queued", "running"))
+    return {
+        "queued": queued,
+        "running": running,
+        "warmQueued": warm_queued,
+        "active": active,
+        "workers": len(_WORKER_THREADS),
+    }
+
+
+def _prune_orphan_active_jobs() -> None:
+    """Elimina trabajos 'queued'/'running' en UI que ya no están en cola ni ejecutándose."""
+    with _QUEUE_GUARD:
+        queued_tokens = set(_QUEUE_BY_TOKEN.keys())
+        running_tokens = set(_RUNNING_TOKENS)
+    with _ACTIVE_GUARD:
+        for token in list(_ACTIVE_JOBS.keys()):
+            job = _ACTIVE_JOBS.get(token)
+            if not job:
+                continue
+            status = str(job.get("status", ""))
+            if status == "queued" and token not in queued_tokens:
+                _ACTIVE_JOBS.pop(token, None)
+            elif status == "running" and token not in running_tokens:
+                _ACTIVE_JOBS.pop(token, None)
+
+
+def drain_low_priority_transcodes(*, keep_tokens: set[str] | None = None) -> dict:
+    """Quita de la cola trabajos de precalentamiento para dejar paso al vídeo del usuario."""
+    keep = keep_tokens or set()
+    dropped: list[str] = []
+    with _QUEUE_GUARD:
+        for token, work in list(_QUEUE_BY_TOKEN.items()):
+            if token in keep:
+                continue
+            if work.priority < TRANSCODE_PRIORITY_USER:
+                dropped.append(token)
+        for token in dropped:
+            _QUEUE_BY_TOKEN.pop(token, None)
+        while len(_QUEUE_BY_TOKEN) > _MAX_TOTAL_QUEUED:
+            candidates = [
+                (work.sort_key(), token)
+                for token, work in _QUEUE_BY_TOKEN.items()
+                if token not in keep
+            ]
+            if not candidates:
+                break
+            candidates.sort()
+            _, victim = candidates[-1]
+            _QUEUE_BY_TOKEN.pop(victim, None)
+            dropped.append(victim)
+        _rebuild_queue_heap()
+        _QUEUE_CV.notify_all()
+    for token in dropped:
+        _clear_active_job(token)
+    _prune_orphan_active_jobs()
+    return {"removed": len(dropped), "queued": len(_QUEUE_BY_TOKEN)}
+
+
+def clear_warm_transcode_queue() -> dict:
+    """Vaciar cola de precalentamiento (ajustes / saturación)."""
+    out = drain_low_priority_transcodes(keep_tokens=set())
+    preempted = _preempt_running_below_priority(TRANSCODE_PRIORITY_USER, keep_tokens=set())
+    out["preempted"] = preempted
+    return out
+
+
+def _preempt_running_below_priority(threshold: int, *, keep_tokens: set[str]) -> int:
+    """Cancela transcodificaciones en curso por debajo del umbral (p. ej. warm)."""
+    killed = 0
+    with _ACTIVE_GUARD:
+        running = [
+            (token, job)
+            for token, job in _ACTIVE_JOBS.items()
+            if job.get("status") == "running"
+        ]
+    for token, job in running:
+        if token in keep_tokens:
+            continue
+        try:
+            pri = int(str(job.get("priority", "0")))
+        except ValueError:
+            pri = 0
+        if pri >= threshold:
+            continue
+        with _CANCEL_GUARD:
+            _CANCEL_TOKENS.add(token)
+        _kill_ffmpeg_for_token(token)
+        killed += 1
+    return killed
 
 
 def _next_queue_seq() -> int:
@@ -116,6 +221,12 @@ def _enqueue_work(work: _TranscodeWork) -> bool:
             return False
         if work.token in _RUNNING_TOKENS:
             return False
+        if work.priority <= TRANSCODE_PRIORITY_WARM:
+            warm_n = sum(
+                1 for item in _QUEUE_BY_TOKEN.values() if item.priority <= TRANSCODE_PRIORITY_WARM
+            )
+            if warm_n >= _MAX_WARM_QUEUED:
+                return False
         work.seq = _next_queue_seq()
         _QUEUE_BY_TOKEN[work.token] = work
         heapq.heappush(_QUEUE_HEAP, (work.sort_key(), work.token))
@@ -192,7 +303,7 @@ def _transcode_worker_main() -> None:
             continue
         token = work.token
         try:
-            _mark_job_running(token)
+            _mark_job_running(token, priority=work.priority)
             _execute_transcode_work(work)
             _finish_active_job(token)
         except TranscodeCancelledError:
@@ -252,12 +363,18 @@ def _submit_transcode(
         priority=priority,
         waiter=None,
     )
-    _register_transcode_job(token, resolved, job_fmt, status="queued")
     enqueued = _enqueue_work(work)
+    with _QUEUE_GUARD:
+        tracked = token in _QUEUE_BY_TOKEN or token in _RUNNING_TOKENS
+    if tracked:
+        status = "running" if token in _RUNNING_TOKENS else "queued"
+        _register_transcode_job(token, resolved, job_fmt, status=status, priority=priority)
     if enqueued:
         _ensure_transcode_workers()
     if not blocking:
         return None
+    if not tracked and not enqueued:
+        raise RuntimeError("No se pudo encolar la transcodificación")
     partial: Path | None = None
     if fmt == "webm":
         partial = transcode_webm_partial_path(out)
@@ -298,6 +415,11 @@ def prioritize_transcode_for_path(source: Path, *, playback_mode: str = "auto") 
         if bumped:
             _rebuild_queue_heap()
             _QUEUE_CV.notify_all()
+    with _ACTIVE_GUARD:
+        for token in tokens:
+            job = _ACTIVE_JOBS.get(token)
+            if job is not None:
+                job["priority"] = str(TRANSCODE_PRIORITY_USER)
     return {"ok": True, "bumped": bumped, "path": str(resolved)}
 
 
@@ -344,8 +466,8 @@ def cancel_transcode_for_path(source: Path, *, playback_mode: str = "auto") -> b
     return cancelled
 
 
-def _set_active_job(token: str, source: Path, fmt: str) -> None:
-    _register_transcode_job(token, source, fmt, status="running")
+def _set_active_job(token: str, source: Path, fmt: str, *, priority: int = TRANSCODE_PRIORITY_WARM) -> None:
+    _register_transcode_job(token, source, fmt, status="running", priority=priority)
 
 
 def _update_job_progress(token: str, progress: int) -> None:
@@ -361,10 +483,20 @@ def _clear_active_job(token: str) -> None:
 
 
 
-def _register_transcode_job(token: str, source: Path, fmt: str, *, status: str = "queued") -> None:
+def _register_transcode_job(
+    token: str,
+    source: Path,
+    fmt: str,
+    *,
+    status: str = "queued",
+    priority: int = TRANSCODE_PRIORITY_WARM,
+) -> None:
     with _ACTIVE_GUARD:
         prev = _ACTIVE_JOBS.get(token)
         if prev and prev.get("status") in ("running", "done"):
+            if status == "running":
+                prev["status"] = "running"
+            prev["priority"] = str(priority)
             return
         _ACTIVE_JOBS[token] = {
             "id": token,
@@ -373,14 +505,17 @@ def _register_transcode_job(token: str, source: Path, fmt: str, *, status: str =
             "format": fmt,
             "progress": prev.get("progress", "0") if prev else "0",
             "status": status,
+            "priority": str(priority),
         }
 
 
-def _mark_job_running(token: str) -> None:
+def _mark_job_running(token: str, *, priority: int | None = None) -> None:
     with _ACTIVE_GUARD:
         job = _ACTIVE_JOBS.get(token)
         if job is not None:
             job["status"] = "running"
+            if priority is not None:
+                job["priority"] = str(priority)
 
 
 def _fail_active_job(token: str) -> None:
@@ -459,6 +594,15 @@ def request_user_transcode(source: Path, *, playback_mode: str = "auto") -> dict
     mode = normalize_playback_mode(playback_mode)
     from .viewer_playback import viewer_prefers_webm
 
+    keep_tokens: set[str] = set()
+    if viewer_prefers_webm():
+        keep_tokens.add(transcode_webm_output_path(resolved).stem)
+    else:
+        keep_tokens.add(transcode_output_path(resolved, playback_mode=mode).stem)
+
+    drained = drain_low_priority_transcodes(keep_tokens=keep_tokens)
+    preempted = _preempt_running_below_priority(TRANSCODE_PRIORITY_USER, keep_tokens=keep_tokens)
+
     if viewer_prefers_webm():
         _submit_transcode(
             resolved,
@@ -477,7 +621,10 @@ def request_user_transcode(source: Path, *, playback_mode: str = "auto") -> dict
             blocking=False,
         )
     _ensure_transcode_workers()
-    return prioritize_transcode_for_path(resolved, playback_mode=mode)
+    bumped = prioritize_transcode_for_path(resolved, playback_mode=mode)
+    bumped["drained"] = drained.get("removed", 0)
+    bumped["preempted"] = preempted
+    return bumped
 
 
 def transcode_webm_output_path(source: Path) -> Path:
@@ -953,7 +1100,7 @@ def resolve_mp4_playback_path(source: Path, *, playback_mode: str = "auto", wait
         out=out,
         fmt="mp4",
         partial=partial,
-        timeout=180.0,
+        timeout=45.0,
         allow_partial=True,
     )
 
@@ -989,7 +1136,7 @@ def resolve_webm_playback_path(source: Path, *, wait_partial: bool = True) -> Pa
         out=out,
         fmt="webm",
         partial=partial,
-        timeout=180.0,
+        timeout=45.0,
         allow_partial=True,
     )
 

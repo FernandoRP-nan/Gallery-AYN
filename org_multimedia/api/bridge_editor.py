@@ -300,6 +300,12 @@ class EditorBridgeMixin:
         mode = normalize_playback_mode(playback_mode)
         return request_user_transcode(p, playback_mode=mode)
 
+    def gallery_transcode_drain_warm(self) -> dict:
+        from ..core.video_transcode import clear_warm_transcode_queue
+
+        out = clear_warm_transcode_queue()
+        return {"ok": True, **out}
+
     def gallery_transcode_cancel(self, path: str) -> dict:
         from ..core.fs_path import resolve_file_path
         from ..core.video_transcode import cancel_transcode_for_path

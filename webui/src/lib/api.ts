@@ -371,11 +371,13 @@ export const bridge = {
     ),
   galleryTranscodeActive: () => call<{ jobs: Array<{ id: string; path: string; name: string; format: string; progress?: string; status?: string; queuePosition?: string }>; count: number }>("gallery_transcode_active"),
   galleryTranscodePrioritize: (path: string, playbackMode = "auto") =>
-    call<{ ok: boolean; bumped?: number; path?: string; error?: string }>(
+    call<{ ok: boolean; bumped?: number; drained?: number; preempted?: number; path?: string; error?: string }>(
       "gallery_transcode_prioritize",
       normalizePathForApi(path),
       playbackMode
     ),
+  galleryTranscodeDrainWarm: () =>
+    call<{ ok: boolean; removed?: number; queued?: number; preempted?: number }>("gallery_transcode_drain_warm"),
   galleryTranscodeCancel: (path: string) => call<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>("gallery_transcode_cancel", path),
   galleryVideoDiagnostics: (path: string, testTranscode = false) =>
     call<any>("gallery_video_diagnostics", normalizePathForApi(path), testTranscode),

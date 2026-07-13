@@ -25,11 +25,15 @@
     transcodeCacheFiles?: number;
     transcodeCacheBytes?: number;
     activeTranscodeJobs?: number;
+    transcodeQueued?: number;
+    transcodeRunning?: number;
+    transcodeWarmQueued?: number;
   };
 
   let videoDiag: VideoDiag | null = null;
   let videoDiagLoading = false;
   let videoDiagError = "";
+  let videoDiagDrainMsg = "";
 
   function formatBytes(n: number): string {
     if (!Number.isFinite(n) || n < 0) return "—";
@@ -47,7 +51,8 @@
   async function refreshVideoDiagnostics() {
     videoDiagLoading = true;
     videoDiagError = "";
-    const timeoutMs = 12_000;
+    videoDiagDrainMsg = "";
+    const timeoutMs = 8_000;
     try {
       videoDiag = await Promise.race([
         bridge.galleryVideoSystemDiagnostics(),
@@ -65,6 +70,19 @@
             : String(err);
     } finally {
       videoDiagLoading = false;
+    }
+  }
+
+  async function drainWarmQueue() {
+    videoDiagDrainMsg = "";
+    try {
+      const out = await bridge.galleryTranscodeDrainWarm();
+      videoDiagDrainMsg = t("settings.videoDiagDrainWarmOk")
+        .replace("{removed}", String(out?.removed ?? 0))
+        .replace("{preempted}", String(out?.preempted ?? 0));
+      await refreshVideoDiagnostics();
+    } catch (err) {
+      videoDiagDrainMsg = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -133,9 +151,24 @@
   <div class="settings-subsection">
     <div class="settings-subsection-head">
       <p class="settings-subtitle">{t("settings.videoDiagTitle")}</p>
-      <button type="button" class="om-btn om-btn--ghost om-btn--sm" disabled={videoDiagLoading} on:click={refreshVideoDiagnostics}>
-        {videoDiagLoading ? t("settings.videoDiagLoading") : t("settings.videoDiagRefresh")}
-      </button>
+      <div class="settings-subsection-actions">
+        <button
+          type="button"
+          class="om-btn om-btn--ghost om-btn--sm"
+          disabled={videoDiagLoading}
+          on:click={refreshVideoDiagnostics}
+        >
+          {videoDiagLoading ? t("settings.videoDiagLoading") : t("settings.videoDiagRefresh")}
+        </button>
+        <button
+          type="button"
+          class="om-btn om-btn--ghost om-btn--sm"
+          disabled={videoDiagLoading}
+          on:click={drainWarmQueue}
+        >
+          {t("settings.videoDiagDrainWarm")}
+        </button>
+      </div>
     </div>
     {#if videoDiagError}
       <p class="settings-hint settings-hint--warn">{videoDiagError}</p>
@@ -164,7 +197,16 @@
         </dd>
         <dt>{t("settings.videoDiagActiveJobs")}</dt>
         <dd>{videoDiag.activeTranscodeJobs ?? 0}</dd>
+        <dt>{t("settings.videoDiagQueued")}</dt>
+        <dd>{videoDiag.transcodeQueued ?? 0}</dd>
+        <dt>{t("settings.videoDiagRunning")}</dt>
+        <dd>{videoDiag.transcodeRunning ?? 0}</dd>
+        <dt>{t("settings.videoDiagWarmQueued")}</dt>
+        <dd>{videoDiag.transcodeWarmQueued ?? 0}</dd>
       </dl>
+      {#if videoDiagDrainMsg}
+        <p class="settings-hint">{videoDiagDrainMsg}</p>
+      {/if}
       {#if videoDiag.transcodeCacheDir}
         <p class="settings-hint settings-hint--mono">{videoDiag.transcodeCacheDir}</p>
       {/if}
@@ -186,6 +228,12 @@
     justify-content: space-between;
     gap: 0.5rem;
     margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .settings-subsection-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
   }
   .video-diag-dl {
     display: grid;
