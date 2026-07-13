@@ -9,6 +9,7 @@
   export let videoTranscodeMaxJobs = 1;
   export let galleryWarmVideosEnabled = false;
   export let galleryWarmVideosPerFolder = 3;
+  export let showAdvanced = false;
 
   type VideoDiag = {
     engine?: string;
@@ -91,7 +92,7 @@
   }
 
   onMount(() => {
-    void refreshVideoDiagnostics();
+    if (showAdvanced) void refreshVideoDiagnostics();
   });
 </script>
 
@@ -105,6 +106,7 @@
   </select>
   <p class="settings-hint">{t("settings.videoPresetHint")}</p>
 
+  {#if showAdvanced}
   <label class="field-label" for="set-video-max-h">{t("settings.videoMaxHeightLabel")}</label>
   <select id="set-video-max-h" class="om-input" bind:value={videoTranscodeMaxHeight}>
     <option value={720}>720p</option>
@@ -234,6 +236,7 @@
       <p class="settings-hint">{t("settings.videoDiagEmpty")}</p>
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>

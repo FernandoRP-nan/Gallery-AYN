@@ -13,6 +13,9 @@
   export let previewRatio: number;
   export let thumbScale: number;
   export let activeProcesses: ActiveProcess[] = [];
+  export let showProcesses = false;
+  export let showScanHint = false;
+  export let showBuildTag = false;
 
   export let goPage: (page: number) => void | Promise<void>;
   export let jumpToPageDraft: () => void | Promise<void>;
@@ -123,6 +126,7 @@
     </span>
   {/if}
   <div class="grow"></div>
+  {#if showProcesses}
   <div class="pager__process-wrap">
     <button
       type="button"
@@ -157,11 +161,14 @@
       </div>
     {/if}
   </div>
+  {/if}
   <span class="status-line">{status}</span>
-  {#if scanSourceHint}
+  {#if showScanHint && scanSourceHint}
     <span class="status-line status-line--scan" title={scanSourceHint}>{scanSourceHint}</span>
   {/if}
+  {#if showBuildTag}
   <span class="webui-build-tag" title={t("pager.buildTagTitle")}>{__WEBUI_BUILD__.slice(0, 10)}</span>
+  {/if}
   <button
     type="button"
     class="om-btn om-btn--ghost om-btn--compact"

@@ -346,6 +346,14 @@
   let debugLogEnabledBackup = false;
   let debugLogFilters: GalleryDebugFilters = { ...DEFAULT_GALLERY_DEBUG_FILTERS };
   let debugLogFiltersBackup: GalleryDebugFilters = { ...DEFAULT_GALLERY_DEBUG_FILTERS };
+  let settingsShowAdvanced = false;
+  let settingsShowAdvancedBackup = false;
+  let uiShowProcesses = false;
+  let uiShowProcessesBackup = false;
+  let uiShowScanHint = false;
+  let uiShowScanHintBackup = false;
+  let uiShowBuildTag = false;
+  let uiShowBuildTagBackup = false;
   let settingsThumbScaleDraft = 1;
   let thumbGapPx = 12;
   let showThumbLabels = true;
@@ -978,6 +986,10 @@
     setGalleryDebugLogEnabled(debugLogEnabled);
     debugLogFilters = normalizeGalleryDebugFilters(data.settings?.web_debug_log_filters);
     setGalleryDebugFilters(debugLogFilters);
+    settingsShowAdvanced = Boolean(data.settings?.web_settings_show_advanced ?? false);
+    uiShowProcesses = Boolean(data.settings?.web_ui_show_processes ?? false);
+    uiShowScanHint = Boolean(data.settings?.web_ui_show_scan_hint ?? false);
+    uiShowBuildTag = Boolean(data.settings?.web_ui_show_build_tag ?? false);
     applyDestinationsPayload({
       destinations: data.destinations,
       toolbarFolderId: data.destToolbarFolderId,
@@ -1533,6 +1545,10 @@
     galleryScanCacheTtlSBackup = galleryScanCacheTtlS;
     debugLogEnabledBackup = debugLogEnabled;
     debugLogFiltersBackup = { ...debugLogFilters };
+    settingsShowAdvancedBackup = settingsShowAdvanced;
+    uiShowProcessesBackup = uiShowProcesses;
+    uiShowScanHintBackup = uiShowScanHint;
+    uiShowBuildTagBackup = uiShowBuildTag;
     settingsOpen = true;
   };
 
@@ -1580,6 +1596,10 @@
     debugLogFilters = { ...debugLogFiltersBackup };
     setGalleryDebugLogEnabled(debugLogEnabled);
     setGalleryDebugFilters(debugLogFilters);
+    settingsShowAdvanced = settingsShowAdvancedBackup;
+    uiShowProcesses = uiShowProcessesBackup;
+    uiShowScanHint = uiShowScanHintBackup;
+    uiShowBuildTag = uiShowBuildTagBackup;
     settingsOpen = false;
   };
 
@@ -1658,6 +1678,10 @@
         gallery_scan_cache_ttl_s: galleryScanCacheTtlS,
         web_debug_log_enabled: Boolean(debugLogEnabled),
         web_debug_log_filters: { ...debugLogFilters },
+        web_settings_show_advanced: Boolean(settingsShowAdvanced),
+        web_ui_show_processes: Boolean(uiShowProcesses),
+        web_ui_show_scan_hint: Boolean(uiShowScanHint),
+        web_ui_show_build_tag: Boolean(uiShowBuildTag),
         gallery_thumb_scale: Number(ts.toFixed(3)),
         gallery_thumb_quality_preset: galleryThumbQualityPreset,
         gallery_thumb_disk_cache_enabled: Boolean(galleryThumbDiskCacheEnabled),
@@ -5555,6 +5579,9 @@
     {previewRatio}
     bind:thumbScale
     {activeProcesses}
+    showProcesses={uiShowProcesses}
+    showScanHint={uiShowScanHint}
+    showBuildTag={uiShowBuildTag}
     {goPage}
     {jumpToPageDraft}
     {togglePreviewVisible}
@@ -6154,6 +6181,10 @@
       bind:galleryScanCacheTtlS
       bind:debugLogEnabled
       bind:debugLogFilters
+      bind:settingsShowAdvanced
+      bind:uiShowProcesses
+      bind:uiShowScanHint
+      bind:uiShowBuildTag
       bind:videoTranscodePreset
       bind:videoTranscodeMaxHeight
       bind:videoTranscodeHw

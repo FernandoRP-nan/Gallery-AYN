@@ -92,6 +92,10 @@ def load_app_settings() -> dict:
             "gallery_thumb_hq_visible_sequential": 16,
             "gallery_compact_indices_after_move": True,
             "gallery_thumb_disk_cache_enabled": False,
+            "web_settings_show_advanced": False,
+            "web_ui_show_processes": False,
+            "web_ui_show_scan_hint": False,
+            "web_ui_show_build_tag": False,
             "web_debug_log_enabled": False,
             "web_debug_log_filters": {
                 "scroll": True,
@@ -463,6 +467,16 @@ def load_app_settings() -> dict:
             data["web_debug_log_enabled"] = False
         else:
             data["web_debug_log_enabled"] = bool(data["web_debug_log_enabled"])
+        for key in (
+            "web_settings_show_advanced",
+            "web_ui_show_processes",
+            "web_ui_show_scan_hint",
+            "web_ui_show_build_tag",
+        ):
+            if key not in data:
+                data[key] = False
+            else:
+                data[key] = bool(data[key])
         if "gallery_compact_indices_after_move" not in data:
             data["gallery_compact_indices_after_move"] = True
         else:
@@ -568,6 +582,10 @@ def load_app_settings() -> dict:
             "gallery_thumb_hq_visible_sequential": 16,
             "gallery_compact_indices_after_move": True,
             "gallery_thumb_disk_cache_enabled": False,
+            "web_settings_show_advanced": False,
+            "web_ui_show_processes": False,
+            "web_ui_show_scan_hint": False,
+            "web_ui_show_build_tag": False,
             "web_debug_log_enabled": False,
             "web_debug_log_filters": {
                 "scroll": True,

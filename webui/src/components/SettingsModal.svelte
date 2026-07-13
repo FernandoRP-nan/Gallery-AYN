@@ -12,6 +12,7 @@
   import SettingsShortcutsSection from "./settings/SettingsShortcutsSection.svelte";
   import SettingsThumbsSection from "./settings/SettingsThumbsSection.svelte";
   import SettingsDebugSection from "./settings/SettingsDebugSection.svelte";
+  import SettingsInterfaceSection from "./settings/SettingsInterfaceSection.svelte";
 
   import type { TreeNode } from "../lib/itemTree";
 
@@ -23,7 +24,13 @@
     | "video"
     | "performance"
     | "shortcuts"
+    | "interface"
     | "debug";
+
+  export let uiShowProcesses = false;
+  export let uiShowScanHint = false;
+  export let uiShowBuildTag = false;
+  export let settingsShowAdvanced = false;
 
   export let thumbsPerPage: number;
   export let galleryUnlimitedBatchSize: number;
@@ -80,17 +87,20 @@
 
   let activeTab: SettingsTabId = "appearance";
 
-  /** Orden UX: aspecto → galería → flujo de trabajo → multimedia → avanzado → depuración */
-  const tabs: { id: SettingsTabId; labelKey: string }[] = [
+  const allTabs: { id: SettingsTabId; labelKey: string; advanced?: boolean }[] = [
     { id: "appearance", labelKey: "settings.tabAppearance" },
     { id: "thumbs", labelKey: "settings.tabThumbs" },
     { id: "organization", labelKey: "settings.tabOrganization" },
-    { id: "mess", labelKey: "settings.tabMess" },
-    { id: "video", labelKey: "settings.tabVideo" },
     { id: "performance", labelKey: "settings.tabPerformance" },
-    { id: "shortcuts", labelKey: "settings.tabShortcuts" },
-    { id: "debug", labelKey: "settings.tabDebug" },
+    { id: "video", labelKey: "settings.tabVideo", advanced: true },
+    { id: "mess", labelKey: "settings.tabMess", advanced: true },
+    { id: "shortcuts", labelKey: "settings.tabShortcuts", advanced: true },
+    { id: "interface", labelKey: "settings.tabInterface", advanced: true },
+    { id: "debug", labelKey: "settings.tabDebug", advanced: true },
   ];
+
+  $: visibleTabs = settingsShowAdvanced ? allTabs : allTabs.filter((tab) => !tab.advanced);
+  $: if (!visibleTabs.some((tab) => tab.id === activeTab)) activeTab = "performance";
 
   $: previewCellPx = galleryGridCellPx(settingsThumbScaleDraft);
 </script>
@@ -117,7 +127,7 @@
     </header>
 
     <nav class="settings-tabs" role="tablist" aria-label={t("settings.tabsAria")}>
-      {#each tabs as tab (tab.id)}
+      {#each visibleTabs as tab (tab.id)}
         <button
           type="button"
           role="tab"
@@ -139,24 +149,33 @@
       aria-labelledby="settings-tab-{activeTab}"
     >
       {#if activeTab === "performance"}
-        <SettingsPerformanceSection
-          bind:galleryWarmIndexOnStartup
-          bind:galleryWarmIncludeChildren
-          bind:galleryWarmMaxDepth
-          bind:galleryScanCacheMax
-          bind:galleryScanCacheTtlS
-          bind:galleryUnlimitedBatchSize
-          bind:galleryWindowOverscanBefore
-          bind:galleryWindowOverscanAfter
-          bind:galleryJumpCoreOverscanBefore
-          bind:galleryJumpCoreOverscanAfter
-          bind:gallerySlidingWindowEnabled
-          bind:gallerySlidingWindowMaxItems
-          bind:galleryThumbBuildWorkers
-          bind:galleryThumbHqWorkers
-          bind:galleryThumbHqVisibleSequential
-          bind:galleryCompactIndicesAfterMove
-        />
+        <div class="settings-advanced-bar">
+          <label class="check settings-advanced-bar__toggle">
+            <input type="checkbox" bind:checked={settingsShowAdvanced} />
+            {t("settings.showAdvanced")}
+          </label>
+          <p class="settings-hint settings-advanced-bar__hint">{t("settings.showAdvancedHint")}</p>
+        </div>
+        {#if settingsShowAdvanced}
+          <SettingsPerformanceSection
+            bind:galleryWarmIndexOnStartup
+            bind:galleryWarmIncludeChildren
+            bind:galleryWarmMaxDepth
+            bind:galleryScanCacheMax
+            bind:galleryScanCacheTtlS
+            bind:galleryUnlimitedBatchSize
+            bind:galleryWindowOverscanBefore
+            bind:galleryWindowOverscanAfter
+            bind:galleryJumpCoreOverscanBefore
+            bind:galleryJumpCoreOverscanAfter
+            bind:gallerySlidingWindowEnabled
+            bind:gallerySlidingWindowMaxItems
+            bind:galleryThumbBuildWorkers
+            bind:galleryThumbHqWorkers
+            bind:galleryThumbHqVisibleSequential
+            bind:galleryCompactIndicesAfterMove
+          />
+        {/if}
       {:else if activeTab === "thumbs"}
         <SettingsThumbsSection
           bind:thumbsPerPage
@@ -168,6 +187,7 @@
           bind:thumbImageRadiusPx
           bind:thumbTileRadiusPx
           bind:galleryMasonryTightSpacing
+          showAdvanced={settingsShowAdvanced}
         />
       {:else if activeTab === "appearance"}
         <SettingsAppearanceSection
@@ -189,6 +209,7 @@
           bind:videoTranscodeMaxJobs
           bind:galleryWarmVideosEnabled
           bind:galleryWarmVideosPerFolder
+          showAdvanced={settingsShowAdvanced}
         />
       {:else if activeTab === "shortcuts"}
         <SettingsShortcutsSection bind:keyboardShortcuts {defaultShortcuts} />
@@ -202,6 +223,12 @@
         <p class="settings-lead">{t("settings.organizationLead")}</p>
         <SettingsDestinationsSection {destTree} {onDestTreeChange} {onPickDestFolder} />
         <SettingsMarkersSection {markerTree} {onMarkerTreeChange} {onPickMarkerFolder} />
+      {:else if activeTab === "interface"}
+        <SettingsInterfaceSection
+          bind:uiShowProcesses
+          bind:uiShowScanHint
+          bind:uiShowBuildTag
+        />
       {:else if activeTab === "debug"}
         <SettingsDebugSection bind:debugLogEnabled bind:debugLogFilters />
       {/if}

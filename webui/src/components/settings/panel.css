@@ -238,3 +238,23 @@
   border-color: color-mix(in oklab, var(--om-accent) 45%, var(--om-border-default));
   background: color-mix(in oklab, var(--om-accent-muted, var(--om-surface-3)) 55%, transparent);
 }
+
+.sm-dialog .settings-advanced-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: var(--om-space-2);
+  border-radius: var(--om-radius-sm);
+  border: 1px dashed color-mix(in oklab, var(--om-border-default) 82%, transparent);
+  background: color-mix(in oklab, var(--om-surface-2) 70%, transparent);
+}
+
+.sm-dialog .settings-advanced-bar__toggle {
+  font-weight: 600;
+  color: var(--om-text-secondary);
+}
+
+.sm-dialog .settings-advanced-bar__hint {
+  margin: 0;
+  padding-left: 1.55rem;
+}

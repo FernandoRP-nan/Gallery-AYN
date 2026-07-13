@@ -266,16 +266,18 @@
   $: extraBottomPx = destinationsMode ? DEST_BAR_RESERVE_PX : 0;
   $: folderItems = galleryGridItems.filter((it) => it.kind === "folder" || it.kind === "folder_up");
   $: mediaByIndex = buildMediaIndexMap(galleryGridItems);
+  $: masonryGapPx = galleryMasonryTightSpacing || thumbGapPx <= 0 ? 0 : thumbGapPx;
   $: masonrySeedColWidth = (() => {
     const inner = Math.max(0, scrollViewportW - GALLERY_GRID_EDGE_PAD_PX * 2);
-    const columnCount = Math.max(1, Math.floor((inner + thumbGapPx) / (gridCellPx + thumbGapPx)));
+    const gap = galleryMasonryView ? masonryGapPx : thumbGapPx;
+    const columnCount = Math.max(1, Math.floor((inner + gap) / (gridCellPx + gap)));
     return columnCount > 0
-      ? (inner - (columnCount - 1) * thumbGapPx) / columnCount
+      ? (inner - (columnCount - 1) * gap) / columnCount
       : gridCellPx;
   })();
-  $: masonryRowGapPx = galleryMasonryTightSpacing ? 0 : thumbGapPx;
-  $: masonryTilePadPx = galleryMasonryTightSpacing ? 0 : MASONRY_TILE_PAD_PX;
-  $: masonryTilePadCssPx = galleryMasonryTightSpacing ? 0 : 4;
+  $: masonryRowGapPx = masonryGapPx;
+  $: masonryTilePadPx = masonryGapPx === 0 ? 0 : MASONRY_TILE_PAD_PX;
+  $: masonryTilePadCssPx = masonryGapPx === 0 ? 0 : 4;
   $: if (galleryMasonryView && galleryGridItems.length > 0) {
     seedMasonryHeightsFromItems(
       galleryGridItems,
@@ -295,7 +297,7 @@
           layoutSpans,
           containerWidth: scrollViewportW,
           cellTargetPx: gridCellPx,
-          gapPx: thumbGapPx,
+          gapPx: masonryGapPx,
           rowGapPx: masonryRowGapPx,
           tilePaddingPx: masonryTilePadPx,
           edgePadPx: GALLERY_GRID_EDGE_PAD_PX,
@@ -391,7 +393,7 @@
   $: scrollMarkers =
     fullVirtualLayout && fullVirtualLayout.markers.length > 0 ? fullVirtualLayout.markers : [];
   $: masonryCellPx = Math.max(72, Math.round(gridCellPx));
-  $: masonryStyle = `--cell:${masonryCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${thumbGapPx}px;--masonry-v-gap:${masonryRowGapPx}px;--masonry-tile-pad:${masonryTilePadCssPx}px;--masonry-max-h:${Math.round(masonryCellPx * 2.4)}px`;
+  $: masonryStyle = `--cell:${masonryCellPx}px;--grid-edge-pad:${GALLERY_GRID_EDGE_PAD_PX}px;--thumb-gap:${masonryGapPx}px;--masonry-v-gap:${masonryRowGapPx}px;--masonry-tile-pad:${masonryTilePadCssPx}px;--masonry-max-h:${Math.round(masonryCellPx * 2.4)}px`;
   $: masonryVirtualEnabled = fullVirtualEnabled && galleryMasonryView;
   $: masonryColumnCount = computeMasonryColumnCount(
     scrollViewportW,
