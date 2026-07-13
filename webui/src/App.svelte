@@ -729,13 +729,25 @@
 
   function applyMarkersPayload(data: any) {
     const raw = data?.markers ?? data?.settings?.marker_tree ?? data;
-    markerTree = normalizeTreeNodes(raw, "marker");
+    const nextTree = normalizeTreeNodes(raw, "marker");
+    if (nextTree.length > 0 || markerTree.length === 0) {
+      markerTree = nextTree;
+    }
     const fid = String(data?.toolbarFolderId ?? "").trim();
-    markerToolbarFolderId = fid || null;
-    pinnedFolders = flattenMarkerPaths(markerTree);
-    const labels: Record<string, string> = {};
-    for (const p of pinnedFolders) labels[p] = markerLabelFromTree(markerTree, p) ?? defaultMarkerNameForPath(p);
-    pinnedFolderLabels = labels;
+    if (fid || markerToolbarFolderId === null) {
+      markerToolbarFolderId = fid || null;
+    }
+    const fromApi = Array.isArray(data?.pinnedFolders)
+      ? (data.pinnedFolders as string[]).map((p) => normalizePathForApi(String(p))).filter(Boolean)
+      : [];
+    const fromTree = flattenMarkerPaths(markerTree);
+    const nextPins = fromTree.length > 0 ? fromTree : fromApi;
+    if (nextPins.length > 0) {
+      pinnedFolders = nextPins;
+      const labels: Record<string, string> = { ...pinnedFolderLabels };
+      for (const p of pinnedFolders) labels[p] = markerLabelFromTree(markerTree, p) ?? defaultMarkerNameForPath(p);
+      pinnedFolderLabels = labels;
+    }
   }
 
   function markerLabelFromTree(nodes: TreeNode[], path: string): string | null {
@@ -857,7 +869,7 @@
   }
 
   const loadInitial = async () => {
-    const data = await trackLoad(bridge.getInitialState());
+    const data = await trackLoad(bridge.getInitialState(), t("load.loadingSettings"));
     thumbScale = Number(data.settings?.gallery_thumb_scale ?? 1);
     appliedThumbScale = thumbScale;
     thumbGapPx = Math.max(0, Math.min(20, Number(data.settings?.web_thumb_gap_px ?? 12)));
@@ -878,6 +890,7 @@
       escape: normalizeShortcutValue(persistedShortcuts?.escape, defaultKeyboardShortcuts.escape),
     };
     uiTheme = normalizeUiTheme(data.settings?.web_ui_theme);
+    applyUiThemeToDocument(uiTheme);
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
     destPanelRatio = Math.min(0.55, Math.max(0.12, Number(data.settings?.web_dest_panel_ratio ?? 0.26)));
@@ -965,6 +978,15 @@
     setGalleryDebugLogEnabled(debugLogEnabled);
     debugLogFilters = normalizeGalleryDebugFilters(data.settings?.web_debug_log_filters);
     setGalleryDebugFilters(debugLogFilters);
+    applyDestinationsPayload({
+      destinations: data.destinations,
+      toolbarFolderId: data.destToolbarFolderId,
+    });
+    applyMarkersPayload({
+      markers: data.markers,
+      toolbarFolderId: data.markerToolbarFolderId,
+      pinnedFolders: data.pinnedFolders ?? data.settings?.gallery_pinned_folders,
+    });
     await syncDestinationsFromApi();
     await syncMarkersFromApi();
   };
@@ -1272,7 +1294,10 @@
     await rollbackOptimisticGalleryMutation(job);
   }
 
-  async function navigateToFolder(path: string, opts?: { pushHistory?: boolean }) {
+  async function navigateToFolder(
+    path: string,
+    opts?: { pushHistory?: boolean; silent?: boolean; deferThumbs?: boolean }
+  ) {
     closeGalleryItemCtxMenu();
     const target = normalizePathForApi(path);
     if (!target) return;
@@ -1283,9 +1308,11 @@
     }
     const navGen = beginGalleryNavigation();
     const t0 = performance.now();
-    galleryDbg("user", "abriendo carpeta", { path: target });
+    galleryDbg("user", "abriendo carpeta", { path: target, silent: Boolean(opts?.silent), deferThumbs: Boolean(opts?.deferThumbs) });
+    if (opts?.silent) status = t("load.openingFolder");
     try {
-      const out = await trackLoad(bridge.galleryLoadFolder(target), t("load.openingFolder"));
+      const p = bridge.galleryLoadFolder(target, Boolean(opts?.deferThumbs));
+      const out = opts?.silent ? await p : await trackLoad(p, t("load.openingFolder"));
       galleryDbg("user", "carpeta cargada", {
         ms: Math.round(performance.now() - t0),
         items: Array.isArray(out.items) ? out.items.length : 0,
@@ -1306,7 +1333,7 @@
         withLq,
         withoutLq: mediaItems.length - withLq,
       });
-      await afterGalleryDataLoaded();
+      void afterGalleryDataLoaded();
       if (!isGalleryNavigationCurrent(navGen)) return;
       if (Array.isArray(out.recentFolders)) recentFolders = out.recentFolders;
       pageJumpDraft = out.state.page;
@@ -4999,13 +5026,11 @@
       status = t("status.apiUnavailable");
       return;
     }
-    await loadInitial();
-    if (folder) {
-      try {
-        await loadFolder(true);
-      } catch {
-        status = t("status.restoreFolderError");
-      }
+    try {
+      await loadInitial();
+    } catch {
+      status = t("status.restoreFolderError");
+      return;
     }
     pollTimer = window.setInterval(() => {
       pollOrganizer().catch(() => undefined);
@@ -5018,6 +5043,11 @@
         pollVideoTranscodeJobs().catch(() => undefined);
       }
     }, 1100);
+    if (folder) {
+      void navigateToFolder(folder, { pushHistory: false, silent: true, deferThumbs: true }).catch(() => {
+        status = t("status.restoreFolderError");
+      });
+    }
   });
 
   onDestroy(() => {

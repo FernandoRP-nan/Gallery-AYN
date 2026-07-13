@@ -131,6 +131,7 @@ export const es = {
   },
   load: {
     loading: "Cargando…",
+    loadingSettings: "Cargando ajustes…",
     openingFolder: "Abriendo carpeta…",
   },
   loadOverlay: {

@@ -647,19 +647,23 @@ class GalleryBridgeMixin:
             is_video = ext in MediaOrganizer.VIDEO_EXTENSIONS
             is_image = ext in MediaOrganizer.IMAGE_EXTENSIONS
             kind = "video" if is_video else ("image" if is_image else "file")
+            defer_thumbs = bool(getattr(self, "_defer_thumbs_build", False))
             d: dict = {
                 "kind": kind,
                 "name": p.name,
                 "path": item_path,
                 "selected": p in selected_frozenset,
-                "thumbDataUrl": None if kind == "file" else self._thumb_data_url_cached(p, thumb_px, "lq"),
+                "thumbDataUrl": None
+                if kind == "file" or defer_thumbs
+                else self._thumb_data_url_cached(p, thumb_px, "lq"),
                 "thumbQuality": "lq" if kind != "file" else None,
                 "mediaIndex": base_index + i,
             }
             if timeline_meta:
                 d["mtimeIso"] = self._path_date_iso(p, timeline_date_field)
             if (
-                self._is_masonry_view()
+                not defer_thumbs
+                and self._is_masonry_view()
                 and not jump_fast
                 and kind != "file"
                 and p.suffix.lower() not in (".svg",)
@@ -1065,7 +1069,12 @@ class GalleryBridgeMixin:
             return []
 
         def _folder_item(sub: Path) -> dict:
-            preview_urls = _folder_preview_thumbs(sub, _FOLDER_PREVIEW_COUNT, thumb_px)
+            defer_thumbs = bool(getattr(self, "_defer_thumbs_build", False))
+            preview_urls = (
+                []
+                if defer_thumbs
+                else _folder_preview_thumbs(sub, _FOLDER_PREVIEW_COUNT, thumb_px)
+            )
             return {
                 "kind": "folder",
                 "name": sub.name,
@@ -1384,7 +1393,7 @@ class GalleryBridgeMixin:
             "items": [],
         }
 
-    def gallery_load_folder(self, raw_path: str) -> dict:
+    def gallery_load_folder(self, raw_path: str, defer_thumbs: bool = False) -> dict:
         folder = resolve_dir_path(raw_path)
         with self.lock:
             t0 = time.perf_counter()
@@ -1410,7 +1419,11 @@ class GalleryBridgeMixin:
             )
             self.gallery_unlimited_window_start = 0
             t_build = time.perf_counter()
-            items = self._build_gallery_items()
+            self._defer_thumbs_build = bool(defer_thumbs)
+            try:
+                items = self._build_gallery_items()
+            finally:
+                self._defer_thumbs_build = False
             build_ms = int((time.perf_counter() - t_build) * 1000)
             total_ms = int((time.perf_counter() - t0) * 1000)
             return {

@@ -332,7 +332,8 @@ const call = async <T>(method: string, ...args: any[]): Promise<T> => {
 
 export const bridge = {
   getInitialState: () => call<any>("get_initial_state"),
-  galleryLoadFolder: (path: string) => call<any>("gallery_load_folder", path),
+  galleryLoadFolder: (path: string, deferThumbs = false) =>
+    call<any>("gallery_load_folder", path, Boolean(deferThumbs)),
   galleryLayoutReport: (maxItems = 0) => call<any>("gallery_layout_report", maxItems),
   galleryReload: () => call<any>("gallery_reload"),
   galleryLoadMore: () => call<any>("gallery_load_more"),

@@ -889,8 +889,13 @@
   export async function afterGalleryPayloadLoaded(items: GalleryItem[], scale: number) {
     await tick();
     await waitForGalleryTilesReady(galleryScrollEl, 1);
-    // Breve pausa para que el bridge/PyWebView esté listo tras cargas LQ pesadas.
-    await new Promise<void>((r) => setTimeout(r, 320));
+    const hadLqPayload = items.some(
+      (x) => (x.kind === "image" || x.kind === "video") && Boolean(x.thumbDataUrl || x.thumbLqDataUrl)
+    );
+    // Pausa breve solo tras payloads LQ pesados (PyWebView); arranque diferido no la necesita.
+    if (hadLqPayload) {
+      await new Promise<void>((r) => setTimeout(r, 320));
+    }
     if (galleryLoadingMore) return;
     await requestGalleryThumbHqHydration(
       scale,
