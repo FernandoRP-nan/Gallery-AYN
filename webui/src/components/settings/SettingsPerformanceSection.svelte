@@ -1,6 +1,11 @@
 <script lang="ts">
+  import { onDestroy, onMount } from "svelte";
+  import { bridge } from "../../lib/api";
   import { t } from "../../lib/i18n";
 
+  export let galleryWarmIndexOnStartup = false;
+  export let galleryWarmIncludeChildren = true;
+  export let galleryWarmMaxDepth = 2;
   export let galleryUnlimitedBatchSize: number;
   export let galleryWindowOverscanBefore: number;
   export let galleryWindowOverscanAfter: number;
@@ -12,6 +17,25 @@
   export let galleryThumbHqWorkers: number;
   export let galleryThumbHqVisibleSequential: number;
   export let galleryCompactIndicesAfterMove = true;
+
+  type WarmStatus = {
+    running: boolean;
+    done: number;
+    total: number;
+    currentPath: string;
+    errors: Array<{ path: string; error: string }>;
+    cancelled: boolean;
+  };
+
+  let warmStatus: WarmStatus = {
+    running: false,
+    done: 0,
+    total: 0,
+    currentPath: "",
+    errors: [],
+    cancelled: false,
+  };
+  let warmPollTimer: ReturnType<typeof setTimeout> | null = null;
 
   function applyJumpCoreAggressivePreset() {
     galleryJumpCoreOverscanBefore = 32;
@@ -65,10 +89,125 @@
       galleryThumbHqVisibleSequential = 16;
     }
   }
+
+  async function pollWarmStatus() {
+    try {
+      const st = await bridge.galleryIndexWarmStatus();
+      warmStatus = {
+        running: Boolean(st?.running),
+        done: Number(st?.done ?? 0),
+        total: Number(st?.total ?? 0),
+        currentPath: String(st?.currentPath ?? ""),
+        errors: Array.isArray(st?.errors) ? st.errors : [],
+        cancelled: Boolean(st?.cancelled),
+      };
+      if (warmStatus.running) {
+        warmPollTimer = setTimeout(() => void pollWarmStatus(), 500);
+      }
+    } catch {
+      warmStatus = { ...warmStatus, running: false };
+    }
+  }
+
+  async function startWarmIndex() {
+    galleryWarmMaxDepth = Math.max(0, Math.min(6, Math.round(Number(galleryWarmMaxDepth) || 0)));
+    await bridge.settingsPatch({
+      gallery_warm_include_children: Boolean(galleryWarmIncludeChildren),
+      gallery_warm_max_depth: galleryWarmMaxDepth,
+    });
+    await bridge.galleryIndexWarmStart(null, galleryWarmIncludeChildren);
+    warmStatus = { ...warmStatus, running: true, done: 0, total: 0, errors: [], cancelled: false };
+    void pollWarmStatus();
+  }
+
+  async function cancelWarmIndex() {
+    await bridge.galleryIndexWarmCancel();
+    void pollWarmStatus();
+  }
+
+  onDestroy(() => {
+    if (warmPollTimer !== null) clearTimeout(warmPollTimer);
+  });
+
+  onMount(() => {
+    void bridge.galleryIndexWarmStatus().then((st) => {
+      if (!st?.running) return;
+      warmStatus = {
+        running: true,
+        done: Number(st.done ?? 0),
+        total: Number(st.total ?? 0),
+        currentPath: String(st.currentPath ?? ""),
+        errors: Array.isArray(st.errors) ? st.errors : [],
+        cancelled: Boolean(st.cancelled),
+      };
+      void pollWarmStatus();
+    });
+  });
 </script>
 
 <div class="settings-group">
-  <p class="settings-lead">{t("settings.perfAdvancedLead")}</p>
+  <p class="settings-lead">{t("settings.warmIndexLead")}</p>
+
+  <label class="settings-check">
+    <input type="checkbox" bind:checked={galleryWarmIndexOnStartup} />
+    <span>{t("settings.warmIndexOnStartup")}</span>
+  </label>
+  <label class="settings-check">
+    <input type="checkbox" bind:checked={galleryWarmIncludeChildren} />
+    <span>{t("settings.warmIndexIncludeChildren")}</span>
+  </label>
+
+  <label class="field-label" for="set-warm-depth">{t("settings.warmIndexMaxDepth")}</label>
+  <input
+    id="set-warm-depth"
+    class="om-input"
+    type="number"
+    min="0"
+    max="6"
+    step="1"
+    bind:value={galleryWarmMaxDepth}
+    disabled={!galleryWarmIncludeChildren}
+  />
+  <p class="settings-hint">{t("settings.warmIndexMaxDepthHint")}</p>
+
+  <div class="settings-preset-row">
+    <button
+      type="button"
+      class="om-btn om-btn--primary om-btn--compact"
+      disabled={warmStatus.running}
+      on:click={() => void startWarmIndex()}
+    >
+      {t("settings.warmIndexRunNow")}
+    </button>
+    {#if warmStatus.running}
+      <button type="button" class="om-btn om-btn--ghost om-btn--compact" on:click={() => void cancelWarmIndex()}>
+        {t("settings.warmIndexCancel")}
+      </button>
+    {/if}
+  </div>
+
+  {#if warmStatus.running}
+    <p class="settings-hint settings-hint--warm">
+      {t("settings.warmIndexProgress")
+        .replace("{done}", String(warmStatus.done))
+        .replace("{total}", String(warmStatus.total))}
+      {#if warmStatus.currentPath}
+        <br />
+        <span class="warm-index-path">{t("settings.warmIndexCurrent").replace("{path}", warmStatus.currentPath)}</span>
+      {/if}
+    </p>
+  {:else if warmStatus.done > 0 && !warmStatus.cancelled}
+    <p class="settings-hint settings-hint--ok">
+      {t("settings.warmIndexDone").replace("{done}", String(warmStatus.done))}
+      {#if warmStatus.errors.length > 0}
+        {" · "}{t("settings.warmIndexErrors").replace("{count}", String(warmStatus.errors.length))}
+      {/if}
+    </p>
+  {/if}
+
+  <hr class="settings-divider" />
+
+  <p class="settings-lead settings-lead--sub">{t("settings.perfAdvancedLead")}</p>
 
   <p class="settings-hint settings-hint--section">{t("settings.perfMemoryTitle")}</p>
   <div class="settings-preset-row">
@@ -182,6 +321,25 @@
     margin-top: 0.35rem;
     font-weight: 600;
     color: var(--om-text-secondary);
+  }
+  .settings-lead--sub {
+    margin-top: 0.25rem;
+    font-size: 0.95rem;
+  }
+  .settings-divider {
+    border: none;
+    border-top: 1px solid var(--om-border-subtle, rgb(255 255 255 / 0.08));
+    margin: 1rem 0;
+  }
+  .settings-hint--warm {
+    color: var(--om-accent, #7eb8ff);
+  }
+  .settings-hint--ok {
+    color: var(--om-text-secondary);
+  }
+  .warm-index-path {
+    word-break: break-all;
+    opacity: 0.9;
   }
   .settings-grid-2 {
     display: grid;

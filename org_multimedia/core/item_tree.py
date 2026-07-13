@@ -110,6 +110,85 @@ def flatten_marker_paths(items: list) -> list[str]:
     return paths
 
 
+def flatten_dest_paths(items: list) -> list[str]:
+    """Rutas planas de destinos (kind=dest) en el árbol."""
+    paths: list[str] = []
+
+    def walk(nodes: list) -> None:
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                continue
+            kind = _as_str(node.get("kind"))
+            if kind == KIND_DEST:
+                p = _as_str(node.get("path"))
+                if p and p not in paths:
+                    paths.append(p)
+            elif kind == KIND_FOLDER:
+                walk(node.get("children") if isinstance(node.get("children"), list) else [])
+
+    walk(items if isinstance(items, list) else [])
+    return paths
+
+
+def _append_child_dirs(
+    root_path: str,
+    *,
+    max_depth: int,
+    seen: set[str],
+    out: list[str],
+) -> None:
+    """Añade subcarpetas hasta max_depth bajo root_path."""
+    if max_depth <= 0:
+        return
+    from pathlib import Path
+
+    from .gallery_paths import list_subdirs
+
+    try:
+        root = Path(root_path).expanduser().resolve()
+    except OSError:
+        return
+    if not root.is_dir():
+        return
+    for sub in list_subdirs(root):
+        key = str(sub)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+        _append_child_dirs(key, max_depth=max_depth - 1, seen=seen, out=out)
+
+
+def collect_warm_paths(
+    markers: list,
+    destinations: list,
+    *,
+    recent: list[str] | None = None,
+    include_children: bool = True,
+    max_depth: int = 2,
+) -> list[str]:
+    """Unión única: marcadores, destinos, recientes y subcarpetas."""
+    out: list[str] = []
+    seen: set[str] = set()
+    depth = max(0, min(6, int(max_depth or 0)))
+
+    def add_path(raw: str) -> None:
+        text = _as_str(raw)
+        if not text or text in seen:
+            return
+        seen.add(text)
+        out.append(text)
+        if include_children and depth > 0:
+            _append_child_dirs(text, max_depth=depth, seen=seen, out=out)
+
+    for p in flatten_marker_paths(markers):
+        add_path(p)
+    for p in flatten_dest_paths(destinations):
+        add_path(p)
+    for p in recent or []:
+        add_path(str(p))
+    return out
+
+
 def find_folder(items: list, folder_id: str) -> dict | None:
     fid = _as_str(folder_id)
     if not fid:

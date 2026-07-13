@@ -50,6 +50,9 @@ def load_app_settings() -> dict:
             "window_start_maximized": True,
             "gallery_include_subfolders": False,
             "gallery_show_other_files": False,
+            "gallery_warm_index_on_startup": False,
+            "gallery_warm_include_children": True,
+            "gallery_warm_max_depth": 2,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_group_by_alpha": False,
@@ -197,6 +200,21 @@ def load_app_settings() -> dict:
             data["gallery_show_other_files"] = False
         else:
             data["gallery_show_other_files"] = bool(data["gallery_show_other_files"])
+        if "gallery_warm_index_on_startup" not in data:
+            data["gallery_warm_index_on_startup"] = False
+        else:
+            data["gallery_warm_index_on_startup"] = bool(data["gallery_warm_index_on_startup"])
+        if "gallery_warm_include_children" not in data:
+            data["gallery_warm_include_children"] = True
+        else:
+            data["gallery_warm_include_children"] = bool(data["gallery_warm_include_children"])
+        if "gallery_warm_max_depth" not in data:
+            data["gallery_warm_max_depth"] = 2
+        else:
+            try:
+                data["gallery_warm_max_depth"] = max(0, min(6, int(data["gallery_warm_max_depth"])))
+            except (TypeError, ValueError):
+                data["gallery_warm_max_depth"] = 2
         if "gallery_sort_mode" not in data:
             data["gallery_sort_mode"] = "name,mtime,type"
         else:
@@ -466,6 +484,9 @@ def load_app_settings() -> dict:
             "window_start_maximized": True,
             "gallery_include_subfolders": False,
             "gallery_show_other_files": False,
+            "gallery_warm_index_on_startup": False,
+            "gallery_warm_include_children": True,
+            "gallery_warm_max_depth": 2,
             "gallery_sort_mode": "name,mtime,type",
             "gallery_group_by_folder": False,
             "gallery_group_by_alpha": False,

@@ -184,6 +184,8 @@ class SystemBridgeMixin:
     def get_initial_state(self) -> dict:
         dest_payload = self._destinations_payload() if hasattr(self, "_destinations_payload") else {"destinations": [], "toolbarFolderId": ""}
         marker_payload = self._markers_payload() if hasattr(self, "_markers_payload") else {"markers": [], "toolbarFolderId": "", "pinnedFolders": []}
+        if hasattr(self, "gallery_index_warm_maybe_startup"):
+            self.gallery_index_warm_maybe_startup()
         return {
             "settings": self.settings,
             "gallery": self._gallery_state(),

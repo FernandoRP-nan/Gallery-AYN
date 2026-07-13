@@ -166,13 +166,14 @@ def _dest_thumb_jpeg_data_url_contain(path: Path, size: int, quality: int = 90) 
 from .bridge_system import SystemBridgeMixin
 from .bridge_organizer import OrganizerBridgeMixin
 from .bridge_gallery import GalleryBridgeMixin
+from .bridge_index_warm import GalleryIndexWarmBridgeMixin
 from .bridge_selection import SelectionBridgeMixin
 from .bridge_destinations import DestinationsBridgeMixin
 from .bridge_editor import EditorBridgeMixin
 from .bridge_markers import MarkersBridgeMixin
 from .bridge_mess import MessBridgeMixin
 
-class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, SelectionBridgeMixin, DestinationsBridgeMixin, MarkersBridgeMixin, MessBridgeMixin, EditorBridgeMixin):
+class WebApi(SystemBridgeMixin, OrganizerBridgeMixin, GalleryBridgeMixin, GalleryIndexWarmBridgeMixin, SelectionBridgeMixin, DestinationsBridgeMixin, MarkersBridgeMixin, MessBridgeMixin, EditorBridgeMixin):
     def __init__(self) -> None:
         self.settings = load_app_settings()
         self.gallery_folder: Path | None = None

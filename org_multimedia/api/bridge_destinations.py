@@ -311,8 +311,10 @@ class DestinationsBridgeMixin:
     def destination_preview(self, dest_path: str, scale: float, width: int) -> dict:
         """Lista archivos del destino sin generar miniaturas (rápido; LQ/HQ las pide el cliente)."""
         folder = Path(dest_path).expanduser().resolve()
-        show_other = bool(self.settings.get("gallery_show_other_files", False))
-        if folder.is_dir():
+        if folder.is_dir() and hasattr(self, "_dest_preview_paths"):
+            paths = self._dest_preview_paths(folder)
+        elif folder.is_dir():
+            show_other = bool(self.settings.get("gallery_show_other_files", False))
             paths = scan_all_files_flat(folder) if show_other else scan_images_flat(folder)
         else:
             paths = []

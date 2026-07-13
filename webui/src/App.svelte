@@ -312,6 +312,9 @@
   let galleryThumbHqWorkers = 4;
   let galleryThumbHqVisibleSequential = 16;
   let galleryCompactIndicesAfterMove = true;
+  let galleryWarmIndexOnStartup = false;
+  let galleryWarmIncludeChildren = true;
+  let galleryWarmMaxDepth = 2;
   let galleryUnlimitedBatchSizeBackup = 48;
   let galleryWindowOverscanBeforeBackup = 96;
   let galleryWindowOverscanAfterBackup = 160;
@@ -323,6 +326,9 @@
   let galleryThumbHqWorkersBackup = 4;
   let galleryThumbHqVisibleSequentialBackup = 16;
   let galleryCompactIndicesAfterMoveBackup = true;
+  let galleryWarmIndexOnStartupBackup = false;
+  let galleryWarmIncludeChildrenBackup = true;
+  let galleryWarmMaxDepthBackup = 2;
   let debugLogEnabled = false;
   let debugLogEnabledBackup = false;
   let debugLogFilters: GalleryDebugFilters = { ...DEFAULT_GALLERY_DEBUG_FILTERS };
@@ -818,6 +824,9 @@
     galleryThumbHqWorkers = perfCfg.thumbHqWorkers;
     galleryThumbHqVisibleSequential = perfCfg.thumbHqVisibleSequential;
     galleryCompactIndicesAfterMove = perfCfg.compactIndicesAfterMove;
+    galleryWarmIndexOnStartup = Boolean(data.settings?.gallery_warm_index_on_startup ?? false);
+    galleryWarmIncludeChildren = Boolean(data.settings?.gallery_warm_include_children ?? true);
+    galleryWarmMaxDepth = clampSettingInt(data.settings?.gallery_warm_max_depth, 0, 6, 2);
     debugLogEnabled = Boolean(data.settings?.web_debug_log_enabled ?? false);
     setGalleryDebugLogEnabled(debugLogEnabled);
     debugLogFilters = normalizeGalleryDebugFilters(data.settings?.web_debug_log_filters);
@@ -1351,6 +1360,9 @@
     galleryThumbHqWorkersBackup = galleryThumbHqWorkers;
     galleryThumbHqVisibleSequentialBackup = galleryThumbHqVisibleSequential;
     galleryCompactIndicesAfterMoveBackup = galleryCompactIndicesAfterMove;
+    galleryWarmIndexOnStartupBackup = galleryWarmIndexOnStartup;
+    galleryWarmIncludeChildrenBackup = galleryWarmIncludeChildren;
+    galleryWarmMaxDepthBackup = galleryWarmMaxDepth;
     debugLogEnabledBackup = debugLogEnabled;
     debugLogFiltersBackup = { ...debugLogFilters };
     settingsOpen = true;
@@ -1387,6 +1399,9 @@
     galleryThumbHqWorkers = galleryThumbHqWorkersBackup;
     galleryThumbHqVisibleSequential = galleryThumbHqVisibleSequentialBackup;
     galleryCompactIndicesAfterMove = galleryCompactIndicesAfterMoveBackup;
+    galleryWarmIndexOnStartup = galleryWarmIndexOnStartupBackup;
+    galleryWarmIncludeChildren = galleryWarmIncludeChildrenBackup;
+    galleryWarmMaxDepth = galleryWarmMaxDepthBackup;
     debugLogEnabled = debugLogEnabledBackup;
     debugLogFilters = { ...debugLogFiltersBackup };
     setGalleryDebugLogEnabled(debugLogEnabled);
@@ -1434,6 +1449,7 @@
     galleryThumbBuildWorkers = clampSettingInt(galleryThumbBuildWorkers, 2, 16, 8);
     galleryThumbHqWorkers = clampSettingInt(galleryThumbHqWorkers, 1, 16, 4);
     galleryThumbHqVisibleSequential = clampSettingInt(galleryThumbHqVisibleSequential, 4, 32, 16);
+    galleryWarmMaxDepth = clampSettingInt(galleryWarmMaxDepth, 0, 6, 2);
 
     thumbsPerPage = n;
     thumbScale = ts;
@@ -1461,6 +1477,9 @@
         gallery_thumb_hq_workers: galleryThumbHqWorkers,
         gallery_thumb_hq_visible_sequential: galleryThumbHqVisibleSequential,
         gallery_compact_indices_after_move: Boolean(galleryCompactIndicesAfterMove),
+        gallery_warm_index_on_startup: Boolean(galleryWarmIndexOnStartup),
+        gallery_warm_include_children: Boolean(galleryWarmIncludeChildren),
+        gallery_warm_max_depth: galleryWarmMaxDepth,
         web_debug_log_enabled: Boolean(debugLogEnabled),
         web_debug_log_filters: { ...debugLogFilters },
         gallery_thumb_scale: Number(ts.toFixed(3)),
@@ -5743,6 +5762,9 @@
       bind:galleryThumbHqWorkers
       bind:galleryThumbHqVisibleSequential
       bind:galleryCompactIndicesAfterMove
+      bind:galleryWarmIndexOnStartup
+      bind:galleryWarmIncludeChildren
+      bind:galleryWarmMaxDepth
       bind:debugLogEnabled
       bind:debugLogFilters
       bind:videoTranscodePreset

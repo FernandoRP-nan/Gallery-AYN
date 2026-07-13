@@ -37,6 +37,9 @@
   export let galleryThumbHqWorkers: number;
   export let galleryThumbHqVisibleSequential: number;
   export let galleryCompactIndicesAfterMove = true;
+  export let galleryWarmIndexOnStartup = false;
+  export let galleryWarmIncludeChildren = true;
+  export let galleryWarmMaxDepth = 2;
   export let debugLogEnabled = false;
   export let debugLogFilters: import("../lib/galleryDebugLog").GalleryDebugFilters;
   export let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
@@ -131,6 +134,9 @@
     >
       {#if activeTab === "performance"}
         <SettingsPerformanceSection
+          bind:galleryWarmIndexOnStartup
+          bind:galleryWarmIncludeChildren
+          bind:galleryWarmMaxDepth
           bind:galleryUnlimitedBatchSize
           bind:galleryWindowOverscanBefore
           bind:galleryWindowOverscanAfter
