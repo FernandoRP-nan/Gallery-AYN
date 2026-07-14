@@ -5397,7 +5397,7 @@
   class="app-shell"
   class:app-shell--has-bg={uiBgActive}
 >
-  <AppBackgroundLayer active={uiBgActive} imageUrl={uiBgImageUrl} />
+  <AppBackgroundLayer active={uiBgActive} imageUrl={uiBgImageUrl} blurPx={uiBgBlur} />
 
 <main
   class="app"

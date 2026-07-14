@@ -451,7 +451,7 @@ export const es = {
     bgPickerNoFolder: "Abre una carpeta en la galería o elige una de recientes.",
     bgPickerLoadError: "No se pudieron cargar las imágenes.",
     bgBlur: "Desenfoque del fondo",
-    bgBlurHint: "0 = nítida · 12 = suave · 24 = muy difusa",
+    bgBlurHint: "0 = nítida · 12 = suave · 24 = muy difusa. Se pre-calcula una vez para evitar parpadeos.",
     fontTitle: "Tipografía",
     fontHint: "Cambia la fuente de menús, botones y etiquetas. La vista previa muestra el estilo.",
     fontNames: {
