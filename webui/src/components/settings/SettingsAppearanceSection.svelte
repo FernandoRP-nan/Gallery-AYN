@@ -4,11 +4,13 @@
     THEME_COLOR_FIELDS,
     UI_FONT_IDS,
     UI_THEME_IDS,
+    BG_SCOPE_IDS,
     duplicatePresetAsCustom,
     generateThemeId,
     isCustomThemeActive,
     PRESET_COLORS,
     PRESET_SWATCH,
+    type BgScopeId,
     type CustomTheme,
     type ThemeColorField,
     type ThemeColors,
@@ -24,6 +26,7 @@
   export let uiFont: UiFontId;
   export let uiBgImagePath: string;
   export let uiBgBlur: number;
+  export let uiBgScope: BgScopeId;
   export let galleryFolder: string;
   export let recentFolders: string[] = [];
   export let pinnedFolders: string[] = [];
@@ -178,7 +181,15 @@
 <section class="settings-group" aria-labelledby="set-bg">
   <h3 id="set-bg" class="settings-group__title">{t("settings.bgTitle")}</h3>
   <p class="settings-hint">{t("settings.bgHint")}</p>
-  <p class="settings-example">{t("settings.bgExample")}</p>
+  <label class="settings-bg-scope" for="set-bg-scope">
+    <span class="field-label">{t("settings.bgScopeLabel")}</span>
+    <select id="set-bg-scope" class="om-input settings-bg-scope__select" bind:value={uiBgScope}>
+      {#each BG_SCOPE_IDS as scopeId (scopeId)}
+        <option value={scopeId}>{t(`settings.bgScope.${scopeId}`)}</option>
+      {/each}
+    </select>
+  </label>
+  <p class="settings-hint">{t(`settings.bgScopeHint.${uiBgScope}`)}</p>
   <SettingsBgImagePicker
     bind:uiBgImagePath
     bind:uiBgBlur

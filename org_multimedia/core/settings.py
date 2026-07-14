@@ -101,6 +101,7 @@ def load_app_settings() -> dict:
             "web_ui_font": "outfit",
             "web_ui_bg_image": "",
             "web_ui_bg_blur": 0,
+            "web_ui_bg_scope": "all",
             "web_debug_log_enabled": False,
             "web_debug_log_filters": {
                 "scroll": True,
@@ -533,6 +534,11 @@ def load_app_settings() -> dict:
                 data["web_ui_bg_blur"] = max(0, min(32, int(data["web_ui_bg_blur"])))
             except (TypeError, ValueError):
                 data["web_ui_bg_blur"] = 0
+        if "web_ui_bg_scope" not in data:
+            data["web_ui_bg_scope"] = "all"
+        else:
+            scope = str(data["web_ui_bg_scope"]).strip().lower()
+            data["web_ui_bg_scope"] = scope if scope in ("all", "main", "gallery") else "all"
         return data
     except (OSError, json.JSONDecodeError):
         return {

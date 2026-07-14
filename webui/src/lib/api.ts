@@ -67,6 +67,7 @@ const devMockApi: WebApi = {
       web_ui_font: "outfit",
       web_ui_bg_image: "",
       web_ui_bg_blur: 0,
+      web_ui_bg_scope: "all",
       gallery_thumb_scale: 1,
       dest_preview_thumb_scale: 1,
       web_preview_ratio: 0.4,

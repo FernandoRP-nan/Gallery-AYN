@@ -28,6 +28,10 @@ export type CustomTheme = {
 
 export type ThemeSelection = UiThemeId | `custom:${string}`;
 
+/** Dónde se aplica el fondo personalizado (imagen + cristal). */
+export const BG_SCOPE_IDS = ["all", "main", "gallery"] as const;
+export type BgScopeId = (typeof BG_SCOPE_IDS)[number];
+
 export const PRESET_SWATCH: Record<UiThemeId, string> = {
   midnight: "#7c8cff",
   ocean: "#38b8e8",
@@ -129,6 +133,7 @@ export type UiAppearanceState = {
   font: UiFontId;
   bgImagePath: string;
   bgBlur: number;
+  bgScope: BgScopeId;
 };
 
 export function defaultAppearance(): UiAppearanceState {
@@ -138,6 +143,7 @@ export function defaultAppearance(): UiAppearanceState {
     font: "outfit",
     bgImagePath: "",
     bgBlur: 0,
+    bgScope: "all",
   };
 }
 
@@ -212,6 +218,14 @@ export function normalizeBgBlur(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(32, Math.round(n)));
+}
+
+export function normalizeBgScope(raw: unknown): BgScopeId {
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if ((BG_SCOPE_IDS as readonly string[]).includes(s)) return s as BgScopeId;
+  return "all";
 }
 
 export function isCustomThemeActive(selection: ThemeSelection, id: string): boolean {
@@ -313,22 +327,29 @@ export function applyThemeAppearance(
   ensureFontLink(state.font);
 }
 
-/** Aplica solo imagen de fondo y desenfoque (CSS vars; sin re-tematizar). */
-export function applyBackgroundAppearance(bgImagePath: string, bgBlur: number): void {
+/** Aplica imagen de fondo, desenfoque y ámbito (atributos en <html>). */
+export function applyBackgroundAppearance(
+  bgImagePath: string,
+  bgBlur: number,
+  bgScope: BgScopeId = "all"
+): void {
   if (typeof document === "undefined") return;
   const path = String(bgImagePath ?? "").trim();
   const blur = normalizeBgBlur(bgBlur);
-  const key = `${path}\0${blur}`;
+  const scope = normalizeBgScope(bgScope);
+  const key = `${path}\0${blur}\0${scope}`;
   if (key === lastBgKey) return;
   lastBgKey = key;
 
   const root = document.documentElement;
   if (path) {
     root.setAttribute("data-om-has-bg", "1");
+    root.setAttribute("data-om-bg-scope", scope);
     const url = buildMediaFileUrl(path);
     root.style.setProperty("--om-bg-image", `url("${url.replace(/"/g, '\\"')}")`);
   } else {
     root.removeAttribute("data-om-has-bg");
+    root.removeAttribute("data-om-bg-scope");
     root.style.removeProperty("--om-bg-image");
   }
   root.style.setProperty("--om-bg-blur", `${blur}px`);
@@ -358,7 +379,7 @@ export function applyAppearanceToDocument(state: UiAppearanceState): void {
   lastBgKey = "";
   lastPersistKey = "";
   applyThemeAppearance(state);
-  applyBackgroundAppearance(state.bgImagePath, state.bgBlur);
+  applyBackgroundAppearance(state.bgImagePath, state.bgBlur, state.bgScope);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     localStorage.setItem("om_web_ui_theme", state.themeSelection);
@@ -379,6 +400,7 @@ export function readCachedAppearance(): Partial<UiAppearanceState> {
         font: data.font ? normalizeFont(data.font) : undefined,
         bgImagePath: typeof data.bgImagePath === "string" ? data.bgImagePath : undefined,
         bgBlur: data.bgBlur !== undefined ? normalizeBgBlur(data.bgBlur) : undefined,
+        bgScope: data.bgScope !== undefined ? normalizeBgScope(data.bgScope) : undefined,
       };
     }
     const legacy = localStorage.getItem("om_web_ui_theme");
@@ -398,6 +420,7 @@ export function appearanceFromSettings(settings: Record<string, unknown> | undef
     font: normalizeFont(settings.web_ui_font),
     bgImagePath: String(settings.web_ui_bg_image ?? "").trim(),
     bgBlur: normalizeBgBlur(settings.web_ui_bg_blur),
+    bgScope: normalizeBgScope(settings.web_ui_bg_scope),
   };
 }
 

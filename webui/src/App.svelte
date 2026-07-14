@@ -108,6 +108,7 @@
     queueAppearancePersist,
     readCachedAppearance,
     type CustomTheme,
+    type BgScopeId,
     type ThemeSelection,
     type UiFontId,
   } from "./lib/uiAppearance";
@@ -393,11 +394,13 @@
   let uiFont: UiFontId = "outfit";
   let uiBgImagePath = "";
   let uiBgBlur = 0;
+  let uiBgScope: BgScopeId = "all";
   let themeSelectionBackup: ThemeSelection = "midnight";
   let uiCustomThemesBackup: CustomTheme[] = [];
   let uiFontBackup: UiFontId = "outfit";
   let uiBgImagePathBackup = "";
   let uiBgBlurBackup = 0;
+  let uiBgScopeBackup: BgScopeId = "all";
 
   const themeNameLabel = (id: UiThemeId): string =>
     t(
@@ -922,6 +925,7 @@
     uiFont = appearance.font;
     uiBgImagePath = appearance.bgImagePath;
     uiBgBlur = appearance.bgBlur;
+    uiBgScope = appearance.bgScope;
     applyAppearanceToDocument(appearance);
     previewVisible = Boolean(data.settings?.web_preview_visible ?? true);
     previewRatio = Math.min(0.68, Math.max(0.14, Number(data.settings?.web_preview_ratio ?? 0.4)));
@@ -1033,13 +1037,14 @@
       customThemes: uiCustomThemes,
       font: uiFont,
     });
-    applyBackgroundAppearance(uiBgImagePath, uiBgBlur);
+    applyBackgroundAppearance(uiBgImagePath, uiBgBlur, uiBgScope);
     queueAppearancePersist({
       themeSelection,
       customThemes: uiCustomThemes,
       font: uiFont,
       bgImagePath: uiBgImagePath,
       bgBlur: uiBgBlur,
+      bgScope: uiBgScope,
     });
   }
 
@@ -1536,6 +1541,7 @@
     uiFontBackup = uiFont;
     uiBgImagePathBackup = uiBgImagePath;
     uiBgBlurBackup = uiBgBlur;
+    uiBgScopeBackup = uiBgScope;
     thumbsPerPageBackup = thumbsPerPage;
     thumbGapPxBackup = thumbGapPx;
     galleryMasonryTightSpacingBackup = galleryMasonryTightSpacing;
@@ -1600,6 +1606,7 @@
     uiFont = uiFontBackup;
     uiBgImagePath = uiBgImagePathBackup;
     uiBgBlur = uiBgBlurBackup;
+    uiBgScope = uiBgScopeBackup;
     thumbsPerPage = thumbsPerPageBackup;
     thumbGapPx = thumbGapPxBackup;
     galleryMasonryTightSpacing = galleryMasonryTightSpacingBackup;
@@ -1736,6 +1743,7 @@
         web_ui_font: uiFont,
         web_ui_bg_image: uiBgImagePath,
         web_ui_bg_blur: uiBgBlur,
+        web_ui_bg_scope: uiBgScope,
         web_thumb_gap_px: Math.max(0, Math.round(thumbGapPx)),
         web_show_thumb_labels: Boolean(showThumbLabels),
         web_thumb_card_style: thumbCardStyle,
@@ -6297,6 +6305,7 @@
       bind:uiFont
       bind:uiBgImagePath
       bind:uiBgBlur
+      bind:uiBgScope
       bind:showThumbLabels
       bind:thumbFrameVisible
       bind:thumbCardStyle

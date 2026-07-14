@@ -75,104 +75,152 @@ html[data-om-theme="paper"] .app-bg-stack__scrim {
     background: transparent;
   }
 
-.app--has-bg {
+/* Variables cristal cuando hay imagen de fondo. */
+html[data-om-has-bg] {
     --om-glass-chrome: linear-gradient(165deg, rgb(21 24 42 / 0.72) 0%, rgb(16 18 28 / 0.62) 100%);
     --om-glass-panel: linear-gradient(165deg, rgb(21 24 42 / 0.5) 0%, rgb(16 18 28 / 0.42) 100%);
     --om-glass-media: rgb(8 10 18 / 0.42);
     --om-glass-border: rgb(255 255 255 / 0.11);
+    --om-glass-route: linear-gradient(165deg, rgb(21 24 42 / 0.58) 0%, rgb(16 18 28 / 0.48) 100%);
+    --om-glass-overlay: rgb(4 6 14 / 0.32);
   }
 
-html[data-om-theme="paper"] .app--has-bg {
+html[data-om-theme="paper"][data-om-has-bg] {
     --om-glass-chrome: linear-gradient(165deg, rgb(252 253 255 / 0.82) 0%, rgb(238 242 248 / 0.72) 100%);
     --om-glass-panel: linear-gradient(165deg, rgb(252 253 255 / 0.68) 0%, rgb(238 242 248 / 0.58) 100%);
     --om-glass-media: rgb(255 255 255 / 0.45);
     --om-glass-border: rgb(30 36 52 / 0.12);
+    --om-glass-route: linear-gradient(165deg, rgb(252 253 255 / 0.72) 0%, rgb(238 242 248 / 0.62) 100%);
+    --om-glass-overlay: rgb(238 240 246 / 0.42);
   }
 
-/* Chrome translúcido (sin backdrop-filter: parpadeos en Qt WebEngine). */
-.app--has-bg .app-chrome {
+/* Área principal: barras, ruta, vista previa (all + main). */
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .app-chrome,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .app-chrome {
     contain: layout style;
     background: transparent;
     box-shadow: none;
   }
 
-.app--has-bg .tabs-bar.om-panel {
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .tabs-bar.om-panel,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .tabs-bar.om-panel {
     background: var(--om-glass-chrome);
     border-color: var(--om-glass-border);
   }
 
-.app--has-bg .pager.pager--bar.om-panel,
-.app--has-bg .preview.om-panel {
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .pager.pager--bar.om-panel,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .pager.pager--bar.om-panel,
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview.om-panel,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview.om-panel {
     background: var(--om-glass-panel);
     border-color: var(--om-glass-border);
   }
 
-.app--has-bg .app-chrome--preview {
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .app-chrome--preview,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .app-chrome--preview {
     background: var(--om-glass-panel) !important;
   }
 
-.app--has-bg .view-menu.om-panel,
-.app--has-bg .pager__process-panel.om-panel {
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .view-menu.om-panel,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .view-menu.om-panel,
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .pager__process-panel.om-panel,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .pager__process-panel.om-panel {
     background: var(--om-glass-chrome);
     border-color: var(--om-glass-border);
   }
 
-.app--has-bg .selection-float.app-chrome,
-.app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .selection-float.app-chrome,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .selection-float.app-chrome,
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
     background: rgb(8 10 18 / 0.72);
     border-color: var(--om-glass-border);
   }
 
-.app--has-bg .app-chrome--dest-bar {
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .app-chrome--dest-bar,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .app-chrome--dest-bar {
     background: rgb(12 14 24 / 0.78) !important;
   }
 
-/* Mosaico sin panel opaco: el fondo se ve entre miniaturas. */
-.app--has-bg .gallery.om-panel {
+html[data-om-has-bg][data-om-bg-scope="all"] .route__path-wrap,
+html[data-om-has-bg][data-om-bg-scope="main"] .route__path-wrap {
+    background: var(--om-glass-route);
+    border-color: var(--om-glass-border);
+  }
+
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview__img,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview__img,
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview__empty,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview__empty,
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview-zoom-panel__stage,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview-zoom-panel__stage,
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview-video-idle,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview-video-idle,
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview-video-idle__placeholder,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview-video-idle__placeholder {
+    background: var(--om-glass-media);
+  }
+
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview-selection-grid,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview-selection-grid {
+    background: rgb(8 10 18 / 0.28);
+    border-top-color: var(--om-glass-border);
+  }
+
+html[data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .splitter,
+html[data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .splitter {
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0.04));
+    border-color: var(--om-glass-border);
+  }
+
+/* Mosaico: todos los ámbitos con imagen activa. */
+html[data-om-has-bg] .app--has-bg .gallery.om-panel {
     background: transparent;
     border-color: var(--om-glass-border);
     box-shadow: none !important;
   }
 
-.app--has-bg .gallery.om-panel.om-panel--lift {
+html[data-om-has-bg] .app--has-bg .gallery.om-panel.om-panel--lift {
     box-shadow: none !important;
   }
 
-.app--has-bg .gallery {
+html[data-om-has-bg] .app--has-bg .gallery {
     contain: layout style;
   }
 
-/* Aísla el repintado del scroll para no invalidar la capa fija del fondo. */
-.app--has-bg .gallery.gallery--scrolling,
-.app--has-bg .gallery.gallery--busy {
+html[data-om-has-bg] .app--has-bg .gallery.gallery--scrolling,
+html[data-om-has-bg] .app--has-bg .gallery.gallery--busy {
     contain: layout style paint;
   }
 
-/* Vista previa y medios */
-.app--has-bg .preview__img,
-.app--has-bg .preview__empty,
-.app--has-bg .preview-zoom-panel__stage,
-.app--has-bg .preview-video-idle,
-.app--has-bg .preview-video-idle__placeholder {
-    background: var(--om-glass-media);
+/* Modales y overlays translúcidos (solo ámbito «all»). */
+html[data-om-has-bg][data-om-bg-scope="all"] .overlay,
+html[data-om-has-bg][data-om-bg-scope="all"] .overlay--dim,
+html[data-om-has-bg][data-om-bg-scope="all"] .sm-backdrop,
+html[data-om-has-bg][data-om-bg-scope="all"] .cdb-backdrop,
+html[data-om-has-bg][data-om-bg-scope="all"] .org-float-overlay,
+html[data-om-has-bg][data-om-bg-scope="all"] .load-overlay {
+    background: var(--om-glass-overlay);
   }
 
-.app--has-bg .preview-selection-grid {
-    background: rgb(8 10 18 / 0.28);
-    border-top-color: var(--om-glass-border);
-  }
-
-.app--has-bg .splitter {
-    background: linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0.04));
+html[data-om-has-bg][data-om-bg-scope="all"] .overlay .modal.om-panel,
+html[data-om-has-bg][data-om-bg-scope="all"] .sm-dialog.om-panel,
+html[data-om-has-bg][data-om-bg-scope="all"] .organizer-float.om-panel,
+html[data-om-has-bg][data-om-bg-scope="all"] .mess-panel.om-panel,
+html[data-om-has-bg][data-om-bg-scope="all"] .dest-ctx-menu.om-panel {
+    background: var(--om-glass-chrome);
     border-color: var(--om-glass-border);
   }
 
-html[data-om-theme="paper"] .app--has-bg .preview-selection-grid {
+html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .preview-selection-grid,
+html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .preview-selection-grid {
     background: rgb(255 255 255 / 0.32);
   }
 
-html[data-om-theme="paper"] .app--has-bg .selection-float.app-chrome,
-html[data-om-theme="paper"] .app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
+html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .selection-float.app-chrome,
+html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .selection-float.app-chrome,
+html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="all"] .app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr,
+html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="main"] .app--has-bg .gallery__scroll > .selection-float-rail > .selection-float.selection-float--gallery-tr {
     background: rgb(252 253 255 / 0.78);
   }
 

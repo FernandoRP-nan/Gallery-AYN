@@ -3,7 +3,7 @@
   import { t } from "../lib/i18n";
   import { galleryGridCellPx } from "../lib/thumbScale";
   import type { UiThemeId } from "../lib/uiTheme";
-  import type { CustomTheme, ThemeSelection, UiFontId } from "../lib/uiAppearance";
+  import type { BgScopeId, CustomTheme, ThemeSelection, UiFontId } from "../lib/uiAppearance";
   import SettingsAppearanceSection from "./settings/SettingsAppearanceSection.svelte";
   import SettingsDestinationsSection from "./settings/SettingsDestinationsSection.svelte";
   import SettingsMarkersSection from "./settings/SettingsMarkersSection.svelte";
@@ -70,6 +70,7 @@
   export let uiFont: UiFontId;
   export let uiBgImagePath: string;
   export let uiBgBlur: number;
+  export let uiBgScope: BgScopeId;
   export let showThumbLabels: boolean;
   export let thumbFrameVisible: boolean;
   export let thumbCardStyle: "soft" | "flat" | "outlined";
@@ -206,6 +207,7 @@
           bind:uiFont
           bind:uiBgImagePath
           bind:uiBgBlur
+          bind:uiBgScope
           {galleryFolder}
           {recentFolders}
           {pinnedFolders}
