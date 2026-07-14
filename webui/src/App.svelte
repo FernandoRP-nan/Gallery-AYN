@@ -91,7 +91,7 @@
     getGalleryNavigationGeneration,
     isGalleryNavigationCurrent,
   } from "./lib/gallerySession";
-  import { commitChromePagerState, galleryChromeBusy } from "./lib/chromeRemember";
+  import { commitChromePagerState } from "./lib/chromeRemember";
   import {
     collectRemovedMediaIndices,
     isGalleryMediaKind,
@@ -5078,9 +5078,7 @@
   }
 
   $: uiBgActive = Boolean(uiBgImagePath.trim());
-  /** Pausa la capa fija durante scroll/modales (anti-parpadeo en Qt WebEngine). */
-  $: uiBgPaused =
-    $galleryChromeBusy || routePickerOpen || settingsOpen || viewMenuOpen || pinMarkerOpen;
+  $: uiBgImageUrl = uiBgActive ? buildMediaFileUrl(uiBgImagePath) : "";
 
   $: if (!previewZoomOpen && deferredZoomMoveRefresh) {
     void applyGalleryItemsDelta(deferredZoomMoveRefresh);
@@ -5398,9 +5396,8 @@
 <div
   class="app-shell"
   class:app-shell--has-bg={uiBgActive}
-  class:app-shell--bg-paused={uiBgPaused}
 >
-  <AppBackgroundLayer active={uiBgActive && !uiBgPaused} />
+  <AppBackgroundLayer active={uiBgActive} imageUrl={uiBgImageUrl} />
 
 <main
   class="app"

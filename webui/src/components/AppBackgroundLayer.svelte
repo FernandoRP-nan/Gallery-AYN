@@ -1,11 +1,18 @@
 <script lang="ts">
-  /** Muestra imagen + velo; false cuando está pausado (scroll/modales). */
+  /** Muestra imagen + velo. */
   export let active = false;
+  export let imageUrl = "";
 </script>
 
-{#if active}
-  <div class="app-bg-stack" aria-hidden="true">
-    <div class="app-bg-stack__image"></div>
-    <div class="app-bg-stack__scrim"></div>
-  </div>
-{/if}
+<div class="app-bg-stack" class:app-bg-stack--off={!active} aria-hidden="true">
+  {#if imageUrl}
+    <img
+      class="app-bg-stack__image"
+      src={imageUrl}
+      alt=""
+      decoding="async"
+      draggable="false"
+    />
+  {/if}
+  <div class="app-bg-stack__scrim"></div>
+</div>

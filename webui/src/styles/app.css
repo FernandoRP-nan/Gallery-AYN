@@ -34,16 +34,26 @@ html[data-om-has-bg] .app-shell {
     z-index: var(--om-z-bg);
     pointer-events: none;
     overflow: hidden;
+    transform: translate3d(0, 0, 0);
+    backface-visibility: hidden;
+  }
+
+.app-bg-stack--off {
+    opacity: 0;
+    visibility: hidden;
   }
 
 .app-bg-stack__image {
     position: absolute;
-    inset: 0;
-    background-image: var(--om-bg-image);
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    transform: scale(1.03);
+    inset: -2%;
+    width: 104%;
+    height: 104%;
+    object-fit: cover;
+    object-position: center;
+    transform: translate3d(0, 0, 0);
+    backface-visibility: hidden;
+    user-select: none;
+    -webkit-user-drag: none;
   }
 
 .app-bg-stack__scrim {
@@ -60,15 +70,9 @@ html[data-om-theme="paper"] .app-bg-stack__scrim {
       linear-gradient(rgb(238 240 246 / 0.35), rgb(238 240 246 / 0.52));
   }
 
-/* Pausa la imagen fija durante scroll/modales: evita parpadeos en Qt WebEngine. */
-.app-shell--has-bg:not(.app-shell--bg-paused) .app {
+/* Con fondo activo la app no pinta color base encima de la imagen fija. */
+.app-shell--has-bg .app {
     background: transparent;
-  }
-
-.app-shell--has-bg.app-shell--bg-paused .app {
-    background:
-      radial-gradient(120% 80% at 50% -20%, var(--om-bg-spot), transparent 50%),
-      var(--om-bg-base);
   }
 
 .app--has-bg {
@@ -136,6 +140,12 @@ html[data-om-theme="paper"] .app--has-bg {
 
 .app--has-bg .gallery {
     contain: layout style;
+  }
+
+/* Aísla el repintado del scroll para no invalidar la capa fija del fondo. */
+.app--has-bg .gallery.gallery--scrolling,
+.app--has-bg .gallery.gallery--busy {
+    contain: layout style paint;
   }
 
 /* Vista previa y medios */
