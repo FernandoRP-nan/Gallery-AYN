@@ -86,18 +86,20 @@ jobs:
           path: ${{ steps.zip.outputs.zip_path }}
           retention-days: 30
 
+      - name: Generate release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: release_notes
+        shell: bash
+        run: |
+          git fetch --tags --force
+          chmod +x scripts/generate-release-notes.sh
+          NOTES_PATH="${RUNNER_TEMP}/release-notes.md"
+          ./scripts/generate-release-notes.sh "${GITHUB_REF_NAME}" "${{ steps.zip.outputs.zip_name }}" > "${NOTES_PATH}"
+          echo "notes_path=${NOTES_PATH}" >> "${GITHUB_OUTPUT}"
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.zip.outputs.zip_path }}
-          generate_release_notes: true
-          body: |
-            ## Galería AYN — portable Windows (x64)
-
-            Descarga **`${{ steps.zip.outputs.zip_name }}`**, extrae **toda la carpeta** y ejecuta `GaleriaAYN.exe`.
-
-            Requisitos en el PC destino: Windows 10/11 64 bits, WebView2 y .NET Framework 4.7.2+.
-            Si el zip viene de internet: Propiedades → **Desbloquear** antes de extraer.
-
-            Guía completa: [docs/windows-portable.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/windows-portable.md)
+          body_path: ${{ steps.release_notes.outputs.notes_path }}

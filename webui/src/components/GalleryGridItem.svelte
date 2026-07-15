@@ -166,7 +166,16 @@
       if (isGalleryMediaKind(it.kind)) openZoomFromGallery(it);
     }}
     on:keydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (it.kind === "folder" || it.kind === "folder_up") {
+          void navigateToFolder(it.path, { pushHistory: true });
+          return;
+        }
+        if (isGalleryMediaKind(it.kind)) openZoomFromGallery(it);
+        return;
+      }
+      if (e.key === " ") {
         e.preventDefault();
         clickItem(it);
       }
@@ -206,7 +215,7 @@
         {#if it.kind === "image" && it.path.toLowerCase().endsWith(".svg")}
           <span class="tile-svg-ph" aria-hidden="true">SVG</span>
         {:else if it.kind === "image"}
-          Sin preview
+          {t("gallery.noThumb")}
         {:else if it.kind === "video"}
           <span class="tile-video-ph" aria-hidden="true">▶</span>
         {:else if it.kind === "file"}

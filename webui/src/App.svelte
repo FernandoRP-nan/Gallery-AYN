@@ -2477,6 +2477,12 @@
     maybeAutoplayPreviewVideo(previewVideoEl);
   }
 
+  /** En WebView2/Edge los controles nativos se recortan si el clic no llega al vídeo. */
+  function onPreviewVideoClick(e: MouseEvent) {
+    const video = e.currentTarget as HTMLVideoElement;
+    video.focus({ preventScroll: true });
+  }
+
   function onPreviewVideoLoadStart() {
     const playback = previewVideoPlayback;
     const current = previewVideoSrc || selectedPreview?.fileUrl || "";
@@ -5279,6 +5285,36 @@
         return;
       }
     }
+    if (
+      !isTypingEl &&
+      !previewOpen &&
+      !previewZoomOpen &&
+      !viewMenuOpen &&
+      !settingsOpen &&
+      !orgPanelOpen &&
+      !messPanelOpen &&
+      !destFormOpen &&
+      !routePickerOpen &&
+      e.key === "Enter" &&
+      !e.repeat &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.metaKey
+    ) {
+      const cur = getOrInitGalleryCursorPath();
+      if (!cur) return;
+      const item = getGalleryItems().find((x) => x.path === cur);
+      if (!item) return;
+      e.preventDefault();
+      if (item.kind === "folder" || item.kind === "folder_up") {
+        void navigateToFolder(item.path, { pushHistory: true });
+        return;
+      }
+      if (isGalleryMediaKind(item.kind)) {
+        openZoomFromGallery(item);
+      }
+      return;
+    }
     const keyLower = String(e.key || "").toLowerCase();
     const isGalleryNavKey = ["arrowleft", "arrowright", "arrowup", "arrowdown", "a", "d", "w", "s"].includes(keyLower);
     if (
@@ -5568,6 +5604,8 @@
                       controls={Boolean(previewVideoSrc || selectedPreview?.fileUrl)}
                       playsinline
                       preload="auto"
+                      tabindex="0"
+                      on:click={onPreviewVideoClick}
                       on:loadstart={onPreviewVideoLoadStart}
                       on:error={onPreviewVideoError}
                       on:canplay={onPreviewVideoCanPlay}
