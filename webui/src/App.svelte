@@ -24,7 +24,7 @@
     panFromMiniMapNorm,
   } from "./lib/zoomMiniMap";
   import { resolveMediaPlaybackInfo, pickInitialPlaybackUrl, bustMediaUrl, sameMediaUrl, normalizeMediaCompareKey, mediaUrlKey, isDataPlaybackUrl, playbackPrepareMessage, absolutizeMediaUrl, type MediaPlaybackInfo, type VideoPlaybackMode } from "./lib/mediaUrl";
-  import { canTranscodeVideo, tryAutoplayVideo, waitForTranscodeCache } from "./lib/videoPlayback";
+  import { canTranscodeVideo, tryAutoplayVideo, waitForTranscodeCache, applyVideoVolumePrefs, readVideoVolumeFromElement, normalizeVideoVolumePrefs, type VideoVolumePrefs } from "./lib/videoPlayback";
   import { transcodeProgressForPath } from "./lib/videoTranscodeUi";
   import { scheduleNextZoomVideoWarm, cancelZoomVideoWarm } from "./lib/videoCarouselWarm";
   import {
@@ -247,6 +247,9 @@
   let previewVideoMode: VideoPlaybackMode = "auto";
   let previewVideoAutoplay = true;
   let previewVideoAutoplayEdit = false;
+  let videoVolumePrefs: VideoVolumePrefs = { volume: 1, muted: false };
+  let videoVolumeApplying = false;
+  let videoVolumeSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let previewVideoProfiles: Array<{ id: string; available: boolean; recommended?: boolean; strategy?: string }> = [];
   let previewVideoPreparePath = "";
   let videoTranscodePreset: "turbo" | "fast" | "quality" = "fast";
@@ -986,6 +989,10 @@
     }
     previewVideoAutoplay = Boolean(data.settings?.preview_video_autoplay ?? true);
     previewVideoAutoplayEdit = Boolean(data.settings?.preview_video_autoplay_edit ?? false);
+    videoVolumePrefs = normalizeVideoVolumePrefs({
+      volume: data.settings?.preview_video_volume,
+      muted: data.settings?.preview_video_muted,
+    });
     {
       const tq = String(data.settings?.gallery_thumb_quality_preset ?? "balanced").toLowerCase();
       galleryThumbQualityPreset =
@@ -2268,9 +2275,30 @@
   $: previewVideoAutoplayOn =
     destinationsMode ? previewVideoAutoplayEdit : previewVideoAutoplay;
 
+  function applyStoredVideoVolume(el: HTMLVideoElement | null | undefined) {
+    if (!el) return;
+    videoVolumeApplying = true;
+    applyVideoVolumePrefs(el, videoVolumePrefs);
+    videoVolumeApplying = false;
+  }
+
+  function handleVideoVolumeChange(el: HTMLVideoElement | null | undefined) {
+    if (!el || videoVolumeApplying) return;
+    videoVolumePrefs = readVideoVolumeFromElement(el);
+    if (videoVolumeSaveTimer) clearTimeout(videoVolumeSaveTimer);
+    videoVolumeSaveTimer = setTimeout(() => {
+      videoVolumeSaveTimer = null;
+      void bridge.settingsPatch({
+        preview_video_volume: videoVolumePrefs.volume,
+        preview_video_muted: videoVolumePrefs.muted,
+      });
+    }, 350);
+  }
+
   function maybeAutoplayPreviewVideo(el: HTMLVideoElement | null | undefined) {
     if (!isPreviewVideoAutoplayEnabled()) return;
-    tryAutoplayVideo(el);
+    applyStoredVideoVolume(el);
+    tryAutoplayVideo(el, videoVolumePrefs);
   }
 
   async function togglePreviewVideoAutoplay() {
@@ -2474,6 +2502,7 @@
     previewVideoLastErrorDetail = "";
     previewVideoDiagLoading = false;
     stopVideoPreparePoll();
+    applyStoredVideoVolume(previewVideoEl);
     maybeAutoplayPreviewVideo(previewVideoEl);
   }
 
@@ -3365,7 +3394,8 @@
       }
       void tick().then(() => {
         if (!isZoomVideoActive()) return;
-        tryAutoplayVideo(zoomVideoEl);
+        applyStoredVideoVolume(zoomVideoEl);
+        tryAutoplayVideo(zoomVideoEl, videoVolumePrefs);
       });
     } catch {
       if (!isZoomVideoActive()) return;
@@ -3382,7 +3412,8 @@
     previewZoomVideoPlayLocked = false;
     previewZoomVideoLaunching = false;
     stopVideoPreparePoll();
-    tryAutoplayVideo(zoomVideoEl);
+    applyStoredVideoVolume(zoomVideoEl);
+    tryAutoplayVideo(zoomVideoEl, videoVolumePrefs);
   }
 
   function applyGalleryRefreshFromMove(out: GalleryMutationResponse) {
@@ -3904,6 +3935,7 @@
 
   function onZoomVideoMeta() {
     if (!zoomVideoEl) return;
+    applyStoredVideoVolume(zoomVideoEl);
     previewZoomNaturalW = Math.max(1, zoomVideoEl.videoWidth || 1);
     previewZoomNaturalH = Math.max(1, zoomVideoEl.videoHeight || 1);
     if (previewZoomMode === "fillWidth") {
@@ -5441,7 +5473,7 @@
   class="app-shell"
   class:app-shell--has-bg={uiBgActive}
 >
-  <AppBackgroundLayer active={uiBgActive} imageUrl={uiBgImageUrl} blurPx={uiBgBlur} />
+  <AppBackgroundLayer active={uiBgActive && !previewZoomOpen} imageUrl={uiBgImageUrl} blurPx={uiBgBlur} />
 
 <main
   class="app"
@@ -5455,7 +5487,7 @@
   class:app--tile-no-frame={!thumbFrameVisible}
   style={`--thumb-image-radius:${thumbImageRadiusPx}px;--thumb-tile-radius:${thumbTileRadiusPx}px`}
 >
-  <div class="app-chrome app-chrome--header">
+  <div class="app-chrome app-chrome--header" class:app-chrome--view-menu-open={viewMenuOpen}>
   <Toolbar
     bind:destinationsMode
     bind:viewMenuOpen
@@ -5607,6 +5639,8 @@
                       tabindex="0"
                       on:click={onPreviewVideoClick}
                       on:loadstart={onPreviewVideoLoadStart}
+                      on:loadedmetadata={() => applyStoredVideoVolume(previewVideoEl)}
+                      on:volumechange={() => handleVideoVolumeChange(previewVideoEl)}
                       on:error={onPreviewVideoError}
                       on:canplay={onPreviewVideoCanPlay}
                     ></video>
@@ -6419,6 +6453,7 @@
     {closePinMarkerModal}
     {savePinMarkerModal}
   />
+</main>
   <FullscreenPlayer
     bind:previewZoomOpen
     bind:previewZoomCarouselVisible
@@ -6475,6 +6510,7 @@
     {onZoomImageClick}
     {onZoomVideoClick}
     {onZoomVideoMeta}
+    onZoomVideoVolumeChange={() => handleVideoVolumeChange(zoomVideoEl)}
     {onZoomVideoError}
     onZoomVideoCanPlay={onZoomVideoCanPlay}
     {onZoomImageLoad}
@@ -6497,6 +6533,5 @@
     previewZoomTranscodeProgress={previewZoomTranscodeProgress}
     onZoomVideoPlay={requestZoomVideoPlay}
   />
-</main>
 </div>
 

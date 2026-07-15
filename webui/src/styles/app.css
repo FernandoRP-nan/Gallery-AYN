@@ -275,10 +275,16 @@ html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="main"] .app--has-b
     border-radius: var(--thumb-tile-radius, var(--om-radius-md));
   }
 
+/* Con el menú Vista abierto, el header debe quedar por encima del backdrop (65). */
+.app-chrome--header.app-chrome--view-menu-open {
+    z-index: var(--om-z-view-menu);
+  }
+
 .view-menu-backdrop {
     position: fixed;
     inset: 0;
     z-index: var(--om-z-view-menu-backdrop);
+    background: rgb(4 6 14 / 0.42);
   }
 
 .app-chrome--footer.pager.pager--bar {
@@ -1971,13 +1977,14 @@ html[data-om-theme="paper"][data-om-has-bg][data-om-bg-scope="main"] .app--has-b
   }
 
 .overlay--zoom {
-    background: rgb(2 3 8 / 0.96);
+    background: var(--om-zoom-scrim);
     /* Sin backdrop-filter: en Qt WebEngine relee todo el fondo en cada frame al hacer pan/zoom. */
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
     z-index: var(--om-z-zoom);
     isolation: isolate;
-    contain: paint;
+    /* paint containment recorta el velo con vídeo/imagen acelerados en WebView2. */
+    contain: layout style;
     place-items: stretch;
     padding: 0;
   }

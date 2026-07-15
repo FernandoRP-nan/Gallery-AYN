@@ -73,6 +73,8 @@ def load_app_settings() -> dict:
             "gallery_warm_videos_per_folder": 3,
             "preview_video_autoplay": True,
             "preview_video_autoplay_edit": False,
+            "preview_video_volume": 1.0,
+            "preview_video_muted": False,
             "mess_folder_path": "",
             "mess_similarity_min": 0.82,
             "mess_pinterest_masonry": False,
@@ -387,6 +389,17 @@ def load_app_settings() -> dict:
             data["preview_video_autoplay_edit"] = False
         else:
             data["preview_video_autoplay_edit"] = bool(data["preview_video_autoplay_edit"])
+        if "preview_video_volume" not in data:
+            data["preview_video_volume"] = 1.0
+        else:
+            try:
+                data["preview_video_volume"] = max(0.0, min(1.0, float(data["preview_video_volume"])))
+            except (TypeError, ValueError):
+                data["preview_video_volume"] = 1.0
+        if "preview_video_muted" not in data:
+            data["preview_video_muted"] = False
+        else:
+            data["preview_video_muted"] = bool(data["preview_video_muted"])
         if "mess_folder_path" not in data:
             data["mess_folder_path"] = ""
         else:
@@ -595,6 +608,8 @@ def load_app_settings() -> dict:
             "gallery_warm_videos_per_folder": 3,
             "preview_video_autoplay": True,
             "preview_video_autoplay_edit": False,
+            "preview_video_volume": 1.0,
+            "preview_video_muted": False,
             "mess_folder_path": "",
             "mess_similarity_min": 0.82,
             "mess_pinterest_masonry": False,

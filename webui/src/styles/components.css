@@ -4,6 +4,7 @@
     --om-z-app: 1;
     --om-z-chrome: 60;
     --om-z-view-menu-backdrop: 65;
+    --om-z-view-menu: 70;
     --om-z-overlay: 200;
     --om-z-overlay-confirm: 205;
     --om-z-overlay-form: 210;
@@ -13,6 +14,7 @@
     --om-z-context-menu: 301;
     --om-z-zoom: 400;
     --om-z-load: 500;
+    --om-zoom-scrim: rgb(4 6 14 / 0.8);
   }
 
 /* Paneles tipo Bento */

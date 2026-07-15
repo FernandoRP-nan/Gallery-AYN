@@ -367,7 +367,7 @@
     position: absolute;
     top: calc(100% + 6px);
     left: 0;
-    z-index: 90;
+    z-index: 2;
     min-width: min(320px, calc(100vw - 24px));
     padding: 10px 12px;
     display: flex;

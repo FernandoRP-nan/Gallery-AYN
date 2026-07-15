@@ -30,9 +30,53 @@ export function canTranscodeVideo(info: Pick<MediaPlaybackInfo, "needsTranscode"
   return !info.needsTranscode || Boolean(info.ffmpegAvailable);
 }
 
-/** Intenta reproducir (ignora fallos por política del navegador). */
-export function tryAutoplayVideo(el: HTMLVideoElement | null | undefined): void {
+export type VideoVolumePrefs = {
+  volume: number;
+  muted: boolean;
+};
+
+export const DEFAULT_VIDEO_VOLUME_PREFS: VideoVolumePrefs = {
+  volume: 1,
+  muted: false,
+};
+
+/** Normaliza volumen HTML5 (0–1). */
+export function normalizeVideoVolume(volume: unknown): number {
+  const n = Number(volume);
+  if (!Number.isFinite(n)) return DEFAULT_VIDEO_VOLUME_PREFS.volume;
+  return Math.min(1, Math.max(0, n));
+}
+
+export function normalizeVideoVolumePrefs(raw?: Partial<VideoVolumePrefs> | null): VideoVolumePrefs {
+  return {
+    volume: normalizeVideoVolume(raw?.volume ?? DEFAULT_VIDEO_VOLUME_PREFS.volume),
+    muted: Boolean(raw?.muted),
+  };
+}
+
+export function applyVideoVolumePrefs(
+  el: HTMLVideoElement | null | undefined,
+  prefs: VideoVolumePrefs
+): void {
   if (!el) return;
+  el.volume = normalizeVideoVolume(prefs.volume);
+  el.muted = Boolean(prefs.muted);
+}
+
+export function readVideoVolumeFromElement(el: HTMLVideoElement): VideoVolumePrefs {
+  return {
+    volume: normalizeVideoVolume(el.volume),
+    muted: Boolean(el.muted),
+  };
+}
+
+/** Intenta reproducir (ignora fallos por política del navegador). */
+export function tryAutoplayVideo(
+  el: HTMLVideoElement | null | undefined,
+  prefs?: VideoVolumePrefs
+): void {
+  if (!el) return;
+  if (prefs) applyVideoVolumePrefs(el, prefs);
   try {
     const pending = el.play();
     if (pending && typeof pending.catch === "function") {

@@ -66,6 +66,7 @@
   export let onZoomImageClick: (e: MouseEvent) => void;
   export let onZoomVideoClick: (e: MouseEvent) => void;
   export let onZoomVideoMeta: () => void;
+  export let onZoomVideoVolumeChange: () => void = () => undefined;
   export let onZoomVideoError: (e: Event) => void;
   export let onZoomVideoCanPlay: () => void = () => undefined;
   export let onZoomImageLoad: () => void;
@@ -99,6 +100,11 @@
         )
       : null;
 
+  $: zoomNavIndex = zoomNavItems.findIndex((x) => x.path === previewZoomPath);
+  $: canZoomNavPrev = zoomNavIndex > 0;
+  $: canZoomNavNext = zoomNavIndex >= 0 && zoomNavIndex < zoomNavItems.length - 1;
+  $: showZoomSideNav = zoomNavItems.length > 1 && !zoomCropMode;
+
   onDestroy(() => {
     if (zoomVideoEl) {
       try {
@@ -119,9 +125,6 @@
     class:overlay--zoom-interacting={previewPanDrag}
     role="presentation"
     aria-label={t("zoom.fullscreenCloseAria")}
-    on:click={(e) => {
-      if (e.target === e.currentTarget) previewZoomOpen = false;
-    }}
     on:keydown={(e) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -139,6 +142,7 @@
       aria-modal="true"
       tabindex="-1"
       on:click|stopPropagation
+      on:pointerdown|stopPropagation
     >
       <header class="zoom-modal__head">
         <strong>{previewZoomName}</strong>
@@ -244,6 +248,32 @@
         </div>
       </header>
       <div class="zoom-modal__body" on:wheel={zoomWithWheel}>
+        {#if showZoomSideNav}
+          <button
+            type="button"
+            class="zoom-side-nav zoom-side-nav--prev"
+            disabled={!canZoomNavPrev}
+            title={t("zoom.prevNavTitle")}
+            aria-label={t("zoom.prevNavTitle")}
+            on:click|stopPropagation={() => canZoomNavPrev && moveZoomBy(-1)}
+          >
+            <svg class="zoom-side-nav__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M14.5 5.5 8 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="zoom-side-nav zoom-side-nav--next"
+            disabled={!canZoomNavNext}
+            title={t("zoom.nextNavTitle")}
+            aria-label={t("zoom.nextNavTitle")}
+            on:click|stopPropagation={() => canZoomNavNext && moveZoomBy(1)}
+          >
+            <svg class="zoom-side-nav__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M9.5 5.5 16 12l-6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        {/if}
         {#if (previewZoomMediaType === "video" && (previewZoomThumbUrl || previewZoomFileUrl || previewZoomVideoArmed || previewZoomVideoLaunching || previewZoomVideoPlayLocked)) || (previewZoomMediaType === "svg" && previewZoomFileUrl) || previewZoomImageSrc}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -312,6 +342,7 @@
                     preload="auto"
                     on:click={onZoomVideoClick}
                     on:loadedmetadata={onZoomVideoMeta}
+                    on:volumechange={onZoomVideoVolumeChange}
                     on:canplay={onZoomVideoCanPlay}
                     on:error={onZoomVideoError}
                   ></video>
@@ -499,6 +530,10 @@
     overflow: hidden;
     min-height: 0;
     min-width: 0;
+    position: relative;
+    z-index: 1;
+    pointer-events: auto;
+    background: transparent;
   }
 .zoom-modal.zoom-modal--carousel-visible:not(.zoom-modal--dest-mode) {
     grid-template-rows: auto minmax(0, 1fr) auto;
@@ -567,7 +602,85 @@
     position: relative;
     z-index: 1;
   }
-.zoom-modal__stage {
+
+  .zoom-side-nav {
+    position: absolute;
+    top: 50%;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.85rem;
+    height: 3.5rem;
+    padding: 0;
+    margin: 0;
+    border: 1px solid rgb(255 255 255 / 0.14);
+    background: linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--om-surface-1) 78%, transparent),
+      color-mix(in oklab, var(--om-bg-elevated) 62%, transparent)
+    );
+    color: var(--om-text-primary);
+    cursor: pointer;
+    transform: translateY(-50%);
+    transition:
+      background 0.18s ease,
+      border-color 0.18s ease,
+      box-shadow 0.18s ease,
+      opacity 0.18s ease,
+      transform 0.18s ease;
+    box-shadow:
+      0 10px 28px rgb(0 0 0 / 0.38),
+      inset 0 1px 0 rgb(255 255 255 / 0.1);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  .zoom-side-nav--prev {
+    left: max(0.65rem, env(safe-area-inset-left, 0px));
+    border-radius: 0 var(--om-radius-md) var(--om-radius-md) 0;
+    padding-right: 0.15rem;
+  }
+
+  .zoom-side-nav--next {
+    right: max(0.65rem, env(safe-area-inset-right, 0px));
+    border-radius: var(--om-radius-md) 0 0 var(--om-radius-md);
+    padding-left: 0.15rem;
+  }
+
+  .zoom-side-nav__icon {
+    width: 1.45rem;
+    height: 1.45rem;
+    display: block;
+    flex-shrink: 0;
+    filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.35));
+  }
+
+  .zoom-side-nav:hover:not(:disabled) {
+    border-color: color-mix(in oklab, var(--om-accent, #7c8cff) 58%, rgb(255 255 255 / 0.2));
+    background: linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--om-accent, #7c8cff) 22%, var(--om-surface-2)),
+      color-mix(in oklab, var(--om-accent, #7c8cff) 10%, var(--om-bg-elevated))
+    );
+    box-shadow:
+      0 12px 32px rgb(0 0 0 / 0.42),
+      0 0 0 1px color-mix(in oklab, var(--om-accent, #7c8cff) 32%, transparent),
+      0 0 18px color-mix(in oklab, var(--om-accent-glow, #7c8cff) 55%, transparent);
+    transform: translateY(-50%) scale(1.04);
+  }
+
+  .zoom-side-nav:active:not(:disabled) {
+    transform: translateY(-50%) scale(0.98);
+  }
+
+  .zoom-side-nav:disabled {
+    opacity: 0.28;
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .zoom-modal__stage {
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -575,6 +688,7 @@
     overflow: hidden;
     cursor: default;
     position: relative;
+    background: transparent;
   }
 .zoom-crop-layer {
     position: absolute;
@@ -758,6 +872,7 @@
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
+    background: transparent;
   }
 
   .zoom-modal__video-shell--preparing {
